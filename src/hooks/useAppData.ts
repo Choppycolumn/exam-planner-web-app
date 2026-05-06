@@ -1,18 +1,44 @@
-import { useMemo } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../db/database';
+import { useEffect, useMemo, useState } from 'react';
+import { serverApi, type ServerState } from '../api/client';
+
+const emptyState: ServerState = {
+  goals: [],
+  dailyReviews: [],
+  studyProjects: [],
+  studyTimeRecords: [],
+  subjects: [],
+  mockExamRecords: [],
+  shortTermTasks: [],
+};
 
 export function useAppData() {
-  const goals = useLiveQuery(() => db.goals.orderBy('createdAt').reverse().toArray(), [], []);
+  const [state, setState] = useState<ServerState>(emptyState);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => serverApi.getState().then((next) => {
+      if (active) setState(next);
+    }).catch(() => {
+      if (active) setState(emptyState);
+    });
+    load();
+    window.addEventListener('server-data-changed', load);
+    return () => {
+      active = false;
+      window.removeEventListener('server-data-changed', load);
+    };
+  }, []);
+
+  const goals = useMemo(() => [...state.goals].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [state.goals]);
   const activeGoal = useMemo(() => goals.find((goal) => goal.isActive), [goals]);
-  const projects = useLiveQuery(() => db.studyProjects.orderBy('sortOrder').toArray(), [], []);
+  const projects = useMemo(() => [...state.studyProjects].sort((a, b) => a.sortOrder - b.sortOrder), [state.studyProjects]);
   const activeProjects = useMemo(() => projects.filter((project) => project.isActive), [projects]);
-  const studyRecords = useLiveQuery(() => db.studyTimeRecords.toArray(), [], []);
-  const reviews = useLiveQuery(() => db.dailyReviews.toArray(), [], []);
-  const subjects = useLiveQuery(() => db.subjects.orderBy('sortOrder').toArray(), [], []);
+  const studyRecords = state.studyTimeRecords;
+  const reviews = state.dailyReviews;
+  const subjects = useMemo(() => [...state.subjects].sort((a, b) => a.sortOrder - b.sortOrder), [state.subjects]);
   const activeSubjects = useMemo(() => subjects.filter((subject) => subject.isActive), [subjects]);
-  const exams = useLiveQuery(() => db.mockExamRecords.orderBy('date').reverse().toArray(), [], []);
-  const shortTermTasks = useLiveQuery(() => db.shortTermTasks.orderBy('dueDate').toArray(), [], []);
+  const exams = useMemo(() => [...state.mockExamRecords].sort((a, b) => b.date.localeCompare(a.date)), [state.mockExamRecords]);
+  const shortTermTasks = useMemo(() => [...state.shortTermTasks].sort((a, b) => a.dueDate.localeCompare(b.dueDate)), [state.shortTermTasks]);
 
   return { goals, activeGoal, projects, activeProjects, studyRecords, reviews, subjects, activeSubjects, exams, shortTermTasks };
 }

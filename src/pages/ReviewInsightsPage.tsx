@@ -40,10 +40,7 @@ export function ReviewInsightsPage() {
                   <span className="rounded bg-white/70 px-2 py-1 text-sm font-semibold">{score} 分 · {tone.label}</span>
                 </div>
                 <p className="mt-2 line-clamp-2 text-sm opacity-85">{review.summary}</p>
-                <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
-                  <span>整体状态：{review.statusScore}</span>
-                  <span>学习满意度：{review.satisfactionScore}</span>
-                </div>
+                <p className="mt-3 text-sm">复盘评分：{score} / 10</p>
               </div>
             );
           }) : <EmptyState title="还没有复盘记录" />}

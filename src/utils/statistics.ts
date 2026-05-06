@@ -62,12 +62,16 @@ export const getSubjectScoreTrend = (records: MockExamRecord[], subjectId?: numb
 
 export const getReviewAverageScore = (review?: DailyReview) => {
   if (!review) return 0;
-  return Math.round(((review.statusScore + review.satisfactionScore) / 2) * 10) / 10;
+  if (typeof review.score === 'number') return review.score;
+  if (typeof review.statusScore === 'number' && typeof review.satisfactionScore === 'number') {
+    return Math.round(((review.statusScore + review.satisfactionScore) / 10) * 10);
+  }
+  return 0;
 };
 
 export const getReviewTone = (score: number) => {
-  if (score >= 4) return { label: '较好', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
-  if (score <= 2) return { label: '较差', className: 'border-rose-200 bg-rose-50 text-rose-700' };
+  if (score >= 8) return { label: '较好', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
+  if (score <= 4) return { label: '较差', className: 'border-rose-200 bg-rose-50 text-rose-700' };
   return { label: '平稳', className: 'border-amber-200 bg-amber-50 text-amber-700' };
 };
 
@@ -77,9 +81,7 @@ export const getReviewTrend = (reviews: DailyReview[], days = 30) => {
     const review = reviews.find((item) => item.date === date);
     return {
       date: date.slice(5),
-      statusScore: review?.statusScore ?? null,
-      satisfactionScore: review?.satisfactionScore ?? null,
-      averageScore: review ? getReviewAverageScore(review) : null,
+      score: review ? getReviewAverageScore(review) : null,
     };
   });
 };

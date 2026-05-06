@@ -8,7 +8,7 @@ import { Page } from '../components/Page';
 import { tasksRepository } from '../db/repositories/tasksRepository';
 import { useAppData } from '../hooks/useAppData';
 import type { TaskUrgency } from '../types/models';
-import { calculateCountdownDays, minutesToHoursText, todayISO } from '../utils/date';
+import { calculateCountdownDays, getDueStatus, minutesToHoursText, todayISO } from '../utils/date';
 import {
   getDailyProjectDistribution,
   getDailyTotalMinutes,
@@ -86,19 +86,23 @@ export function DashboardPage() {
           </div>
         </div>
         <div className="mt-4 space-y-2">
-          {visibleTasks.length ? visibleTasks.map((task) => (
-            <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
-              <label className="flex min-w-0 flex-1 items-center gap-3">
-                <input type="checkbox" checked={task.isCompleted} onChange={(event) => tasksRepository.toggleComplete(task, event.target.checked)} />
-                <span className={`truncate font-medium ${task.isCompleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{task.title}</span>
-              </label>
-              <div className="flex items-center gap-2 text-sm">
-                <span className={`rounded border px-2 py-1 ${urgencyClassName[task.urgency]}`}>{urgencyLabel[task.urgency]}</span>
-                <span className="text-slate-500">到期：{task.dueDate}</span>
-                <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => task.id && confirm('确定删除这个短期目标吗？') && tasksRepository.remove(task.id)}><Trash2 size={16} /></button>
+          {visibleTasks.length ? visibleTasks.map((task) => {
+            const dueStatus = getDueStatus(task.dueDate);
+            return (
+              <div key={task.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <label className="flex min-w-0 flex-1 items-center gap-3">
+                  <input type="checkbox" checked={task.isCompleted} onChange={(event) => tasksRepository.toggleComplete(task, event.target.checked)} />
+                  <span className={`truncate font-medium ${task.isCompleted ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{task.title}</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className={`rounded border px-2 py-1 ${urgencyClassName[task.urgency]}`}>{urgencyLabel[task.urgency]}</span>
+                  <span className={`rounded border px-2 py-1 font-semibold ${dueStatus.className}`}>{dueStatus.label}</span>
+                  <span className="text-slate-500">到期：{task.dueDate}</span>
+                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => task.id && confirm('确定删除这个短期目标吗？') && tasksRepository.remove(task.id)}><Trash2 size={16} /></button>
+                </div>
               </div>
-            </div>
-          )) : <EmptyState title="还没有短期目标" description="添加今天或近期要完成的小目标。" />}
+            );
+          }) : <EmptyState title="还没有短期目标" description="添加今天或近期要完成的小目标。" />}
         </div>
       </div>
 

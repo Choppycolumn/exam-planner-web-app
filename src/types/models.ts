@@ -22,8 +22,9 @@ export interface DailyReview extends BaseEntity {
   wins: string;
   problems: string;
   tomorrowPlan: string;
-  statusScore: number;
-  satisfactionScore: number;
+  score: number;
+  statusScore?: number;
+  satisfactionScore?: number;
 }
 
 export interface StudyProject extends BaseEntity {

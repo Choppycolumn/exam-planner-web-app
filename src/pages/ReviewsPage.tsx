@@ -14,11 +14,10 @@ export function ReviewsPage() {
   const current = useMemo(() => reviews.find((review) => review.date === date), [reviews, date]);
   const yesterdayDate = previousDateISO(date);
   const yesterdayReview = useMemo(() => reviews.find((review) => review.date === yesterdayDate), [reviews, yesterdayDate]);
-  const [draft, setDraft] = useState({ summary: '', wins: '', problems: '', tomorrowPlan: '', statusScore: 3, satisfactionScore: 3 });
+  const [draft, setDraft] = useState({ summary: '', wins: '', problems: '', tomorrowPlan: '', score: 6 });
   const [toast, setToast] = useState('');
-  const draftAverageScore = Math.round(((draft.statusScore + draft.satisfactionScore) / 2) * 10) / 10;
   const yesterdayAverageScore = getReviewAverageScore(yesterdayReview);
-  const scoreDiff = yesterdayReview ? Math.round((draftAverageScore - yesterdayAverageScore) * 10) / 10 : 0;
+  const scoreDiff = yesterdayReview ? Math.round((draft.score - yesterdayAverageScore) * 10) / 10 : 0;
   const yesterdayTone = getReviewTone(yesterdayAverageScore);
 
   useEffect(() => {
@@ -27,8 +26,7 @@ export function ReviewsPage() {
       wins: current?.wins ?? '',
       problems: current?.problems ?? '',
       tomorrowPlan: current?.tomorrowPlan ?? '',
-      statusScore: current?.statusScore ?? 3,
-      satisfactionScore: current?.satisfactionScore ?? 3,
+      score: getReviewAverageScore(current) || 6,
     });
   }, [current]);
 
@@ -52,10 +50,10 @@ export function ReviewsPage() {
             <label><span className="label">完成得好的地方</span><textarea className="field min-h-24" value={draft.wins} onChange={(e) => setDraft({ ...draft, wins: e.target.value })} /></label>
             <label><span className="label">今日问题</span><textarea className="field min-h-24" value={draft.problems} onChange={(e) => setDraft({ ...draft, problems: e.target.value })} /></label>
             <label><span className="label">明日改进计划</span><textarea className="field min-h-24" value={draft.tomorrowPlan} onChange={(e) => setDraft({ ...draft, tomorrowPlan: e.target.value })} /></label>
-            <div className="grid gap-4 md:grid-cols-2">
-              <label><span className="label">整体状态评分：{draft.statusScore}</span><input className="w-full" type="range" min={1} max={5} value={draft.statusScore} onChange={(e) => setDraft({ ...draft, statusScore: Number(e.target.value) })} /></label>
-              <label><span className="label">学习满意度：{draft.satisfactionScore}</span><input className="w-full" type="range" min={1} max={5} value={draft.satisfactionScore} onChange={(e) => setDraft({ ...draft, satisfactionScore: Number(e.target.value) })} /></label>
-            </div>
+            <label>
+              <span className="label">今日复盘评分：{draft.score} / 10</span>
+              <input className="w-full" type="range" min={1} max={10} value={draft.score} onChange={(e) => setDraft({ ...draft, score: Number(e.target.value) })} />
+            </label>
             <button className="btn btn-primary w-fit" onClick={save}><Save size={16} />保存复盘</button>
           </div>
         </div>
@@ -90,16 +88,16 @@ export function ReviewsPage() {
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center text-sm">
                   <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-slate-500">昨日状态</p>
-                    <p className="mt-1 text-lg font-semibold">{yesterdayReview.statusScore}</p>
-                  </div>
-                  <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-slate-500">昨日满意</p>
-                    <p className="mt-1 text-lg font-semibold">{yesterdayReview.satisfactionScore}</p>
+                    <p className="text-slate-500">昨日评分</p>
+                    <p className="mt-1 text-lg font-semibold">{yesterdayAverageScore}</p>
                   </div>
                   <div className={`rounded-lg p-3 ${scoreDiff > 0 ? 'bg-emerald-50 text-emerald-700' : scoreDiff < 0 ? 'bg-rose-50 text-rose-700' : 'bg-slate-50 text-slate-600'}`}>
                     <p className="opacity-75">当前差值</p>
                     <p className="mt-1 text-lg font-semibold">{scoreDiff > 0 ? `+${scoreDiff}` : scoreDiff}</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-slate-500">今日评分</p>
+                    <p className="mt-1 text-lg font-semibold">{draft.score}</p>
                   </div>
                 </div>
               </div>

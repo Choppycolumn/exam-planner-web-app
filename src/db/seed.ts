@@ -57,3 +57,24 @@ export async function initializeDefaultData() {
     });
   });
 }
+
+export async function resetAllLocalData() {
+  await db.transaction(
+    'rw',
+    [db.goals, db.dailyReviews, db.studyProjects, db.studyTimeRecords, db.subjects, db.mockExamRecords, db.shortTermTasks, db.appSettings],
+    async () => {
+      await Promise.all([
+        db.goals.clear(),
+        db.dailyReviews.clear(),
+        db.studyProjects.clear(),
+        db.studyTimeRecords.clear(),
+        db.subjects.clear(),
+        db.mockExamRecords.clear(),
+        db.shortTermTasks.clear(),
+        db.appSettings.clear(),
+      ]);
+    },
+  );
+
+  await initializeDefaultData();
+}

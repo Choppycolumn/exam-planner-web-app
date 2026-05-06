@@ -62,12 +62,10 @@ export function ReviewTrendChart({ data }: { data: Array<Record<string, string |
       <LineChart data={data}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-        <YAxis tick={{ fontSize: 12 }} domain={[1, 5]} allowDecimals={false} />
+        <YAxis tick={{ fontSize: 12 }} domain={[1, 10]} allowDecimals={false} />
         <Tooltip />
         <Legend />
-        <Line type="monotone" connectNulls dataKey="statusScore" name="整体状态" stroke="#16a34a" strokeWidth={2.2} dot={{ r: 3 }} />
-        <Line type="monotone" connectNulls dataKey="satisfactionScore" name="学习满意度" stroke="#2563eb" strokeWidth={2.2} dot={{ r: 3 }} />
-        <Line type="monotone" connectNulls dataKey="averageScore" name="平均分" stroke="#f97316" strokeWidth={2.2} dot={{ r: 3 }} />
+        <Line type="monotone" connectNulls dataKey="score" name="复盘评分" stroke="#2563eb" strokeWidth={2.4} dot={{ r: 3 }} />
       </LineChart>
     </ResponsiveContainer>
   );
