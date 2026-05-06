@@ -9,20 +9,22 @@ import { useAppData } from '../hooks/useAppData';
 import type { StudyProject } from '../types/models';
 import { minutesToHoursText, todayISO } from '../utils/date';
 
+type StudyTimeRow = { minutes: number | ''; note: string };
+
 export function StudyTimePage() {
   const { projects, activeProjects, studyRecords } = useAppData();
   const [date, setDate] = useState(todayISO());
-  const [rows, setRows] = useState<Record<number, { minutes: number; note: string }>>({});
+  const [rows, setRows] = useState<Record<number, StudyTimeRow>>({});
   const [projectDraft, setProjectDraft] = useState<Partial<StudyProject>>({ name: '', color: '#2563eb' });
   const [toast, setToast] = useState('');
   const recordsForDate = useMemo(() => studyRecords.filter((record) => record.date === date), [studyRecords, date]);
 
   useEffect(() => {
-    const next: Record<number, { minutes: number; note: string }> = {};
+    const next: Record<number, StudyTimeRow> = {};
     for (const project of activeProjects) {
       if (!project.id) continue;
       const found = recordsForDate.find((record) => record.projectId === project.id);
-      next[project.id] = { minutes: found?.minutes ?? 0, note: found?.note ?? '' };
+      next[project.id] = { minutes: found?.minutes ? found.minutes : '', note: found?.note ?? '' };
     }
     setRows(next);
   }, [activeProjects, recordsForDate]);
@@ -35,7 +37,7 @@ export function StudyTimePage() {
       activeProjects.filter((project) => project.id).map((project) => ({
         projectId: project.id!,
         projectNameSnapshot: project.name,
-        minutes: Math.max(0, rows[project.id!]?.minutes ?? 0),
+        minutes: Math.max(0, Number(rows[project.id!]?.minutes || 0)),
         note: rows[project.id!]?.note ?? '',
       })),
     );
@@ -62,7 +64,14 @@ export function StudyTimePage() {
               {activeProjects.map((project) => (
                 <div key={project.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[160px_150px_1fr]">
                   <div className="flex items-center gap-2 font-medium"><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</div>
-                  <input className="field" type="number" min={0} value={rows[project.id!]?.minutes ?? 0} onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], minutes: Number(e.target.value) } })} />
+                  <input
+                    className="field placeholder:text-slate-300"
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={rows[project.id!]?.minutes ?? ''}
+                    onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], minutes: e.target.value === '' ? '' : Number(e.target.value) } })}
+                  />
                   <input className="field" placeholder="备注" value={rows[project.id!]?.note ?? ''} onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], note: e.target.value } })} />
                 </div>
               ))}
