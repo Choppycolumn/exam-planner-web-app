@@ -8,6 +8,7 @@ import { ReviewInsightsPage } from '../pages/ReviewInsightsPage';
 import { StatisticsPage } from '../pages/StatisticsPage';
 import { MockExamsPage } from '../pages/MockExamsPage';
 import { SettingsPage } from '../pages/SettingsPage';
+import { MigrateLocalDataPage } from '../pages/MigrateLocalDataPage';
 
 export const router = createBrowserRouter([
   {
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'statistics', element: <StatisticsPage /> },
       { path: 'mock-exams', element: <MockExamsPage /> },
       { path: 'settings', element: <SettingsPage /> },
+      { path: 'migrate-local-data', element: <MigrateLocalDataPage /> },
     ],
   },
 ]);

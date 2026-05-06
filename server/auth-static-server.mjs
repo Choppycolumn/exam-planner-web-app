@@ -111,7 +111,12 @@ function nextId(items) {
 }
 
 function sendJson(res, data, status = 200) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'content-type',
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -244,6 +249,33 @@ function serveStatic(req, res) {
 }
 
 async function handleApi(req, res) {
+  if (req.method === 'OPTIONS') {
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/import' && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)) || '{}');
+    if (body.password !== appPassword) {
+      sendJson(res, { error: 'Invalid password' }, 401);
+      return;
+    }
+    const imported = body.state || {};
+    const next = {
+      ...baseState(),
+      goals: Array.isArray(imported.goals) ? imported.goals : [],
+      dailyReviews: Array.isArray(imported.dailyReviews) ? imported.dailyReviews.map(normalizeReview) : [],
+      studyProjects: Array.isArray(imported.studyProjects) ? imported.studyProjects : [],
+      studyTimeRecords: Array.isArray(imported.studyTimeRecords) ? imported.studyTimeRecords : [],
+      subjects: Array.isArray(imported.subjects) ? imported.subjects : [],
+      mockExamRecords: Array.isArray(imported.mockExamRecords) ? imported.mockExamRecords : [],
+      shortTermTasks: Array.isArray(imported.shortTermTasks) ? imported.shortTermTasks : [],
+    };
+    writeState(next);
+    sendJson(res, { ok: true });
+    return;
+  }
+
   if (!isValidSession(req.headers.cookie)) {
     sendJson(res, { error: 'Unauthorized' }, 401);
     return;
