@@ -57,10 +57,19 @@ export function loadGroups(): ConfusingWordGroup[] {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
     const examples = [
-      { words: ['affect', 'effect'], tags: ['考研词汇', '词义相近'], summary: 'affect 通常作动词，表示影响；effect 通常作名词，表示结果或效果。' },
-      { words: ['adapt', 'adopt'], tags: ['拼写相近'], summary: 'adapt 表示适应或改编；adopt 表示采纳或收养。' },
+      { words: [{ word: 'affect', chineseDefinition: '影响' }, { word: 'effect', chineseDefinition: '结果；效果' }] },
+      { words: [{ word: 'adapt', chineseDefinition: '适应；改编' }, { word: 'adopt', chineseDefinition: '采纳；收养' }] },
     ];
-    const groups = examples.map((example) => ({ ...createGroup(example.words), tags: example.tags, confusionSummary: example.summary }));
+    const groups = examples.map((example) => {
+      const group = createGroup(example.words.map((item) => item.word));
+      return {
+        ...group,
+        words: group.words.map((word) => ({
+          ...word,
+          chineseDefinition: example.words.find((item) => item.word === word.word)?.chineseDefinition || '',
+        })),
+      };
+    });
     saveGroups(groups);
     return groups;
   }

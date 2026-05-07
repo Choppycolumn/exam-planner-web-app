@@ -9,6 +9,24 @@ type FreeDictionaryResponse = Array<{
   }>;
 }>;
 
+type TranslationResponse = {
+  responseData?: {
+    translatedText?: string;
+  };
+};
+
+async function translateToChinese(text: string) {
+  if (!text.trim()) return '';
+  try {
+    const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|zh-CN`);
+    if (!response.ok) return '';
+    const data = (await response.json()) as TranslationResponse;
+    return data.responseData?.translatedText?.trim() || '';
+  } catch {
+    return '';
+  }
+}
+
 export async function queryDictionary(word: string): Promise<Partial<ConfusingWordEntry>> {
   const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
   if (!response.ok) {
@@ -18,11 +36,14 @@ export async function queryDictionary(word: string): Promise<Partial<ConfusingWo
   const first = data[0];
   const meaning = first?.meanings?.[0];
   const definition = meaning?.definitions?.[0];
+  const englishDefinition = definition?.definition || '';
+  const chineseDefinition = await translateToChinese(englishDefinition || word);
 
   return {
     phonetic: first?.phonetic || first?.phonetics?.find((item) => item.text)?.text || '',
     partOfSpeech: meaning?.partOfSpeech || '',
-    englishDefinition: definition?.definition || '',
+    englishDefinition,
+    chineseDefinition,
     example: definition?.example || '',
     usage: meaning?.partOfSpeech ? `Commonly used as ${meaning.partOfSpeech}.` : '',
     queryStatus: 'success',
