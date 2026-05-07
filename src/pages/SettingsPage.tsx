@@ -4,6 +4,7 @@ import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
 import { DB_SCHEMA_VERSION } from '../db/schema';
 import { Toast } from '../components/Toast';
+import { GoalsManager } from '../components/GoalsManager';
 import { useState } from 'react';
 import { notifyDataChanged, serverApi } from '../api/client';
 import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
@@ -110,6 +111,13 @@ export function SettingsPage() {
         <h2 className="text-base font-semibold">本地保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">所有数据只保存在当前浏览器的 IndexedDB 中，不需要登录、服务器或云同步。删除学习项目和科目时，历史记录会保留名称快照，后续新增 AI 计划、番茄钟、导出报告时可以通过新增表和迁移继续扩展。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
+      </div>
+      <div className="mt-5">
+        <div className="mb-3">
+          <h2 className="text-base font-semibold text-slate-900">长期目标管理</h2>
+          <p className="mt-1 text-sm text-slate-500">长期目标入口已收纳到设置页，首页仍会显示当前启用目标倒计时。</p>
+        </div>
+        <GoalsManager />
       </div>
       <div className="mt-5 card p-5">
         <h2 className="text-base font-semibold">易混单词数据</h2>

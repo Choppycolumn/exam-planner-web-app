@@ -25,7 +25,7 @@ export function StatisticsPage() {
         <ChartBox title="当天时间分布饼图">{distribution.length ? <DistributionPie data={distribution} /> : <EmptyState title="暂无今日数据" />}</ChartBox>
         <ChartBox title="当天各项目用时柱状图">{distribution.length ? <MinutesBar data={distribution.map((item) => ({ name: item.name, minutes: item.value }))} /> : <EmptyState title="暂无今日数据" />}</ChartBox>
         <ChartBox title="最近 7 天总学习时长折线图"><TrendLine data={last7} /></ChartBox>
-        <ChartBox title="最近 30 天各项目累计用时">{last30.length ? <MinutesBar data={last30} /> : <EmptyState title="暂无 30 天数据" />}</ChartBox>
+        <ChartBox title="最近 30 天各项目累计用时">{last30.length ? <MinutesBar data={last30} denseLabels /> : <EmptyState title="暂无 30 天数据" />}</ChartBox>
       </div>
     </Page>
   );

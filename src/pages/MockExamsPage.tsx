@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import { ChartBox, TrendLine } from '../components/Charts';
+import { ColorPicker } from '../components/ColorPicker';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
@@ -57,9 +58,9 @@ export function MockExamsPage() {
             <h2 className="text-base font-semibold text-slate-900">科目选择</h2>
             <p className="mt-1 text-sm text-slate-500">可以自由新增科目；选择后，图表、历史记录和新增成绩会同步到该科目。</p>
           </div>
-          <div className="grid w-full gap-2 md:w-auto md:grid-cols-[150px_56px_auto_auto]">
+          <div className="grid w-full gap-3 md:w-auto md:grid-cols-[150px_280px_auto_auto]">
             <input className="field" placeholder="新增科目" value={subjectDraft.name ?? ''} onChange={(e) => setSubjectDraft({ ...subjectDraft, name: e.target.value })} />
-            <input className="field h-11 p-1" type="color" value={subjectDraft.color ?? '#2563eb'} onChange={(e) => setSubjectDraft({ ...subjectDraft, color: e.target.value })} />
+            <ColorPicker value={subjectDraft.color} onChange={(color) => setSubjectDraft({ ...subjectDraft, color })} />
             <button className="btn btn-primary" onClick={saveSubject}><Plus size={16} />添加科目</button>
             <button className={`btn ${filter === 'all' ? 'btn-primary' : 'btn-soft'}`} onClick={() => selectSubject('all')}>全部记录</button>
           </div>

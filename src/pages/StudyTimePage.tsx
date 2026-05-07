@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
+import { ColorPicker } from '../components/ColorPicker';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { studyRepository } from '../db/repositories/studyRepository';
@@ -84,7 +85,10 @@ export function StudyTimePage() {
           <h2 className="text-base font-semibold">学习项目管理</h2>
           <div className="mt-4 space-y-3">
             <input className="field" placeholder="项目名称" value={projectDraft.name ?? ''} onChange={(e) => setProjectDraft({ ...projectDraft, name: e.target.value })} />
-            <input className="field h-11" type="color" value={projectDraft.color ?? '#2563eb'} onChange={(e) => setProjectDraft({ ...projectDraft, color: e.target.value })} />
+            <div>
+              <span className="label">项目颜色</span>
+              <ColorPicker value={projectDraft.color} onChange={(color) => setProjectDraft({ ...projectDraft, color })} />
+            </div>
             <button className="btn btn-primary w-full" onClick={saveProject}>保存项目</button>
           </div>
           <div className="mt-5 space-y-2">

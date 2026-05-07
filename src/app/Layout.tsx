@@ -1,4 +1,4 @@
-import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, Home, Languages, Settings, Target } from 'lucide-react';
+import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, Home, Languages, Settings } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useAppData } from '../hooks/useAppData';
@@ -6,7 +6,6 @@ import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 
 const navItems = [
   { to: '/', label: '首页', icon: Home },
-  { to: '/goals', label: '长期目标', icon: Target },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },

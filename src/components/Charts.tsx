@@ -28,12 +28,19 @@ export function DistributionPie({ data }: { data: Array<{ name: string; value: n
   );
 }
 
-export function MinutesBar({ data, xKey = 'name' }: { data: Array<Record<string, string | number>>; xKey?: string }) {
+export function MinutesBar({ data, xKey = 'name', denseLabels = false }: { data: Array<Record<string, string | number>>; xKey?: string; denseLabels?: boolean }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
-      <BarChart data={data}>
+      <BarChart data={data} margin={{ bottom: denseLabels ? 34 : 8 }}>
         <CartesianGrid strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey={xKey} tick={{ fontSize: 12 }} />
+        <XAxis
+          dataKey={xKey}
+          height={denseLabels ? 58 : undefined}
+          interval={0}
+          tick={{ fontSize: 12 }}
+          angle={denseLabels ? -28 : 0}
+          textAnchor={denseLabels ? 'end' : 'middle'}
+        />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip formatter={(value) => [`${value} 分钟`, '用时']} />
         <Bar dataKey="minutes" fill="#2563eb" radius={[6, 6, 0, 0]} />
