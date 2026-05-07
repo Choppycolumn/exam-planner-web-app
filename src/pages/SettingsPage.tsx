@@ -1,4 +1,4 @@
-import { Download, ShieldCheck, Trash2 } from 'lucide-react';
+import { Cloud, Download, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
@@ -6,10 +6,20 @@ import { DB_SCHEMA_VERSION } from '../db/schema';
 import { Toast } from '../components/Toast';
 import { useState } from 'react';
 import { notifyDataChanged, serverApi } from '../api/client';
+import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
+import { buildExport, loadGroups, saveGroups } from '../features/confusing-words/storage';
+import type { ConfusingWordGroup } from '../features/confusing-words/types';
+
+const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
+const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
+const BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
 
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks } = useAppData();
   const [toast, setToast] = useState('');
+  const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
+  const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
+  const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
   const exportData = () => {
     const data = { exportedAt: new Date().toISOString(), dbSchemaVersion: DB_SCHEMA_VERSION, goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -19,6 +29,62 @@ export function SettingsPage() {
     link.download = `exam-planner-export-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const exportConfusingWords = () => {
+    const blob = new Blob([JSON.stringify(buildExport(confusingGroups), null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `confusing-words-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importConfusingWords = async (file?: File) => {
+    if (!file) return;
+    const text = await file.text();
+    const payload = JSON.parse(text) as { groups?: ConfusingWordGroup[] };
+    if (!Array.isArray(payload.groups)) return alert('导入文件格式不正确');
+    const shouldMerge = confirm('点击“确定”合并导入；点击“取消”覆盖当前易混单词数据。');
+    const next = shouldMerge ? [...confusingGroups, ...payload.groups] : payload.groups;
+    saveGroups(next);
+    setConfusingGroups(next);
+    setToast('易混单词导入完成');
+    setTimeout(() => setToast(''), 1800);
+  };
+
+  const saveBackupSettings = () => {
+    localStorage.setItem(BACKUP_BASE_URL_KEY, backupBaseUrl.trim());
+    localStorage.setItem(BACKUP_PASSWORD_KEY, backupPassword);
+    setToast('易混单词备份设置已保存');
+    setTimeout(() => setToast(''), 1800);
+  };
+
+  const backupNow = async () => {
+    try {
+      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword });
+      localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
+      setToast('易混单词已备份到服务器');
+    } catch {
+      setToast('备份失败，请检查服务器地址和密码');
+    }
+    setTimeout(() => setToast(''), 2200);
+  };
+
+  const restoreConfusingWordsBackup = async () => {
+    if (!confirm('确定从服务器备份恢复易混单词吗？这会覆盖当前浏览器中的易混单词数据。')) return;
+    try {
+      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, password: backupPassword });
+      if (!backup?.groups?.length) return alert('服务器上还没有可恢复的易混单词备份');
+      saveGroups(backup.groups);
+      setConfusingGroups(backup.groups);
+      if (backup.backedUpAt) localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
+      setToast('已从服务器恢复易混单词');
+    } catch {
+      setToast('恢复失败，请检查服务器地址和密码');
+    }
+    setTimeout(() => setToast(''), 2200);
   };
 
   const clearAllData = async () => {
@@ -44,6 +110,23 @@ export function SettingsPage() {
         <h2 className="text-base font-semibold">本地保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">所有数据只保存在当前浏览器的 IndexedDB 中，不需要登录、服务器或云同步。删除学习项目和科目时，历史记录会保留名称快照，后续新增 AI 计划、番茄钟、导出报告时可以通过新增表和迁移继续扩展。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
+      </div>
+      <div className="mt-5 card p-5">
+        <h2 className="text-base font-semibold">易混单词数据</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">易混单词保存在当前浏览器本地，共 {confusingGroups.length} 组。可以导出 JSON，也可以设置服务器地址用于每小时备份。</p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button className="btn btn-soft" onClick={exportConfusingWords}><Download size={16} />导出易混单词 JSON</button>
+          <label className="btn btn-soft cursor-pointer"><UploadCloud size={16} />导入易混单词 JSON<input className="hidden" type="file" accept="application/json" onChange={(event) => void importConfusingWords(event.target.files?.[0])} /></label>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-[1fr_220px]">
+          <label><span className="label">服务器备份地址</span><input className="field" placeholder="部署版同源可留空；本地可填 http://服务器IP" value={backupBaseUrl} onChange={(event) => setBackupBaseUrl(event.target.value)} /></label>
+          <label><span className="label">备份密码</span><input className="field" type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} /></label>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button className="btn btn-soft" onClick={saveBackupSettings}>保存备份设置</button>
+          <button className="btn btn-soft" onClick={() => void backupNow()}><Cloud size={16} />立即备份</button>
+          <button className="btn btn-soft" onClick={() => void restoreConfusingWordsBackup()}>从服务器恢复</button>
+        </div>
       </div>
       <div className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-5">
         <h2 className="text-base font-semibold text-rose-800">危险操作</h2>
