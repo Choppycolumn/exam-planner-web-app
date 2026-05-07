@@ -83,6 +83,7 @@ function baseState() {
     })),
     mockExamRecords: [],
     shortTermTasks: [],
+    confusingWordsBackup: null,
   };
 }
 
@@ -115,7 +116,7 @@ function sendJson(res, data, status = 200) {
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type,x-backup-password',
   });
   res.end(JSON.stringify(data));
 }
@@ -270,10 +271,37 @@ async function handleApi(req, res) {
       subjects: Array.isArray(imported.subjects) ? imported.subjects : [],
       mockExamRecords: Array.isArray(imported.mockExamRecords) ? imported.mockExamRecords : [],
       shortTermTasks: Array.isArray(imported.shortTermTasks) ? imported.shortTermTasks : [],
+      confusingWordsBackup: imported.confusingWordsBackup || null,
     };
     writeState(next);
     sendJson(res, { ok: true });
     return;
+  }
+
+  if (req.url === '/api/confusing-words/backup') {
+    const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
+    const hasBackupAccess = isValidSession(req.headers.cookie) || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
+    if (!hasBackupAccess) {
+      sendJson(res, { error: 'Unauthorized' }, 401);
+      return;
+    }
+    const state = readState();
+    if (req.method === 'GET') {
+      sendJson(res, state.confusingWordsBackup || null);
+      return;
+    }
+    if (req.method === 'POST') {
+      const timestamp = nowISO();
+      state.confusingWordsBackup = {
+        schemaVersion: Number(body.schemaVersion || 1),
+        exportedAt: body.exportedAt || timestamp,
+        backedUpAt: timestamp,
+        groups: Array.isArray(body.groups) ? body.groups : [],
+      };
+      writeState(state);
+      sendJson(res, { ok: true, backedUpAt: timestamp });
+      return;
+    }
   }
 
   if (!isValidSession(req.headers.cookie)) {

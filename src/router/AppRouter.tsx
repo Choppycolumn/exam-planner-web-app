@@ -7,6 +7,7 @@ import { ReviewsPage } from '../pages/ReviewsPage';
 import { ReviewInsightsPage } from '../pages/ReviewInsightsPage';
 import { StatisticsPage } from '../pages/StatisticsPage';
 import { MockExamsPage } from '../pages/MockExamsPage';
+import { ConfusingWordsPage } from '../pages/ConfusingWordsPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { MigrateLocalDataPage } from '../pages/MigrateLocalDataPage';
 
@@ -22,6 +23,7 @@ export const router = createBrowserRouter([
       { path: 'review-insights', element: <ReviewInsightsPage /> },
       { path: 'statistics', element: <StatisticsPage /> },
       { path: 'mock-exams', element: <MockExamsPage /> },
+      { path: 'confusing-words', element: <ConfusingWordsPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'migrate-local-data', element: <MigrateLocalDataPage /> },
     ],
