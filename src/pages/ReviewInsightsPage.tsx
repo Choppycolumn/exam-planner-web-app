@@ -28,20 +28,36 @@ export function ReviewInsightsPage() {
       </ChartBox>
 
       <div className="mt-5 card p-5">
-        <h2 className="text-base font-semibold text-slate-900">复盘时间线</h2>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <h2 className="text-base font-semibold text-slate-900">完整复盘报告</h2>
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
           {sortedReviews.length ? sortedReviews.map((review) => {
             const score = getReviewAverageScore(review);
             const tone = getReviewTone(score);
             return (
-              <div key={review.id} className={`rounded-lg border p-4 ${tone.className}`}>
+              <article key={review.id} className={`rounded-lg border p-4 ${tone.className}`}>
                 <div className="flex items-center justify-between gap-3">
                   <p className="font-semibold">{review.date}</p>
                   <span className="rounded bg-white/70 px-2 py-1 text-sm font-semibold">{score} 分 · {tone.label}</span>
                 </div>
-                <p className="mt-2 line-clamp-2 text-sm opacity-85">{review.summary}</p>
-                <p className="mt-3 text-sm">复盘评分：{score} / 10</p>
-              </div>
+                <div className="mt-4 space-y-3 text-sm">
+                  <section className="rounded-lg bg-white/70 p-3">
+                    <p className="font-semibold text-slate-700">今日总结</p>
+                    <p className="mt-1 whitespace-pre-wrap leading-6 text-slate-600">{review.summary || '未填写'}</p>
+                  </section>
+                  <section className="rounded-lg bg-white/70 p-3">
+                    <p className="font-semibold text-emerald-700">完成得好的地方</p>
+                    <p className="mt-1 whitespace-pre-wrap leading-6 text-slate-600">{review.wins || '未填写'}</p>
+                  </section>
+                  <section className="rounded-lg bg-white/70 p-3">
+                    <p className="font-semibold text-rose-700">今日问题</p>
+                    <p className="mt-1 whitespace-pre-wrap leading-6 text-slate-600">{review.problems || '未填写'}</p>
+                  </section>
+                  <section className="rounded-lg bg-white/70 p-3">
+                    <p className="font-semibold text-blue-700">明日改进计划</p>
+                    <p className="mt-1 whitespace-pre-wrap leading-6 text-slate-600">{review.tomorrowPlan || '未填写'}</p>
+                  </section>
+                </div>
+              </article>
             );
           }) : <EmptyState title="还没有复盘记录" />}
         </div>

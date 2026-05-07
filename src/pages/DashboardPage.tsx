@@ -8,7 +8,7 @@ import { Page } from '../components/Page';
 import { tasksRepository } from '../db/repositories/tasksRepository';
 import { useAppData } from '../hooks/useAppData';
 import type { TaskUrgency } from '../types/models';
-import { calculateCountdownDays, getDueStatus, minutesToHoursText, todayISO } from '../utils/date';
+import { calculateCountdownDays, getDueStatus, minutesToHoursText, previousDateISO, todayISO } from '../utils/date';
 import {
   getDailyProjectDistribution,
   getDailyTotalMinutes,
@@ -30,6 +30,8 @@ export function DashboardPage() {
   const trend = getLast7DaysTotals(studyRecords);
   const latestExam = getSubjectExamStats(exams).latest;
   const todayReview = reviews.find((review) => review.date === today);
+  const yesterdayDate = previousDateISO(today);
+  const yesterdayReview = reviews.find((review) => review.date === yesterdayDate);
   const reviewScore = getReviewAverageScore(todayReview);
   const reviewTone = getReviewTone(reviewScore);
   const visibleTasks = getVisibleShortTermTasks(shortTermTasks, today);
@@ -105,6 +107,19 @@ export function DashboardPage() {
           }) : <EmptyState title="还没有短期目标" description="添加今天或近期要完成的小目标。" />}
         </div>
       </div>
+
+      {yesterdayReview?.tomorrowPlan?.trim() ? (
+        <div className="mt-6 card border-blue-100 bg-blue-50/70 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-blue-700">昨日写给今天的计划</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">今天优先照着这份计划推进</h2>
+            </div>
+            <Link className="btn btn-soft" to={`/reviews`}>去复盘页</Link>
+          </div>
+          <p className="mt-4 whitespace-pre-wrap rounded-lg border border-blue-100 bg-white/80 p-4 text-sm leading-7 text-slate-700">{yesterdayReview.tomorrowPlan}</p>
+        </div>
+      ) : null}
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
         <ChartBox title="今日时间分布">
