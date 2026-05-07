@@ -58,7 +58,7 @@ export function MockExamsPage() {
             <h2 className="text-base font-semibold text-slate-900">科目选择</h2>
             <p className="mt-1 text-sm text-slate-500">可以自由新增科目；选择后，图表、历史记录和新增成绩会同步到该科目。</p>
           </div>
-          <div className="grid w-full gap-3 md:w-auto md:grid-cols-[150px_280px_auto_auto]">
+          <div className="grid w-full gap-3 md:w-auto md:grid-cols-[150px_180px_auto_auto]">
             <input className="field" placeholder="新增科目" value={subjectDraft.name ?? ''} onChange={(e) => setSubjectDraft({ ...subjectDraft, name: e.target.value })} />
             <ColorPicker value={subjectDraft.color} onChange={(color) => setSubjectDraft({ ...subjectDraft, color })} />
             <button className="btn btn-primary" onClick={saveSubject}><Plus size={16} />添加科目</button>

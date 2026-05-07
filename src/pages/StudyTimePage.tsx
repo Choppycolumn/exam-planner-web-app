@@ -10,7 +10,14 @@ import { useAppData } from '../hooks/useAppData';
 import type { StudyProject } from '../types/models';
 import { minutesToHoursText, todayISO } from '../utils/date';
 
-type StudyTimeRow = { minutes: number | ''; note: string };
+type StudyTimeRow = { hours: number | ''; minutes: number | ''; note: string };
+
+const splitMinutes = (totalMinutes = 0): Pick<StudyTimeRow, 'hours' | 'minutes'> => ({
+  hours: totalMinutes ? Math.floor(totalMinutes / 60) : '',
+  minutes: totalMinutes ? totalMinutes % 60 : '',
+});
+
+const combineTime = (row?: StudyTimeRow) => Math.max(0, Number(row?.hours || 0) * 60 + Number(row?.minutes || 0));
 
 export function StudyTimePage() {
   const { projects, activeProjects, studyRecords } = useAppData();
@@ -25,12 +32,12 @@ export function StudyTimePage() {
     for (const project of activeProjects) {
       if (!project.id) continue;
       const found = recordsForDate.find((record) => record.projectId === project.id);
-      next[project.id] = { minutes: found?.minutes ? found.minutes : '', note: found?.note ?? '' };
+      next[project.id] = { ...splitMinutes(found?.minutes), note: found?.note ?? '' };
     }
     setRows(next);
   }, [activeProjects, recordsForDate]);
 
-  const total = Object.values(rows).reduce((sum, row) => sum + Number(row.minutes || 0), 0);
+  const total = Object.values(rows).reduce((sum, row) => sum + combineTime(row), 0);
 
   const saveRecords = async () => {
     await studyRepository.saveDayRecords(
@@ -38,7 +45,7 @@ export function StudyTimePage() {
       activeProjects.filter((project) => project.id).map((project) => ({
         projectId: project.id!,
         projectNameSnapshot: project.name,
-        minutes: Math.max(0, Number(rows[project.id!]?.minutes || 0)),
+        minutes: combineTime(rows[project.id!]),
         note: rows[project.id!]?.note ?? '',
       })),
     );
@@ -63,16 +70,33 @@ export function StudyTimePage() {
           {activeProjects.length ? (
             <div className="space-y-3">
               {activeProjects.map((project) => (
-                <div key={project.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[160px_150px_1fr]">
+                <div key={project.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[160px_190px_1fr]">
                   <div className="flex items-center gap-2 font-medium"><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</div>
-                  <input
-                    className="field placeholder:text-slate-300"
-                    type="number"
-                    min={0}
-                    placeholder="0"
-                    value={rows[project.id!]?.minutes ?? ''}
-                    onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], minutes: e.target.value === '' ? '' : Number(e.target.value) } })}
-                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="relative">
+                      <input
+                        className="field pr-8 placeholder:text-slate-300"
+                        type="number"
+                        min={0}
+                        placeholder="0"
+                        value={rows[project.id!]?.hours ?? ''}
+                        onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], hours: e.target.value === '' ? '' : Number(e.target.value) } })}
+                      />
+                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">时</span>
+                    </label>
+                    <label className="relative">
+                      <input
+                        className="field pr-8 placeholder:text-slate-300"
+                        type="number"
+                        min={0}
+                        max={59}
+                        placeholder="0"
+                        value={rows[project.id!]?.minutes ?? ''}
+                        onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], minutes: e.target.value === '' ? '' : Math.min(59, Number(e.target.value)) } })}
+                      />
+                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">分</span>
+                    </label>
+                  </div>
                   <input className="field" placeholder="备注" value={rows[project.id!]?.note ?? ''} onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], note: e.target.value } })} />
                 </div>
               ))}
