@@ -9,6 +9,7 @@ export interface ServerState {
   mockExamRecords: MockExamRecord[];
   shortTermTasks: ShortTermTask[];
   waterIntakeRecords: WaterIntakeRecord[];
+  readOnly?: boolean;
 }
 
 type ApiOptions = {

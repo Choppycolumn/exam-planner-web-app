@@ -10,6 +10,7 @@ const dataFile = join(dataDir, 'db.json');
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
+const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
 const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
@@ -237,27 +238,32 @@ function sign(value) {
   return createHmac('sha256', cookieSecret).update(value).digest('hex');
 }
 
-function createSessionValue() {
-  const payload = `ok.${Date.now()}`;
+function createSessionValue(role = 'write') {
+  const payload = `${role}.${Date.now()}`;
   return `${payload}.${sign(payload)}`;
 }
 
-function isValidSession(cookieHeader = '') {
+function getSessionRole(cookieHeader = '') {
   const cookies = Object.fromEntries(cookieHeader.split(';').map((item) => {
     const [key, ...rest] = item.trim().split('=');
     return [key, decodeURIComponent(rest.join('='))];
   }));
   const value = cookies[cookieName];
-  if (!value) return false;
+  if (!value) return null;
   const parts = value.split('.');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return null;
   const payload = `${parts[0]}.${parts[1]}`;
   const expected = sign(payload);
   try {
-    return timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expected));
+    if (!timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expected))) return null;
+    return parts[0] === 'read' ? 'read' : 'write';
   } catch {
-    return false;
+    return null;
   }
+}
+
+function isValidSession(cookieHeader = '') {
+  return Boolean(getSessionRole(cookieHeader));
 }
 
 function loginPage(error = '') {
@@ -380,7 +386,8 @@ async function handleApi(req, res) {
 
   if (req.url === '/api/confusing-words/backup') {
     const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
-    const hasBackupAccess = isValidSession(req.headers.cookie) || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
+    const sessionRole = getSessionRole(req.headers.cookie);
+    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
     if (!hasBackupAccess) {
       sendJson(res, { error: 'Unauthorized' }, 401);
       return;
@@ -388,6 +395,10 @@ async function handleApi(req, res) {
     const state = readState();
     if (req.method === 'GET') {
       sendJson(res, state.confusingWordsBackup || null);
+      return;
+    }
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read only mode' }, 403);
       return;
     }
     if (req.method === 'POST') {
@@ -404,8 +415,13 @@ async function handleApi(req, res) {
     }
   }
 
-  if (!isValidSession(req.headers.cookie)) {
+  const sessionRole = getSessionRole(req.headers.cookie);
+  if (!sessionRole) {
     sendJson(res, { error: 'Unauthorized' }, 401);
+    return;
+  }
+  if (req.method !== 'GET' && sessionRole === 'read') {
+    sendJson(res, { error: 'Read only mode' }, 403);
     return;
   }
 
@@ -418,6 +434,7 @@ async function handleApi(req, res) {
       ...state,
       dailyReviews: state.dailyReviews.map(normalizeReview),
       waterIntakeRecords: Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [],
+      readOnly: sessionRole === 'read',
     };
     sendJson(res, normalized);
     return;
@@ -513,10 +530,12 @@ async function handleApi(req, res) {
 createServer(async (req, res) => {
   if (req.url === '/login' && req.method === 'POST') {
     const params = new URLSearchParams(await readBody(req));
-    if (params.get('password') === appPassword) {
+    const password = params.get('password');
+    const role = password === appPassword ? 'write' : password === readOnlyPassword ? 'read' : '';
+    if (role) {
       res.writeHead(302, {
         location: '/',
-        'set-cookie': `${cookieName}=${encodeURIComponent(createSessionValue())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
+        'set-cookie': `${cookieName}=${encodeURIComponent(createSessionValue(role))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
       });
       res.end();
       return;

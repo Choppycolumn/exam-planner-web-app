@@ -14,7 +14,7 @@ function tone(cups: number) {
   return { className: 'border-emerald-200 bg-emerald-50 text-emerald-800', label: '今日达标' };
 }
 
-export function WaterIntakeCard({ record }: { record?: WaterIntakeRecord }) {
+export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIntakeRecord; readOnly?: boolean }) {
   const [cups, setCups] = useState(record?.cups ?? 0);
   const [holding, setHolding] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -40,7 +40,7 @@ export function WaterIntakeCard({ record }: { record?: WaterIntakeRecord }) {
   };
 
   const startHold = () => {
-    if (currentCups >= targetCups || holding) return;
+    if (readOnly || currentCups >= targetCups || holding) return;
     setHolding(true);
     setProgress(0);
     startedAt.current = Date.now();
@@ -67,37 +67,36 @@ export function WaterIntakeCard({ record }: { record?: WaterIntakeRecord }) {
   };
 
   const reset = async () => {
+    if (readOnly) return;
     if (!confirm('确定把今天的喝水记录清零吗？')) return;
     await saveCups(0);
   };
 
   return (
-    <section className={`card border p-5 ${style.className}`}>
+    <section
+      className={`card relative block h-full cursor-pointer overflow-hidden border p-5 text-left select-none ${style.className}`}
+      onMouseDown={startHold}
+      onMouseUp={cancelHold}
+      onMouseLeave={cancelHold}
+      onTouchStart={startHold}
+      onTouchEnd={cancelHold}
+    >
+      <span className="absolute inset-y-0 left-0 bg-current opacity-10 transition-all" style={{ width: `${progress}%` }} />
+      <div className="relative">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="flex items-center gap-2 text-sm font-semibold"><Droplets size={17} />喝水</p>
           <h2 className="mt-2 text-2xl font-semibold">{currentCups}/{targetCups} 杯</h2>
-          <p className="mt-1 text-sm opacity-80">目标约 {targetCups * cupMl}ml，每杯 {cupMl}ml · {style.label}</p>
+          <p className="mt-1 text-sm opacity-80">{targetCups * cupMl}ml · {style.label}</p>
         </div>
-        <button className="btn btn-soft" onClick={() => void reset()}>清零</button>
+        {!readOnly ? <button className="rounded-lg bg-white/70 px-2 py-1 text-xs font-semibold" onMouseDown={(event) => event.stopPropagation()} onTouchStart={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void reset(); }}>清零</button> : null}
       </div>
 
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/70">
         <div className="h-full rounded-full bg-current transition-all" style={{ width: `${percent}%` }} />
       </div>
-
-      <button
-        className="relative mt-4 h-12 w-full overflow-hidden rounded-lg border border-white/70 bg-white/80 font-semibold text-slate-800 transition active:scale-[0.99]"
-        onMouseDown={startHold}
-        onMouseUp={cancelHold}
-        onMouseLeave={cancelHold}
-        onTouchStart={startHold}
-        onTouchEnd={cancelHold}
-        disabled={currentCups >= targetCups}
-      >
-        <span className="absolute inset-y-0 left-0 bg-current opacity-15 transition-all" style={{ width: `${progress}%` }} />
-        <span className="relative">{currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按 3 秒记一杯'}</span>
-      </button>
+      <p className="mt-3 text-xs font-medium opacity-75">{readOnly ? '只读模式不可记录' : currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按卡片任意位置 3 秒记一杯'}</p>
+      </div>
     </section>
   );
 }

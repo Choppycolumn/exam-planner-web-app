@@ -23,7 +23,7 @@ import {
 } from '../utils/statistics';
 
 export function DashboardPage() {
-  const { activeGoal, studyRecords, exams, reviews, shortTermTasks, waterIntakeRecords } = useAppData();
+  const { activeGoal, studyRecords, exams, reviews, shortTermTasks, waterIntakeRecords, readOnly } = useAppData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const today = todayISO();
   const todayTotal = getDailyTotalMinutes(studyRecords, today);
@@ -46,7 +46,7 @@ export function DashboardPage() {
 
   return (
     <Page title="早上好，今天继续稳稳推进" subtitle="第一眼看目标、看今天、看趋势。">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard
           label="当前长期目标"
           value={activeGoal ? `${calculateCountdownDays(activeGoal.deadline)} 天` : '未设置'}
@@ -70,10 +70,7 @@ export function DashboardPage() {
           hint={latestExam ? latestExam.paperName : '记录一次模考后显示'}
           icon={<ClipboardList size={18} />}
         />
-      </div>
-
-      <div className="mt-6">
-        <WaterIntakeCard record={todayWaterRecord} />
+        <WaterIntakeCard record={todayWaterRecord} readOnly={readOnly} />
       </div>
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (

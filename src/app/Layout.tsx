@@ -16,7 +16,7 @@ const navItems = [
 ];
 
 export function Layout() {
-  const { activeGoal } = useAppData();
+  const { activeGoal, readOnly } = useAppData();
   const location = useLocation();
 
   return (
@@ -53,6 +53,7 @@ export function Layout() {
                 {activeGoal ? `当前目标：${activeGoal.name}，剩余 ${calculateCountdownDays(activeGoal.deadline)} 天` : '还没有启用目标'}
               </p>
             </div>
+            {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
             <div className="flex gap-2 overflow-x-auto lg:hidden">
               {navItems.map(({ to, label }) => (
                 <NavLink key={to} to={to} className={({ isActive }) => `whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'}`}>

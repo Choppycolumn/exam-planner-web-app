@@ -10,6 +10,7 @@ const emptyState: ServerState = {
   mockExamRecords: [],
   shortTermTasks: [],
   waterIntakeRecords: [],
+  readOnly: false,
 };
 
 export function useAppData() {
@@ -41,6 +42,7 @@ export function useAppData() {
   const exams = useMemo(() => [...state.mockExamRecords].sort((a, b) => b.date.localeCompare(a.date)), [state.mockExamRecords]);
   const shortTermTasks = useMemo(() => [...state.shortTermTasks].sort((a, b) => a.dueDate.localeCompare(b.dueDate)), [state.shortTermTasks]);
   const waterIntakeRecords = state.waterIntakeRecords;
+  const readOnly = Boolean(state.readOnly);
 
-  return { goals, activeGoal, projects, activeProjects, studyRecords, reviews, subjects, activeSubjects, exams, shortTermTasks, waterIntakeRecords };
+  return { goals, activeGoal, projects, activeProjects, studyRecords, reviews, subjects, activeSubjects, exams, shortTermTasks, waterIntakeRecords, readOnly };
 }
