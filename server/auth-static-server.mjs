@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
 const dataFile = join(dataDir, 'db.json');
+const dictionaryFile = join(dataDir, 'ecdict.csv');
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
@@ -29,6 +30,7 @@ const mimeTypes = {
 
 const projectColors = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
 const subjectColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626'];
+const dictionaryCache = new Map();
 
 function nowISO() {
   return new Date().toISOString();
@@ -119,6 +121,86 @@ function sendJson(res, data, status = 200) {
     'access-control-allow-headers': 'content-type,x-backup-password',
   });
   res.end(JSON.stringify(data));
+}
+
+function cleanChineseDefinition(value = '') {
+  return value
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('[网络]'))
+    .join('；')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildDictionaryEntry(fields) {
+    const [word, phonetic, definition, translation, partOfSpeech] = fields;
+    const key = word?.trim().toLowerCase();
+    const chineseDefinition = cleanChineseDefinition(translation);
+  if (!key || !chineseDefinition) return null;
+  return {
+      word: key,
+      phonetic: phonetic || '',
+      englishDefinition: definition || '',
+      chineseDefinition,
+      partOfSpeech: partOfSpeech || '',
+  };
+}
+
+function findDictionaryEntry(targetWord) {
+  const key = targetWord.trim().toLowerCase();
+  if (dictionaryCache.has(key)) return dictionaryCache.get(key);
+  if (!existsSync(dictionaryFile)) return null;
+
+  const text = readFileSync(dictionaryFile, 'utf8');
+  let row = [];
+  let field = '';
+  let quoted = false;
+  let isHeader = true;
+
+  const finishRow = () => {
+    if (isHeader) {
+      isHeader = false;
+      return null;
+    }
+    const entry = buildDictionaryEntry(row);
+    if (entry?.word === key) {
+      dictionaryCache.set(key, entry);
+      return entry;
+    }
+    return null;
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') quoted = false;
+      else field += char;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field);
+      const found = finishRow();
+      if (found) return found;
+      row = [];
+      field = '';
+    } else if (char !== '\r') field += char;
+  }
+  if (field || row.length) {
+    row.push(field);
+    const found = finishRow();
+    if (found) return found;
+  }
+  dictionaryCache.set(key, null);
+  return null;
 }
 
 function applySave(items, payload, createDefaults) {
@@ -275,6 +357,22 @@ async function handleApi(req, res) {
     };
     writeState(next);
     sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/dictionary/lookup') && req.method === 'GET') {
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const word = requestUrl.searchParams.get('word')?.trim().toLowerCase() || '';
+    if (!word) {
+      sendJson(res, { error: 'Missing word' }, 400);
+      return;
+    }
+    const entry = findDictionaryEntry(word);
+    if (!entry) {
+      sendJson(res, { error: 'Not found' }, 404);
+      return;
+    }
+    sendJson(res, entry);
     return;
   }
 

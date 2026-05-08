@@ -15,6 +15,24 @@ type TranslationResponse = {
   };
 };
 
+async function queryServerDictionary(word: string): Promise<Partial<ConfusingWordEntry> | null> {
+  try {
+    const response = await fetch(`/api/dictionary/lookup?word=${encodeURIComponent(word)}`);
+    if (!response.ok) return null;
+    const data = await response.json() as Partial<ConfusingWordEntry>;
+    if (!data.chineseDefinition) return null;
+    return {
+      phonetic: data.phonetic || '',
+      partOfSpeech: data.partOfSpeech || '',
+      englishDefinition: data.englishDefinition || '',
+      chineseDefinition: data.chineseDefinition,
+      queryStatus: 'success',
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function translateToChinese(text: string) {
   if (!text.trim()) return '';
   try {
@@ -28,6 +46,9 @@ async function translateToChinese(text: string) {
 }
 
 export async function queryDictionary(word: string): Promise<Partial<ConfusingWordEntry>> {
+  const serverResult = await queryServerDictionary(word);
+  if (serverResult) return serverResult;
+
   const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
   if (!response.ok) {
     throw new Error('Dictionary lookup failed');

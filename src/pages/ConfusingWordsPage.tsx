@@ -7,7 +7,7 @@ import { Toast } from '../components/Toast';
 import { backupConfusingWords } from '../features/confusing-words/backupApi';
 import { queryDictionary } from '../features/confusing-words/dictionaryApi';
 import { openPrintWindow } from '../features/confusing-words/print';
-import { buildExport, createGroup, loadGroups, parseWords, saveGroups } from '../features/confusing-words/storage';
+import { buildExport, createGroup, createWord, loadGroups, parseWords, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordEntry, ConfusingWordGroup, PrintMode } from '../features/confusing-words/types';
 
 const nowISO = () => new Date().toISOString();
@@ -32,6 +32,8 @@ export function ConfusingWordsPage() {
   const [query, setQuery] = useState('');
   const [printMode, setPrintMode] = useState<PrintMode>('word-to-meaning');
   const [printScope, setPrintScope] = useState<'current' | 'all'>('current');
+  const [addWordDrafts, setAddWordDrafts] = useState<Record<string, string>>({});
+  const [expandedAddGroupId, setExpandedAddGroupId] = useState('');
   const [toast, setToast] = useState('');
   const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem(BACKUP_META_KEY) || '');
 
@@ -89,6 +91,24 @@ export function ConfusingWordsPage() {
     setSelectedId(group.id);
     setWordInput('');
     void lookupWords(group.id, group.words.map((word) => ({ id: word.id, word: word.word })));
+  };
+
+  const addWordsToGroup = (group: ConfusingWordGroup) => {
+    const words = parseWords(addWordDrafts[group.id]);
+    const cleanWords = words.filter((word) => !group.words.some((item) => item.word.toLowerCase() === word));
+    if (!cleanWords.length) return alert('请输入要添加的新单词');
+    const newWords = cleanWords.map(createWord);
+    const next = groups.map((item) => item.id === group.id ? {
+      ...item,
+      title: [...item.words, ...newWords].map((word) => word.word).join(' / '),
+      words: [...item.words, ...newWords],
+      updatedAt: nowISO(),
+    } : item);
+    persist(next, '已添加单词');
+    setSelectedId(group.id);
+    setExpandedAddGroupId('');
+    setAddWordDrafts((current) => ({ ...current, [group.id]: '' }));
+    void lookupWords(group.id, newWords.map((word) => ({ id: word.id, word: word.word })));
   };
 
   const deleteGroup = (id: string) => {
@@ -168,8 +188,23 @@ export function ConfusingWordsPage() {
                 <div className="flex flex-wrap gap-2">
                   {group.words.map((word) => <span key={word.id} className="rounded bg-slate-100 px-2.5 py-1 text-sm font-semibold text-slate-700">{word.word}</span>)}
                 </div>
-                <button className="btn btn-danger shrink-0" onClick={(event) => { event.stopPropagation(); deleteGroup(group.id); }}><Trash2 size={16} />删除卡片</button>
+                <div className="flex shrink-0 gap-2">
+                  <button className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" title="添加单词" onClick={(event) => { event.stopPropagation(); setExpandedAddGroupId(expandedAddGroupId === group.id ? '' : group.id); }}><Plus size={16} /></button>
+                  <button className="btn btn-danger" onClick={(event) => { event.stopPropagation(); deleteGroup(group.id); }}><Trash2 size={16} />删除卡片</button>
+                </div>
               </div>
+
+              {expandedAddGroupId === group.id ? (
+                <div className="mt-4 flex flex-wrap gap-2 rounded-lg border border-blue-100 bg-blue-50/70 p-3" onClick={(event) => event.stopPropagation()}>
+                  <input
+                    className="field min-w-0 flex-1"
+                    placeholder="输入要加入这张卡的新单词，可用空格或逗号分隔"
+                    value={addWordDrafts[group.id] ?? ''}
+                    onChange={(event) => setAddWordDrafts({ ...addWordDrafts, [group.id]: event.target.value })}
+                  />
+                  <button className="btn btn-primary" onClick={() => addWordsToGroup(group)}><Plus size={16} />加入</button>
+                </div>
+              ) : null}
 
               <div className="mt-4 divide-y divide-slate-100">
                 {group.words.map((word) => (
