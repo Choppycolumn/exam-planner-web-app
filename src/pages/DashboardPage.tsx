@@ -5,6 +5,7 @@ import { ChartBox, DistributionPie, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
+import { WaterIntakeCard } from '../components/WaterIntakeCard';
 import { tasksRepository } from '../db/repositories/tasksRepository';
 import { useAppData } from '../hooks/useAppData';
 import type { TaskUrgency } from '../types/models';
@@ -22,7 +23,7 @@ import {
 } from '../utils/statistics';
 
 export function DashboardPage() {
-  const { activeGoal, studyRecords, exams, reviews, shortTermTasks } = useAppData();
+  const { activeGoal, studyRecords, exams, reviews, shortTermTasks, waterIntakeRecords } = useAppData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const today = todayISO();
   const todayTotal = getDailyTotalMinutes(studyRecords, today);
@@ -35,6 +36,7 @@ export function DashboardPage() {
   const reviewScore = getReviewAverageScore(todayReview);
   const reviewTone = getReviewTone(reviewScore);
   const visibleTasks = getVisibleShortTermTasks(shortTermTasks, today);
+  const todayWaterRecord = waterIntakeRecords.find((record) => record.date === today);
 
   const saveTask = async () => {
     if (!taskDraft.title.trim()) return alert('请填写短期目标名称');
@@ -68,6 +70,10 @@ export function DashboardPage() {
           hint={latestExam ? latestExam.paperName : '记录一次模考后显示'}
           icon={<ClipboardList size={18} />}
         />
+      </div>
+
+      <div className="mt-6">
+        <WaterIntakeCard record={todayWaterRecord} />
       </div>
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (

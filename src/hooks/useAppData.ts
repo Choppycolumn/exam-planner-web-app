@@ -9,6 +9,7 @@ const emptyState: ServerState = {
   subjects: [],
   mockExamRecords: [],
   shortTermTasks: [],
+  waterIntakeRecords: [],
 };
 
 export function useAppData() {
@@ -39,6 +40,7 @@ export function useAppData() {
   const activeSubjects = useMemo(() => subjects.filter((subject) => subject.isActive), [subjects]);
   const exams = useMemo(() => [...state.mockExamRecords].sort((a, b) => b.date.localeCompare(a.date)), [state.mockExamRecords]);
   const shortTermTasks = useMemo(() => [...state.shortTermTasks].sort((a, b) => a.dueDate.localeCompare(b.dueDate)), [state.shortTermTasks]);
+  const waterIntakeRecords = state.waterIntakeRecords;
 
-  return { goals, activeGoal, projects, activeProjects, studyRecords, reviews, subjects, activeSubjects, exams, shortTermTasks };
+  return { goals, activeGoal, projects, activeProjects, studyRecords, reviews, subjects, activeSubjects, exams, shortTermTasks, waterIntakeRecords };
 }

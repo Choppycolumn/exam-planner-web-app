@@ -15,6 +15,7 @@ async function readLocalIndexedDb(): Promise<ServerState> {
     subjects: await db.subjects.toArray(),
     mockExamRecords: await db.mockExamRecords.toArray(),
     shortTermTasks: await db.shortTermTasks.toArray(),
+    waterIntakeRecords: [],
   };
 }
 

@@ -85,6 +85,7 @@ function baseState() {
     })),
     mockExamRecords: [],
     shortTermTasks: [],
+    waterIntakeRecords: [],
     confusingWordsBackup: null,
   };
 }
@@ -353,6 +354,7 @@ async function handleApi(req, res) {
       subjects: Array.isArray(imported.subjects) ? imported.subjects : [],
       mockExamRecords: Array.isArray(imported.mockExamRecords) ? imported.mockExamRecords : [],
       shortTermTasks: Array.isArray(imported.shortTermTasks) ? imported.shortTermTasks : [],
+      waterIntakeRecords: Array.isArray(imported.waterIntakeRecords) ? imported.waterIntakeRecords : [],
       confusingWordsBackup: imported.confusingWordsBackup || null,
     };
     writeState(next);
@@ -415,6 +417,7 @@ async function handleApi(req, res) {
     const normalized = {
       ...state,
       dailyReviews: state.dailyReviews.map(normalizeReview),
+      waterIntakeRecords: Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [],
     };
     sendJson(res, normalized);
     return;
@@ -446,6 +449,25 @@ async function handleApi(req, res) {
 
   if (req.url === '/api/goals/activate' && req.method === 'POST') {
     state.goals = state.goals.map((goal) => ({ ...goal, isActive: goal.id === Number(body.id), updatedAt: timestamp }));
+    writeState(state);
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/water/save' && req.method === 'POST') {
+    const records = Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [];
+    const date = body.date || todayISO();
+    const existingIndex = records.findIndex((item) => item.date === date);
+    const payload = {
+      date,
+      cups: Math.max(0, Number(body.cups || 0)),
+      cupMl: Math.max(1, Number(body.cupMl || 500)),
+      targetCups: Math.max(1, Number(body.targetCups || 7)),
+      updatedAt: timestamp,
+    };
+    if (existingIndex >= 0) records[existingIndex] = { ...records[existingIndex], ...payload };
+    else records.push({ id: nextId(records), schemaVersion: entitySchemaVersion, createdAt: timestamp, ...payload });
+    state.waterIntakeRecords = records;
     writeState(state);
     sendJson(res, { ok: true });
     return;

@@ -1,4 +1,4 @@
-import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview } from '../types/models';
+import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
 
 export interface ServerState {
   goals: Goal[];
@@ -8,6 +8,7 @@ export interface ServerState {
   subjects: Subject[];
   mockExamRecords: MockExamRecord[];
   shortTermTasks: ShortTermTask[];
+  waterIntakeRecords: WaterIntakeRecord[];
 }
 
 type ApiOptions = {
@@ -49,5 +50,7 @@ export const serverApi = {
   saveTask: (task: Partial<ShortTermTask>) => apiRequest<number>('/tasks/save', { method: 'POST', body: task }).then((result) => Number(result)),
   toggleTask: (task: ShortTermTask, completed: boolean) => apiRequest<void>('/tasks/toggle', { method: 'POST', body: { id: task.id, completed } }),
   removeTask: (id: number) => apiRequest<void>('/tasks/remove', { method: 'POST', body: { id } }),
+  saveWaterIntake: (record: Pick<WaterIntakeRecord, 'date' | 'cups' | 'cupMl' | 'targetCups'>) =>
+    apiRequest<void>('/water/save', { method: 'POST', body: record }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

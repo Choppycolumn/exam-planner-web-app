@@ -72,6 +72,13 @@ export interface ShortTermTask extends BaseEntity {
   note?: string;
 }
 
+export interface WaterIntakeRecord extends BaseEntity {
+  date: string;
+  cups: number;
+  cupMl: number;
+  targetCups: number;
+}
+
 export interface AppSetting extends BaseEntity {
   key: string;
   value: unknown;
