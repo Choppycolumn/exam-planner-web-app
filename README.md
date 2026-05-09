@@ -17,6 +17,7 @@
 - 打印默写版：为易混单词生成适合打印的复习页面
 - 设置页：数据导出、易混单词导入导出、服务器备份设置、一键清空
 - 服务器备份：结构化 SQLite 主库、每周自动快照、手动备份与恢复
+- 自动学习报告：服务器生成周报、月报，汇总学习时间、复盘、任务、喝水和模考
 
 ## 技术栈
 
@@ -55,6 +56,7 @@
 - `confusing_words_backup`
 - `dictionary_entries`
 - `backup_log`
+- `learning_reports`
 
 浏览器本地仍保留 Dexie/IndexedDB 结构和迁移能力，便于后续扩展。
 
@@ -112,6 +114,8 @@ scripts/start-exam-planner.bat
 - `/api/backups/status`
 - `/api/backups/run`
 - `/api/backups/restore`
+- `/api/reports`
+- `/api/reports/generate`
 - `/api/dictionary/lookup`
 - `/api/confusing-words/backup`
 
@@ -128,5 +132,5 @@ npm run build
 - AI 学习计划建议
 - 自动调整短期任务
 - 数据导出报告
-- 学习报告生成
+- 学习报告 PDF/Markdown 导出
 - SQLite FTS 全文搜索

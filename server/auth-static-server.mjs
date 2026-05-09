@@ -37,6 +37,7 @@ const subjectColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626'];
 const dictionaryCache = new Map();
 let sqliteReady = false;
 let dictionaryIndexChecked = false;
+let reportTimerStarted = false;
 
 function nowISO() {
   return new Date().toISOString();
@@ -50,6 +51,62 @@ function addYearISO() {
   const date = new Date();
   date.setFullYear(date.getFullYear() + 1);
   return date.toISOString().slice(0, 10);
+}
+
+function parseDateString(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function formatDateString(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDaysISO(value, days) {
+  const date = parseDateString(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return formatDateString(date);
+}
+
+function startOfWeekISO(value) {
+  const date = parseDateString(value);
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - day + 1);
+  return formatDateString(date);
+}
+
+function endOfWeekISO(value) {
+  return addDaysISO(startOfWeekISO(value), 6);
+}
+
+function startOfMonthISO(value) {
+  return `${value.slice(0, 7)}-01`;
+}
+
+function endOfMonthISO(value) {
+  const [year, month] = value.split('-').map(Number);
+  return formatDateString(new Date(Date.UTC(year, month, 0)));
+}
+
+function previousWeekPeriod(today = todayISO()) {
+  const currentWeekStart = startOfWeekISO(today);
+  const end = addDaysISO(currentWeekStart, -1);
+  return { periodStart: startOfWeekISO(end), periodEnd: end };
+}
+
+function previousMonthPeriod(today = todayISO()) {
+  const [year, month] = today.split('-').map(Number);
+  const previousMonthEnd = formatDateString(new Date(Date.UTC(year, month - 1, 0)));
+  return { periodStart: startOfMonthISO(previousMonthEnd), periodEnd: previousMonthEnd };
+}
+
+function currentPeriod(kind, today = todayISO()) {
+  if (kind === 'monthly') return { periodStart: startOfMonthISO(today), periodEnd: endOfMonthISO(today) };
+  return { periodStart: startOfWeekISO(today), periodEnd: endOfWeekISO(today) };
+}
+
+function previousPeriod(kind, today = todayISO()) {
+  return kind === 'monthly' ? previousMonthPeriod(today) : previousWeekPeriod(today);
 }
 
 function baseState() {
@@ -276,12 +333,24 @@ CREATE TABLE IF NOT EXISTS confusing_words_backup (
   backed_up_at TEXT NOT NULL,
   payload_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS learning_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK (kind IN ('weekly', 'monthly')),
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  title TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(kind, period_start, period_end)
+);
 CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
 CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date ON mock_exam_records(subject_id, date);
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due_date);
-CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);`);
+CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
+CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);`);
 }
 
 function insertRowsSql(table, columns, rows) {
@@ -458,6 +527,172 @@ function readLegacyStateForMigration() {
   return baseState();
 }
 
+function minutesText(minutes) {
+  const value = Math.max(0, Number(minutes || 0));
+  const hours = Math.floor(value / 60);
+  const rest = value % 60;
+  if (hours && rest) return `${hours} 小时 ${rest} 分钟`;
+  if (hours) return `${hours} 小时`;
+  return `${rest} 分钟`;
+}
+
+function dateRange(start, end) {
+  const days = [];
+  for (let current = start; current <= end; current = addDaysISO(current, 1)) {
+    days.push(current);
+  }
+  return days;
+}
+
+function compactText(value = '', maxLength = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function buildReportTitle(kind, periodStart, periodEnd) {
+  const label = kind === 'monthly' ? '月报' : '周报';
+  return `${periodStart} 至 ${periodEnd} 学习${label}`;
+}
+
+function buildLearningReport(kind, periodStart, periodEnd, trigger = 'auto') {
+  const dailyRows = sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
+FROM study_time_records
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+GROUP BY date
+ORDER BY date;`);
+  const dailyMap = new Map(dailyRows.map((item) => [item.date, Number(item.minutes || 0)]));
+  const dailyTotals = dateRange(periodStart, periodEnd).map((date) => ({ date, minutes: dailyMap.get(date) || 0 }));
+  const projectTotals = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS minutes
+FROM study_time_records
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+GROUP BY project_name_snapshot
+HAVING minutes > 0
+ORDER BY minutes DESC, name
+LIMIT 12;`);
+  const reviews = sqliteJson(`SELECT date, score, summary, wins, problems, tomorrow_plan AS tomorrowPlan
+FROM daily_reviews
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+ORDER BY date;`);
+  const exams = sqliteJson(`SELECT date, subject_name_snapshot AS subjectName, score, full_score AS fullScore, paper_name AS paperName
+FROM mock_exam_records
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+ORDER BY date DESC, id DESC;`);
+  const taskStats = sqliteJson(`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END), 0) AS completed
+FROM short_term_tasks
+WHERE due_date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)};`)[0] || { total: 0, completed: 0 };
+  const waterStats = sqliteJson(`SELECT COALESCE(SUM(cups), 0) AS cups, COALESCE(SUM(cups * cup_ml), 0) AS ml
+FROM water_intake_records
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)};`)[0] || { cups: 0, ml: 0 };
+  const totalMinutes = dailyTotals.reduce((sum, item) => sum + Number(item.minutes || 0), 0);
+  const studyDays = dailyTotals.filter((item) => Number(item.minutes || 0) > 0).length;
+  const averageDailyMinutes = dailyTotals.length ? Math.round(totalMinutes / dailyTotals.length) : 0;
+  const averageStudyDayMinutes = studyDays ? Math.round(totalMinutes / studyDays) : 0;
+  const averageReviewScore = reviews.length
+    ? Math.round((reviews.reduce((sum, item) => sum + Number(item.score || 0), 0) / reviews.length) * 10) / 10
+    : null;
+  const completedTasks = Number(taskStats.completed || 0);
+  const totalTasks = Number(taskStats.total || 0);
+  const taskCompletionRate = totalTasks ? Math.round((completedTasks / totalTasks) * 100) : null;
+  const topProject = projectTotals[0] || null;
+  const bestReview = reviews.length ? reviews.reduce((best, item) => Number(item.score || 0) > Number(best.score || 0) ? item : best, reviews[0]) : null;
+  const lowestReview = reviews.length ? reviews.reduce((low, item) => Number(item.score || 0) < Number(low.score || 0) ? item : low, reviews[0]) : null;
+  const highlights = [
+    totalMinutes > 0 ? `累计学习 ${minutesText(totalMinutes)}，覆盖 ${studyDays} 天。` : '本周期还没有学习时间记录。',
+    topProject ? `投入最多的是「${topProject.name}」，共 ${minutesText(topProject.minutes)}。` : '',
+    averageReviewScore ? `完成 ${reviews.length} 篇复盘，平均评分 ${averageReviewScore}/10。` : '本周期没有复盘记录。',
+    totalTasks ? `短期目标完成 ${completedTasks}/${totalTasks}，完成率 ${taskCompletionRate}%。` : '',
+    exams.length ? `记录 ${exams.length} 次模考，最近一次是 ${exams[0].subjectName} ${exams[0].score}/${exams[0].fullScore}。` : '',
+  ].filter(Boolean);
+  const suggestions = [];
+  if (totalMinutes === 0) suggestions.push('先恢复最小学习闭环：每天至少记录一个项目的学习时间。');
+  if (reviews.length < Math.min(3, dailyTotals.length)) suggestions.push('复盘密度偏低，可以把每日复盘压缩到 5 分钟，先保持连续。');
+  if (taskCompletionRate !== null && taskCompletionRate < 60) suggestions.push('短期目标完成率偏低，下一周期建议减少同时推进的目标数量。');
+  if (topProject && totalMinutes > 0 && Number(topProject.minutes) / totalMinutes > 0.7) suggestions.push('学习投入集中度较高，注意给薄弱科目保留固定时间块。');
+  if (!suggestions.length) suggestions.push('节奏比较稳，下一周期继续保持记录、复盘和任务闭环。');
+
+  return {
+    kind,
+    title: buildReportTitle(kind, periodStart, periodEnd),
+    periodStart,
+    periodEnd,
+    generatedAt: nowISO(),
+    trigger,
+    summary: {
+      totalMinutes,
+      studyDays,
+      averageDailyMinutes,
+      averageStudyDayMinutes,
+      reviewCount: reviews.length,
+      averageReviewScore,
+      completedTasks,
+      totalTasks,
+      taskCompletionRate,
+      waterCups: Number(waterStats.cups || 0),
+      waterMl: Number(waterStats.ml || 0),
+      examsCount: exams.length,
+      topProject: topProject ? { name: topProject.name, minutes: Number(topProject.minutes || 0) } : null,
+      bestReview: bestReview ? { date: bestReview.date, score: bestReview.score, summary: compactText(bestReview.summary) } : null,
+      lowestReview: lowestReview ? { date: lowestReview.date, score: lowestReview.score, problems: compactText(lowestReview.problems) } : null,
+    },
+    highlights,
+    suggestions,
+    dailyTotals,
+    projectTotals: projectTotals.map((item) => ({ name: item.name, minutes: Number(item.minutes || 0) })),
+    reviews: reviews.map((item) => ({
+      date: item.date,
+      score: item.score,
+      summary: item.summary || '',
+      wins: item.wins || '',
+      problems: item.problems || '',
+      tomorrowPlan: item.tomorrowPlan || '',
+    })),
+    exams,
+  };
+}
+
+function saveLearningReport(report) {
+  runSqlite(`INSERT INTO learning_reports (kind, period_start, period_end, title, payload_json, generated_at, updated_at)
+VALUES (${sqlString(report.kind)}, ${sqlString(report.periodStart)}, ${sqlString(report.periodEnd)}, ${sqlString(report.title)}, ${sqlString(JSON.stringify(report))}, ${sqlString(report.generatedAt)}, datetime('now'))
+ON CONFLICT(kind, period_start, period_end) DO UPDATE SET
+  title = excluded.title,
+  payload_json = excluded.payload_json,
+  generated_at = excluded.generated_at,
+  updated_at = excluded.updated_at;`);
+  return report;
+}
+
+function generateLearningReport(kind, periodStart, periodEnd, trigger = 'manual') {
+  if (!['weekly', 'monthly'].includes(kind)) throw new Error('Invalid report kind');
+  return saveLearningReport(buildLearningReport(kind, periodStart, periodEnd, trigger));
+}
+
+function reportExists(kind, periodStart, periodEnd) {
+  return Number(sqliteScalar(`SELECT COUNT(*) FROM learning_reports
+WHERE kind = ${sqlString(kind)} AND period_start = ${sqlString(periodStart)} AND period_end = ${sqlString(periodEnd)};`) || 0) > 0;
+}
+
+function ensureAutomaticReports() {
+  const today = todayISO();
+  for (const kind of ['weekly', 'monthly']) {
+    const { periodStart, periodEnd } = previousPeriod(kind, today);
+    if (!reportExists(kind, periodStart, periodEnd)) {
+      generateLearningReport(kind, periodStart, periodEnd, 'auto');
+    }
+  }
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_report_check_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+}
+
+function listLearningReports() {
+  const rows = sqliteJson(`SELECT id, kind, period_start AS periodStart, period_end AS periodEnd, title, payload_json AS payloadJson,
+generated_at AS generatedAt, updated_at AS updatedAt
+FROM learning_reports
+ORDER BY period_end DESC, kind DESC
+LIMIT 24;`);
+  return rows.map((row) => ({ id: row.id, ...JSON.parse(row.payloadJson), generatedAt: row.generatedAt, updatedAt: row.updatedAt }));
+}
+
 function createBackupFile(kind = 'manual', note = '') {
   mkdirSync(backupsDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
@@ -622,12 +857,18 @@ CREATE INDEX IF NOT EXISTS idx_dictionary_entries_frequency ON dictionary_entrie
     writeStateToSqlite(baseState());
   }
 
-  const structuredVersion = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'structured_schema_version' LIMIT 1;");
-  if (structuredVersion !== '1') {
+  const structuredVersion = Number(sqliteScalar("SELECT value FROM app_metadata WHERE key = 'structured_schema_version' LIMIT 1;") || 0);
+  if (structuredVersion < 1) {
     createBackupFile('pre-tables', 'automatic backup before structured table migration');
     writeStateToTables(readLegacyStateForMigration());
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', '1', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 2) {
+    createBackupFile('pre-reports', 'automatic backup before learning reports migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '2', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
@@ -637,7 +878,14 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   sqliteReady = true;
   ensureWeeklyBackup();
   ensureDictionaryIndex();
-  setInterval(ensureWeeklyBackup, 6 * 60 * 60 * 1000).unref();
+  ensureAutomaticReports();
+  if (!reportTimerStarted) {
+    setInterval(() => {
+      ensureWeeklyBackup();
+      ensureAutomaticReports();
+    }, 6 * 60 * 60 * 1000).unref();
+    reportTimerStarted = true;
+  }
 }
 
 function readState() {
@@ -1026,6 +1274,22 @@ async function handleApi(req, res) {
     const body = await readJsonBody(req);
     const result = restoreBackupFile(body.fileName);
     sendJson(res, { ok: true, ...result });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/reports') && req.method === 'GET') {
+    ensureSqliteStore();
+    ensureAutomaticReports();
+    sendJson(res, { reports: listLearningReports() });
+    return;
+  }
+
+  if (req.url === '/api/reports/generate' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const kind = body.kind === 'monthly' ? 'monthly' : 'weekly';
+    const period = body.period === 'previous' ? previousPeriod(kind) : currentPeriod(kind);
+    const report = generateLearningReport(kind, body.periodStart || period.periodStart, body.periodEnd || period.periodEnd, 'manual');
+    sendJson(res, { ok: true, report });
     return;
   }
 

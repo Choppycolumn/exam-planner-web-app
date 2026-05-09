@@ -24,6 +24,40 @@ export interface BackupStatus {
   dictionaryIndexedAt: string | null;
 }
 
+export interface LearningReport {
+  id?: number;
+  kind: 'weekly' | 'monthly';
+  title: string;
+  periodStart: string;
+  periodEnd: string;
+  generatedAt: string;
+  updatedAt?: string;
+  trigger?: 'auto' | 'manual';
+  summary: {
+    totalMinutes: number;
+    studyDays: number;
+    averageDailyMinutes: number;
+    averageStudyDayMinutes: number;
+    reviewCount: number;
+    averageReviewScore: number | null;
+    completedTasks: number;
+    totalTasks: number;
+    taskCompletionRate: number | null;
+    waterCups: number;
+    waterMl: number;
+    examsCount: number;
+    topProject: { name: string; minutes: number } | null;
+    bestReview: { date: string; score: number; summary?: string } | null;
+    lowestReview: { date: string; score: number; problems?: string } | null;
+  };
+  highlights: string[];
+  suggestions: string[];
+  dailyTotals: Array<{ date: string; minutes: number }>;
+  projectTotals: Array<{ name: string; minutes: number }>;
+  reviews: Array<{ date: string; score: number; summary: string; wins: string; problems: string; tomorrowPlan: string }>;
+  exams: Array<{ date: string; subjectName: string; score: number; fullScore: number; paperName: string }>;
+}
+
 type ApiOptions = {
   method?: string;
   body?: unknown;
@@ -68,5 +102,8 @@ export const serverApi = {
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
+  getReports: () => apiRequest<{ reports: LearningReport[] }>('/reports'),
+  generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
+    apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };
