@@ -37,6 +37,7 @@ export function DashboardPage() {
   const reviewTone = getReviewTone(reviewScore);
   const visibleTasks = getVisibleShortTermTasks(shortTermTasks, today);
   const todayWaterRecord = waterIntakeRecords.find((record) => record.date === today);
+  const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
 
   const saveTask = async () => {
     if (!taskDraft.title.trim()) return alert('请填写短期目标名称');
@@ -70,7 +71,7 @@ export function DashboardPage() {
           hint={latestExam ? latestExam.paperName : '记录一次模考后显示'}
           icon={<ClipboardList size={18} />}
         />
-        <WaterIntakeCard record={todayWaterRecord} readOnly={readOnly} />
+        <WaterIntakeCard key={waterCardKey} record={todayWaterRecord} readOnly={readOnly} />
       </div>
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (

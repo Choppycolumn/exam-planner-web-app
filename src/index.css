@@ -96,3 +96,18 @@ select {
   background: #fff1f2;
   color: #be123c;
 }
+
+@keyframes water-hold-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.water-hold-fill {
+  animation: water-hold-fill var(--water-hold-duration, 2000ms) linear forwards;
+  will-change: transform;
+}

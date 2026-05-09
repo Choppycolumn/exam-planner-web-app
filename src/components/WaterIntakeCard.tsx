@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { Droplets } from 'lucide-react';
 import { notifyDataChanged, serverApi } from '../api/client';
 import type { WaterIntakeRecord } from '../types/models';
@@ -17,25 +17,12 @@ function tone(cups: number) {
 export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIntakeRecord; readOnly?: boolean }) {
   const [cups, setCups] = useState(record?.cups ?? 0);
   const [holding, setHolding] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const startedAt = useRef(0);
-  const frameId = useRef<number | null>(null);
-  const finishTimeoutId = useRef<number | null>(null);
   const completedRef = useRef(false);
   const today = todayISO();
-  const currentCups = record?.cups ?? cups;
+  const currentCups = cups;
   const style = tone(currentCups);
   const percent = Math.min(100, Math.round((currentCups / targetCups) * 100));
-
-  const clearTimers = () => {
-    if (frameId.current) window.cancelAnimationFrame(frameId.current);
-    frameId.current = null;
-  };
-
-  useEffect(() => () => {
-    clearTimers();
-    if (finishTimeoutId.current) window.clearTimeout(finishTimeoutId.current);
-  }, []);
+  const holdAnimationStyle = { '--water-hold-duration': `${holdMs}ms` } as CSSProperties;
 
   const saveCups = async (nextCups: number) => {
     setCups(nextCups);
@@ -46,36 +33,22 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
   const startHold = () => {
     if (readOnly || currentCups >= targetCups || holding || completedRef.current) return;
     setHolding(true);
-    setProgress(0);
-    startedAt.current = Date.now();
-
-    const tick = () => {
-      const next = Math.min(100, ((Date.now() - startedAt.current) / holdMs) * 100);
-      setProgress(next);
-      if (next < 100) {
-        frameId.current = window.requestAnimationFrame(tick);
-        return;
-      }
-      completedRef.current = true;
-      frameId.current = null;
-      setHolding(false);
-      setProgress(100);
-      finishTimeoutId.current = window.setTimeout(() => {
-        setProgress(0);
-        void saveCups(Math.min(targetCups, currentCups + 1)).finally(() => {
-          completedRef.current = false;
-          finishTimeoutId.current = null;
-        });
-      }, 180);
-    };
-    frameId.current = window.requestAnimationFrame(tick);
   };
 
   const cancelHold = () => {
     if (!holding || completedRef.current) return;
-    clearTimers();
     setHolding(false);
-    setProgress(0);
+  };
+
+  const completeHold = () => {
+    if (!holding || completedRef.current) return;
+    completedRef.current = true;
+    void saveCups(Math.min(targetCups, currentCups + 1)).finally(() => {
+      window.setTimeout(() => {
+        setHolding(false);
+        completedRef.current = false;
+      }, 120);
+    });
   };
 
   const reset = async () => {
@@ -92,7 +65,13 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
       onPointerLeave={cancelHold}
       onPointerCancel={cancelHold}
     >
-      <span className="absolute inset-y-0 left-0 bg-current opacity-10 transition-all" style={{ width: `${progress}%` }} />
+      {holding ? (
+        <span
+          className="water-hold-fill pointer-events-none absolute inset-y-0 left-0 w-full origin-left bg-current opacity-10"
+          style={holdAnimationStyle}
+          onAnimationEnd={completeHold}
+        />
+      ) : null}
       <div className="relative">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -103,8 +82,14 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
         {!readOnly ? <button className="rounded-lg bg-white/70 px-2 py-1 text-xs font-semibold" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void reset(); }}>清零</button> : null}
       </div>
 
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/70">
-        <div className="h-full rounded-full bg-current transition-all" style={{ width: `${percent}%` }} />
+      <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-white/70">
+        <div className="h-full rounded-full bg-current opacity-35 transition-all" style={{ width: `${percent}%` }} />
+        {holding ? (
+          <div
+            className="water-hold-fill absolute inset-y-0 left-0 w-full origin-left rounded-full bg-current"
+            style={holdAnimationStyle}
+          />
+        ) : null}
       </div>
       <p className="mt-3 text-xs font-medium opacity-75">{readOnly ? '只读模式不可记录' : currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按卡片任意位置 2 秒记一杯'}</p>
       </div>
