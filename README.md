@@ -16,6 +16,7 @@
 - 易混单词卡：输入一组英文易混词，自动查询并生成英文-中文释义卡片
 - 打印默写版：为易混单词生成适合打印的复习页面
 - 设置页：数据导出、易混单词导入导出、服务器备份设置、一键清空
+- 服务器备份：SQLite 主库、每周自动快照、手动备份状态查看
 
 ## 技术栈
 
@@ -26,19 +27,22 @@
 - Dexie.js + IndexedDB
 - React Router
 - Node.js 静态服务与轻量 API
+- SQLite
 - Nginx 反向代理
 
 ## 数据策略
 
 项目当前采用混合数据策略：
 
-- 考研计划主数据由部署版服务器保存，方便多端同步。
+- 考研计划主数据由部署版服务器 SQLite 保存，方便多端同步。
 - 旧版浏览器 IndexedDB 数据可通过迁移页导入服务器。
 - 易混单词模块本地优先，保存在当前浏览器 `localStorage`。
 - 易混单词支持每小时向服务器上传备份快照，也支持手动导入导出 JSON。
+- 服务器每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。
+- 服务器端 ECDICT 英汉词典已导入 SQLite 索引，查词不依赖外部 API。
 - 删除学习项目或科目不会破坏历史记录，历史数据保留名称快照。
 
-服务器数据文件包含：
+服务器 SQLite 状态中包含：
 
 - `goals`
 - `dailyReviews`
@@ -47,6 +51,7 @@
 - `subjects`
 - `mockExamRecords`
 - `shortTermTasks`
+- `waterIntakeRecords`
 - `confusingWordsBackup`
 
 浏览器本地仍保留 Dexie/IndexedDB 结构和迁移能力，便于后续扩展。
@@ -102,6 +107,9 @@ scripts/start-exam-planner.bat
 - `/health`
 - `/api/state`
 - `/api/*/save`
+- `/api/backups/status`
+- `/api/backups/run`
+- `/api/dictionary/lookup`
 - `/api/confusing-words/backup`
 
 ## 验证命令
@@ -117,5 +125,5 @@ npm run build
 - AI 学习计划建议
 - 自动调整短期任务
 - 数据导出报告
-- 更稳定的词典/翻译接口
-- 更完善的服务器备份与恢复策略
+- 备份恢复界面
+- SQLite 结构化拆表与迁移工具

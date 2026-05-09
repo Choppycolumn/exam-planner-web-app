@@ -5,8 +5,8 @@ import { useAppData } from '../hooks/useAppData';
 import { DB_SCHEMA_VERSION } from '../db/schema';
 import { Toast } from '../components/Toast';
 import { GoalsManager } from '../components/GoalsManager';
-import { useState } from 'react';
-import { notifyDataChanged, serverApi } from '../api/client';
+import { useEffect, useState } from 'react';
+import { notifyDataChanged, serverApi, type BackupStatus } from '../api/client';
 import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
 import { buildExport, loadGroups, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordGroup } from '../features/confusing-words/types';
@@ -15,12 +15,45 @@ const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
 const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
 const BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks } = useAppData();
   const [toast, setToast] = useState('');
   const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
   const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+
+  const refreshBackupStatus = async () => {
+    try {
+      setBackupStatus(await serverApi.getBackupStatus());
+    } catch {
+      setBackupStatus(null);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    const timeoutId = window.setTimeout(() => {
+      serverApi.getBackupStatus()
+        .then((status) => {
+          if (mounted) setBackupStatus(status);
+        })
+        .catch(() => {
+          if (mounted) setBackupStatus(null);
+        });
+    }, 0);
+    return () => {
+      mounted = false;
+      window.clearTimeout(timeoutId);
+    };
+  }, []);
+
   const exportData = () => {
     const data = { exportedAt: new Date().toISOString(), dbSchemaVersion: DB_SCHEMA_VERSION, goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -100,6 +133,17 @@ export function SettingsPage() {
     setTimeout(() => setToast(''), 2200);
   };
 
+  const runServerBackup = async () => {
+    try {
+      await serverApi.runServerBackup();
+      await refreshBackupStatus();
+      setToast('服务器备份已创建');
+    } catch {
+      setToast('服务器备份失败，请稍后重试');
+    }
+    setTimeout(() => setToast(''), 2200);
+  };
+
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
       <div className="grid gap-4 md:grid-cols-3">
@@ -108,9 +152,39 @@ export function SettingsPage() {
         <MetricCard label="模考记录" value={`${exams.length} 条`} />
       </div>
       <div className="mt-5 card p-5">
-        <h2 className="text-base font-semibold">本地保存说明</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">所有数据只保存在当前浏览器的 IndexedDB 中，不需要登录、服务器或云同步。删除学习项目和科目时，历史记录会保留名称快照，后续新增 AI 计划、番茄钟、导出报告时可以通过新增表和迁移继续扩展。</p>
+        <h2 className="text-base font-semibold">数据保存说明</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
+      </div>
+      <div className="mt-5 card p-5">
+        <h2 className="text-base font-semibold">服务器备份系统</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">服务器会每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。词典已建立本地 SQLite 索引，查询时不依赖外部 API。</p>
+        <dl className="mt-4 grid gap-4 border-y border-slate-100 py-4 md:grid-cols-4">
+          <div>
+            <dt className="text-xs font-semibold text-slate-500">存储方式</dt>
+            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus?.storage ?? '读取中'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold text-slate-500">数据库大小</dt>
+            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? formatBytes(backupStatus.sqliteSizeBytes) : '--'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold text-slate-500">备份数量</dt>
+            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? `${backupStatus.backupCount} 个` : '--'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold text-slate-500">词典词条</dt>
+            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? `${backupStatus.dictionaryCount.toLocaleString()} 条` : '--'}</dd>
+          </div>
+        </dl>
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+          <span>最近周备份：{backupStatus?.lastWeeklyBackupAt ? new Date(backupStatus.lastWeeklyBackupAt).toLocaleString() : '暂无'}</span>
+          <span>词典索引：{backupStatus?.dictionaryIndexedAt ? new Date(backupStatus.dictionaryIndexedAt).toLocaleString() : '暂无'}</span>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button className="btn btn-soft" onClick={() => void runServerBackup()}><Cloud size={16} />立即创建服务器备份</button>
+          <button className="btn btn-soft" onClick={() => void refreshBackupStatus()}>刷新状态</button>
+        </div>
       </div>
       <div className="mt-5">
         <div className="mb-3">

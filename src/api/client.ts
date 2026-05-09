@@ -12,6 +12,17 @@ export interface ServerState {
   readOnly?: boolean;
 }
 
+export interface BackupStatus {
+  storage: 'sqlite';
+  sqliteFile: string;
+  sqliteSizeBytes: number;
+  backupCount: number;
+  lastBackup: { kind: string; filePath: string; createdAt: string; note?: string } | null;
+  lastWeeklyBackupAt: string | null;
+  dictionaryCount: number;
+  dictionaryIndexedAt: string | null;
+}
+
 type ApiOptions = {
   method?: string;
   body?: unknown;
@@ -53,5 +64,7 @@ export const serverApi = {
   removeTask: (id: number) => apiRequest<void>('/tasks/remove', { method: 'POST', body: { id } }),
   saveWaterIntake: (record: Pick<WaterIntakeRecord, 'date' | 'cups' | 'cupMl' | 'targetCups'>) =>
     apiRequest<void>('/water/save', { method: 'POST', body: record }),
+  getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
+  runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

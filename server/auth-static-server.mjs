@@ -1,12 +1,15 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
-const dataFile = join(dataDir, 'db.json');
+const legacyDataFile = join(dataDir, 'db.json');
+const sqliteFile = join(dataDir, 'exam-planner.sqlite');
+const backupsDir = join(dataDir, 'backups');
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
@@ -32,6 +35,8 @@ const mimeTypes = {
 const projectColors = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
 const subjectColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626'];
 const dictionaryCache = new Map();
+let sqliteReady = false;
+let dictionaryIndexChecked = false;
 
 function nowISO() {
   return new Date().toISOString();
@@ -91,24 +96,205 @@ function baseState() {
   };
 }
 
-function ensureDataFile() {
+function normalizeState(state = {}) {
+  return {
+    ...baseState(),
+    ...state,
+    goals: Array.isArray(state.goals) ? state.goals : [],
+    dailyReviews: Array.isArray(state.dailyReviews) ? state.dailyReviews.map(normalizeReview) : [],
+    studyProjects: Array.isArray(state.studyProjects) ? state.studyProjects : [],
+    studyTimeRecords: Array.isArray(state.studyTimeRecords) ? state.studyTimeRecords : [],
+    subjects: Array.isArray(state.subjects) ? state.subjects : [],
+    mockExamRecords: Array.isArray(state.mockExamRecords) ? state.mockExamRecords : [],
+    shortTermTasks: Array.isArray(state.shortTermTasks) ? state.shortTermTasks : [],
+    waterIntakeRecords: Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [],
+    confusingWordsBackup: state.confusingWordsBackup || null,
+  };
+}
+
+function sqlitePath(value) {
+  return `'${String(value).replace(/\\/g, '/').replace(/'/g, "''")}'`;
+}
+
+function sqlString(value) {
+  return `'${String(value ?? '').replace(/'/g, "''")}'`;
+}
+
+function runSqlite(script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  if (!existsSync(dataFile)) {
-    writeState(baseState());
+  const result = spawnSync('sqlite3', [sqliteFile], {
+    input: script,
+    encoding: 'utf8',
+    maxBuffer,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`sqlite3 failed: ${result.stderr || result.stdout}`);
+  }
+  return result.stdout;
+}
+
+function sqliteScalar(sql) {
+  return runSqlite(`.headers off\n.mode list\n${sql}\n`).trim();
+}
+
+function sqliteJson(sql) {
+  const output = runSqlite(`.mode json\n${sql}\n`).trim();
+  return output ? JSON.parse(output) : [];
+}
+
+function writeStateToSqlite(state) {
+  const tempFile = join(dataDir, `.state-write-${process.pid}-${Date.now()}.json`);
+  writeFileSync(tempFile, JSON.stringify(normalizeState(state), null, 2), 'utf8');
+  try {
+    runSqlite(`BEGIN;
+INSERT INTO app_state (id, state_json, updated_at)
+VALUES (1, CAST(readfile(${sqlitePath(tempFile)}) AS TEXT), datetime('now'))
+ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;
+COMMIT;`);
+  } finally {
+    if (existsSync(tempFile)) unlinkSync(tempFile);
   }
 }
 
+function readStateFromSqlite() {
+  const rows = sqliteJson('SELECT state_json FROM app_state WHERE id = 1 LIMIT 1;');
+  return normalizeState(rows[0]?.state_json ? JSON.parse(rows[0].state_json) : {});
+}
+
+function createBackupFile(kind = 'manual', note = '') {
+  mkdirSync(backupsDir, { recursive: true });
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
+  runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
+  runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
+VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
+  if (kind === 'weekly') {
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  return { kind, filePath, createdAt: nowISO() };
+}
+
+function cleanupWeeklyBackups(keepCount = 12) {
+  if (!existsSync(backupsDir)) return;
+  const weeklyBackups = readdirSync(backupsDir)
+    .filter((name) => /^exam-planner-weekly-.*\.sqlite$/.test(name))
+    .sort()
+    .reverse();
+  for (const name of weeklyBackups.slice(keepCount)) {
+    try {
+      unlinkSync(join(backupsDir, name));
+    } catch {
+      // A stale backup failing to delete should not block the app.
+    }
+  }
+}
+
+function ensureWeeklyBackup() {
+  const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+  if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneWeekMs) {
+    createBackupFile('weekly', 'automatic weekly backup');
+    cleanupWeeklyBackups();
+  }
+}
+
+function getBackupStatus() {
+  ensureSqliteStore();
+  const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
+FROM backup_log
+ORDER BY datetime(created_at) DESC
+LIMIT 1;`);
+  const backupCount = Number(sqliteScalar('SELECT COUNT(*) FROM backup_log;') || 0);
+  const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
+  const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+  const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
+  return {
+    storage: 'sqlite',
+    sqliteFile,
+    sqliteSizeBytes: existsSync(sqliteFile) ? statSync(sqliteFile).size : 0,
+    backupCount,
+    lastBackup: backupRows[0] || null,
+    lastWeeklyBackupAt: lastWeeklyBackupAt || null,
+    dictionaryCount,
+    dictionaryIndexedAt: dictionaryIndexedAt || null,
+  };
+}
+
+function ensureSqliteStore() {
+  if (sqliteReady) return;
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(backupsDir, { recursive: true });
+  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
+  if (versionCheck.error || versionCheck.status !== 0) {
+    throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
+  }
+
+  runSqlite(`PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS app_metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dictionary_entries (
+  word TEXT PRIMARY KEY,
+  phonetic TEXT,
+  english_definition TEXT,
+  chinese_definition TEXT,
+  part_of_speech TEXT,
+  tag TEXT,
+  frequency INTEGER,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS backup_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_backup_log_created_at ON backup_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_dictionary_entries_frequency ON dictionary_entries(frequency);`);
+
+  const stateCount = Number(sqliteScalar('SELECT COUNT(*) FROM app_state WHERE id = 1;') || 0);
+  if (!stateCount) {
+    let initialState = baseState();
+    if (existsSync(legacyDataFile)) {
+      const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+      const legacyBackupDir = join(backupsDir, `auto-pre-sqlite-${timestamp}`);
+      mkdirSync(legacyBackupDir, { recursive: true });
+      writeFileSync(join(legacyBackupDir, 'db.json'), readFileSync(legacyDataFile));
+      initialState = JSON.parse(readFileSync(legacyDataFile, 'utf8'));
+    }
+    writeStateToSqlite(initialState);
+  }
+
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('storage_backend', 'sqlite', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  sqliteReady = true;
+  ensureWeeklyBackup();
+  ensureDictionaryIndex();
+  setInterval(ensureWeeklyBackup, 6 * 60 * 60 * 1000).unref();
+}
+
 function readState() {
-  ensureDataFile();
-  const parsed = JSON.parse(readFileSync(dataFile, 'utf8'));
-  return { ...baseState(), ...parsed };
+  ensureSqliteStore();
+  return readStateFromSqlite();
 }
 
 function writeState(state) {
-  mkdirSync(dataDir, { recursive: true });
-  const temp = `${dataFile}.tmp`;
-  writeFileSync(temp, JSON.stringify(state, null, 2), 'utf8');
-  renameSync(temp, dataFile);
+  ensureSqliteStore();
+  writeStateToSqlite(state);
 }
 
 function nextId(items) {
@@ -149,60 +335,94 @@ function buildDictionaryEntry(fields) {
   };
 }
 
+function ensureDictionaryIndex() {
+  if (dictionaryIndexChecked) return;
+  dictionaryIndexChecked = true;
+  if (!existsSync(dictionaryFile)) return;
+
+  const sourceStats = statSync(dictionaryFile);
+  const signature = `${sourceStats.size}:${Math.round(sourceStats.mtimeMs)}`;
+  const indexedSignature = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_source_signature' LIMIT 1;");
+  const indexedCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
+  if (indexedSignature === signature && indexedCount > 0) return;
+
+  dictionaryCache.clear();
+  runSqlite(`DROP TABLE IF EXISTS dictionary_import;
+CREATE TABLE dictionary_import (
+  word TEXT,
+  phonetic TEXT,
+  definition TEXT,
+  translation TEXT,
+  pos TEXT,
+  collins TEXT,
+  oxford TEXT,
+  tag TEXT,
+  bnc TEXT,
+  frq TEXT,
+  exchange TEXT,
+  detail TEXT,
+  audio TEXT
+);
+.mode csv
+.import --skip 1 ${sqlitePath(dictionaryFile)} dictionary_import
+BEGIN;
+DELETE FROM dictionary_entries;
+INSERT OR REPLACE INTO dictionary_entries (
+  word,
+  phonetic,
+  english_definition,
+  chinese_definition,
+  part_of_speech,
+  tag,
+  frequency,
+  updated_at
+)
+SELECT
+  lower(trim(word)),
+  phonetic,
+  definition,
+  translation,
+  pos,
+  tag,
+  CAST(frq AS INTEGER),
+  datetime('now')
+FROM dictionary_import
+WHERE trim(word) <> '' AND trim(translation) <> '';
+DROP TABLE dictionary_import;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('dictionary_source_signature', ${sqlString(signature)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('dictionary_indexed_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+COMMIT;`, { maxBuffer: 256 * 1024 * 1024 });
+}
+
 function findDictionaryEntry(targetWord) {
+  ensureSqliteStore();
   const key = targetWord.trim().toLowerCase();
   if (dictionaryCache.has(key)) return dictionaryCache.get(key);
-  if (!existsSync(dictionaryFile)) return null;
+  if (!key) return null;
 
-  const text = readFileSync(dictionaryFile, 'utf8');
-  let row = [];
-  let field = '';
-  let quoted = false;
-  let isHeader = true;
-
-  const finishRow = () => {
-    if (isHeader) {
-      isHeader = false;
-      return null;
-    }
-    const entry = buildDictionaryEntry(row);
-    if (entry?.word === key) {
-      dictionaryCache.set(key, entry);
-      return entry;
-    }
+  const rows = sqliteJson(`SELECT word, phonetic, english_definition, chinese_definition, part_of_speech
+FROM dictionary_entries
+WHERE word = ${sqlString(key)}
+LIMIT 1;`);
+  const row = rows[0];
+  if (!row) {
+    dictionaryCache.set(key, null);
     return null;
-  };
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1];
-    if (quoted) {
-      if (char === '"' && next === '"') {
-        field += '"';
-        index += 1;
-      } else if (char === '"') quoted = false;
-      else field += char;
-      continue;
-    }
-    if (char === '"') quoted = true;
-    else if (char === ',') {
-      row.push(field);
-      field = '';
-    } else if (char === '\n') {
-      row.push(field);
-      const found = finishRow();
-      if (found) return found;
-      row = [];
-      field = '';
-    } else if (char !== '\r') field += char;
   }
-  if (field || row.length) {
-    row.push(field);
-    const found = finishRow();
-    if (found) return found;
-  }
-  dictionaryCache.set(key, null);
-  return null;
+  const entry = buildDictionaryEntry([
+    row.word,
+    row.phonetic,
+    row.english_definition,
+    row.chinese_definition,
+    row.part_of_speech,
+  ]);
+  const result = entry ? { ...entry, source: 'local-ecdict-sqlite' } : null;
+  dictionaryCache.set(key, result);
+  return result;
 }
 
 function applySave(items, payload, createDefaults) {
@@ -422,6 +642,18 @@ async function handleApi(req, res) {
   }
   if (req.method !== 'GET' && sessionRole === 'read') {
     sendJson(res, { error: 'Read only mode' }, 403);
+    return;
+  }
+
+  if (req.url === '/api/backups/status' && req.method === 'GET') {
+    sendJson(res, getBackupStatus());
+    return;
+  }
+
+  if (req.url === '/api/backups/run' && req.method === 'POST') {
+    ensureSqliteStore();
+    const backup = createBackupFile('manual', 'manual backup from settings page');
+    sendJson(res, { ok: true, backup });
     return;
   }
 

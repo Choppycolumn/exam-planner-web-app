@@ -13,6 +13,7 @@ dist
 dist-ssr
 data-local
 screenshots
+server-backups
 *.local
 
 # Editor directories and files
