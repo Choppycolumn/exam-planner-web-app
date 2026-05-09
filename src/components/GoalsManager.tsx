@@ -2,14 +2,14 @@ import { useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import { Toast } from './Toast';
 import { goalsRepository } from '../db/repositories/goalsRepository';
-import { useAppData } from '../hooks/useAppData';
+import { useGoalsData } from '../hooks/useGoalsData';
 import type { Goal } from '../types/models';
 import { todayISO } from '../utils/date';
 
 const emptyGoal: Partial<Goal> = { name: '', description: '', deadline: todayISO(), isActive: true, type: '考研', notes: '' };
 
 export function GoalsManager() {
-  const { goals } = useAppData();
+  const { goals } = useGoalsData();
   const [draft, setDraft] = useState<Partial<Goal>>(emptyGoal);
   const [toast, setToast] = useState('');
 

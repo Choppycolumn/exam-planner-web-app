@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Plus, Save, Trash2 } from 'lucide-react';
 import { ChartBox, TrendLine } from '../components/Charts';
 import { ColorPicker } from '../components/ColorPicker';
@@ -7,24 +7,30 @@ import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { subjectsRepository } from '../db/repositories/subjectsRepository';
-import { useAppData } from '../hooks/useAppData';
+import { useMockExamsData } from '../hooks/useMockExamsData';
+import { useSubjectsData } from '../hooks/useSubjectsData';
 import type { MockExamRecord, Subject } from '../types/models';
 import { todayISO } from '../utils/date';
-import { getSubjectExamStats, getSubjectScoreTrend } from '../utils/statistics';
+
+const pageSize = 20;
 
 export function MockExamsPage() {
-  const { subjects, activeSubjects, exams } = useAppData();
+  const { subjects, activeSubjects } = useSubjectsData();
   const [subjectDraft, setSubjectDraft] = useState<Partial<Subject>>({ name: '', color: '#2563eb' });
   const [filter, setFilter] = useState<number | 'all'>('all');
+  const [page, setPage] = useState(1);
   const firstSubject = activeSubjects[0];
   const [draft, setDraft] = useState<Partial<MockExamRecord>>({ date: todayISO(), subjectId: firstSubject?.id, fullScore: 150, score: 0, paperName: '', durationMinutes: 0, wrongCount: 0, note: '' });
   const [toast, setToast] = useState('');
-  const scoped = useMemo(() => exams.filter((exam) => filter === 'all' || exam.subjectId === filter), [exams, filter]);
-  const stats = getSubjectExamStats(exams, filter === 'all' ? undefined : filter);
-  const trend = getSubjectScoreTrend(exams, filter === 'all' ? undefined : filter);
+  const examData = useMockExamsData(filter, pageSize, (page - 1) * pageSize);
+  const scoped = examData?.exams ?? [];
+  const stats = examData?.stats ?? { latest: null, highest: null, average: null, lowest: null };
+  const trend = examData?.trend ?? [];
+  const totalPages = Math.max(1, Math.ceil((examData?.total ?? 0) / pageSize));
 
   const selectSubject = (subjectId: number | 'all') => {
     setFilter(subjectId);
+    setPage(1);
     if (subjectId !== 'all') {
       setDraft((current) => ({ ...current, subjectId }));
     }
@@ -85,9 +91,9 @@ export function MockExamsPage() {
         <div className="space-y-5">
           <div className="grid gap-4 md:grid-cols-4">
             <MetricCard label="最近一次" value={stats.latest ? `${stats.latest.score}/${stats.latest.fullScore}` : '暂无'} hint={stats.latest?.paperName} />
-            <MetricCard label="最高分" value={stats.highest || '暂无'} />
-            <MetricCard label="平均分" value={stats.average || '暂无'} />
-            <MetricCard label="最低分" value={stats.lowest || '暂无'} />
+            <MetricCard label="最高分" value={stats.highest == null ? '暂无' : stats.highest} />
+            <MetricCard label="平均分" value={stats.average == null ? '暂无' : stats.average} />
+            <MetricCard label="最低分" value={stats.lowest == null ? '暂无' : stats.lowest} />
           </div>
           <ChartBox title="成绩趋势折线图">{trend.length ? <TrendLine data={trend} dataKey="score" label="分数" /> : <EmptyState title="暂无成绩数据" />}</ChartBox>
           <div className="card overflow-hidden">
@@ -113,6 +119,15 @@ export function MockExamsPage() {
                 </table>
               </div>
             ) : <div className="p-5"><EmptyState title="暂无模考记录" /></div>}
+            {examData?.total ? (
+              <div className="flex items-center justify-between border-t border-slate-200 p-4 text-sm text-slate-500">
+                <span>共 {examData.total} 条记录，第 {page} / {totalPages} 页</span>
+                <div className="flex gap-2">
+                  <button className="btn btn-soft" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button>
+                  <button className="btn btn-soft" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>下一页</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 

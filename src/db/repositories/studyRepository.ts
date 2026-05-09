@@ -12,8 +12,8 @@ export const studyRepository = {
     notifyDataChanged();
   },
   async getRecordsByDate(date: string) {
-    const state = await serverApi.getState();
-    return state.studyTimeRecords.filter((record) => record.date === date);
+    const result = await serverApi.getStudyRecordsByDate(date);
+    return result.records;
   },
   async saveDayRecords(date: string, records: Array<Partial<StudyTimeRecord> & { projectId: number; projectNameSnapshot: string }>) {
     await serverApi.saveDayRecords(date, records);

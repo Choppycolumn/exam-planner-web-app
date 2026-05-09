@@ -27,6 +27,7 @@
 - Recharts
 - Dexie.js + IndexedDB
 - React Router
+- TanStack Query
 - Node.js 静态服务与轻量 API
 - SQLite
 - Nginx 反向代理
@@ -37,9 +38,12 @@
 - 图表按需加载：Recharts 被拆到独立 `Charts` chunk，只有首页图表、统计页和报告页需要时才加载。
 - 首屏轻量接口：首页使用 `/api/dashboard`，不再依赖全量 `/api/state`。
 - 统计服务端聚合：最近 7 天趋势、今日分布、最近 30 天项目累计由 SQLite 聚合后返回。
+- 历史数据分页：模考记录和完整复盘报告支持按页加载。
 - 写入单表化：复盘、学习时间、任务、喝水、模考等保存接口直接更新对应 SQLite 表。
 - 兼容迁移隔离：Dexie/IndexedDB 迁移逻辑只在迁移页加载，不进入主应用首屏包。
-- 前端缓存：全量状态和首页摘要做轻量缓存，保存后局部失效并重新拉取需要的数据。
+- 前端缓存：使用 TanStack Query 管理页面级缓存，保存后统一失效相关服务器数据。
+- 服务端缓存：常用首页摘要和统计摘要会在 SQLite 写入后失效并重新计算。
+- 数据库索引：为日期、科目、项目、任务状态等高频查询建立复合索引。
 
 ## 数据策略
 
@@ -120,8 +124,12 @@ scripts/start-exam-planner.bat
 - `/login`
 - `/health`
 - `/api/dashboard`
+- `/api/goals`
+- `/api/projects`
+- `/api/subjects`
 - `/api/reviews?from=&to=`
 - `/api/study-records?date=`
+- `/api/mock-exams?subjectId=&limit=&offset=`
 - `/api/statistics/summary`
 - `/api/state`
 - `/api/*/save`

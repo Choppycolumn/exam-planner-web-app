@@ -38,6 +38,9 @@ const dictionaryCache = new Map();
 let sqliteReady = false;
 let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
+let dataRevision = 0;
+let dashboardPayloadCache = null;
+let statisticsSummaryCache = null;
 
 function nowISO() {
   return new Date().toISOString();
@@ -347,8 +350,16 @@ CREATE TABLE IF NOT EXISTS learning_reports (
 CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
+CREATE INDEX IF NOT EXISTS idx_study_time_records_project_date ON study_time_records(project_id, date);
+CREATE INDEX IF NOT EXISTS idx_study_time_records_date_project_name ON study_time_records(date, project_name_snapshot);
+CREATE INDEX IF NOT EXISTS idx_goals_active_deadline ON goals(is_active, deadline);
+CREATE INDEX IF NOT EXISTS idx_study_projects_active_sort ON study_projects(is_active, sort_order);
+CREATE INDEX IF NOT EXISTS idx_subjects_active_sort ON subjects(is_active, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mock_exam_records_date_id ON mock_exam_records(date, id);
 CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date ON mock_exam_records(subject_id, date);
+CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date_id ON mock_exam_records(subject_id, date, id);
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_short_term_tasks_visible ON short_term_tasks(is_completed, urgency, due_date);
 CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);`);
 }
@@ -896,6 +907,7 @@ function readState() {
 function writeState(state) {
   ensureSqliteStore();
   writeStateToTables(state);
+  tableChanged();
 }
 
 function sendJson(res, data, status = 200) {
@@ -1027,6 +1039,9 @@ function nextTableId(table) {
 }
 
 function tableChanged() {
+  dataRevision += 1;
+  dashboardPayloadCache = null;
+  statisticsSummaryCache = null;
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('data_updated_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
@@ -1222,7 +1237,11 @@ ORDER BY minutes DESC, name;`).map((row) => ({ name: row.name, minutes: Number(r
 }
 
 function getDashboardPayload(sessionRole) {
-  const today = todayISO();
+  const cacheDate = todayISO();
+  if (dashboardPayloadCache?.revision === dataRevision && dashboardPayloadCache.date === cacheDate) {
+    return { ...dashboardPayloadCache.payload, readOnly: sessionRole === 'read' };
+  }
+  const today = cacheDate;
   const yesterday = addDaysISO(today, -1);
   const activeGoal = sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
@@ -1251,7 +1270,7 @@ ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_da
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
 
-  return {
+  const payload = {
     activeGoal,
     today,
     todayTotal,
@@ -1262,12 +1281,17 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     yesterdayReview: reviews.find((review) => review.date === yesterday) || null,
     visibleTasks,
     todayWaterRecord: waterRecord,
-    readOnly: sessionRole === 'read',
   };
+  dashboardPayloadCache = { revision: dataRevision, date: today, payload };
+  return { ...payload, readOnly: sessionRole === 'read' };
 }
 
 function getStatisticsSummary() {
-  const today = todayISO();
+  const cacheDate = todayISO();
+  if (statisticsSummaryCache?.revision === dataRevision && statisticsSummaryCache.date === cacheDate) {
+    return statisticsSummaryCache.payload;
+  }
+  const today = cacheDate;
   const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
   const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
 FROM study_time_records
@@ -1277,7 +1301,83 @@ HAVING value > 0
 ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
   const last7 = getLastNDaysTotals(7, today);
   const last30 = getProjectTotals(addDaysISO(today, -29), today);
-  return { today, todayTotal, distribution, last7, last30 };
+  const payload = { today, todayTotal, distribution, last7, last30 };
+  statisticsSummaryCache = { revision: dataRevision, date: today, payload };
+  return payload;
+}
+
+function queryLimit(searchParams, defaultLimit = 20, maxLimit = 100) {
+  const value = searchParams.get('limit');
+  if (!value) return null;
+  return Math.max(1, Math.min(maxLimit, Number(value) || defaultLimit));
+}
+
+function queryOffset(searchParams) {
+  return Math.max(0, Number(searchParams.get('offset') || 0) || 0);
+}
+
+function getGoalsList(sessionRole) {
+  const items = sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM goals
+ORDER BY created_at DESC, id DESC;`).map((goal) => ({ ...goal, isActive: Boolean(goal.isActive) }));
+  return { items, readOnly: sessionRole === 'read' };
+}
+
+function getProjectsList(sessionRole) {
+  const items = sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM study_projects
+ORDER BY sort_order, id;`).map((project) => ({ ...project, isActive: Boolean(project.isActive) }));
+  return { items, readOnly: sessionRole === 'read' };
+}
+
+function getSubjectsList(sessionRole) {
+  const items = sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM subjects
+ORDER BY sort_order, id;`).map((subject) => ({ ...subject, isActive: Boolean(subject.isActive) }));
+  return { items, readOnly: sessionRole === 'read' };
+}
+
+function selectExamRecord(whereClause, orderClause = 'ORDER BY date DESC, id DESC', suffix = '') {
+  return sqliteJson(`SELECT id, date, subject_id AS subjectId, subject_name_snapshot AS subjectNameSnapshot, score, full_score AS fullScore,
+paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM mock_exam_records
+${whereClause}
+${orderClause}
+${suffix};`);
+}
+
+function getMockExamList(requestUrl, sessionRole) {
+  const subjectIdParam = requestUrl.searchParams.get('subjectId') || 'all';
+  const subjectId = subjectIdParam === 'all' ? null : Number(subjectIdParam);
+  const whereClause = subjectId ? `WHERE subject_id = ${sqlValue(subjectId)}` : '';
+  const limit = queryLimit(requestUrl.searchParams, 20, 100) ?? 20;
+  const offset = queryOffset(requestUrl.searchParams);
+  const total = Number(sqliteScalar(`SELECT COUNT(*) FROM mock_exam_records ${whereClause};`) || 0);
+  const exams = selectExamRecord(whereClause, 'ORDER BY date DESC, id DESC', `LIMIT ${limit} OFFSET ${offset}`);
+  const latest = selectExamRecord(whereClause, 'ORDER BY date DESC, id DESC', 'LIMIT 1')[0] || null;
+  const statsRow = sqliteJson(`SELECT MAX(score) AS highest, ROUND(AVG(score), 1) AS average, MIN(score) AS lowest
+FROM mock_exam_records ${whereClause};`)[0] || {};
+  const trend = selectExamRecord(whereClause, 'ORDER BY date DESC, id DESC', 'LIMIT 80')
+    .sort((a, b) => a.date.localeCompare(b.date) || Number(a.id || 0) - Number(b.id || 0))
+    .map((exam) => ({ date: exam.date, score: Number(exam.score || 0) }));
+  return {
+    exams,
+    total,
+    limit,
+    offset,
+    stats: {
+      latest,
+      highest: statsRow.highest == null ? null : Number(statsRow.highest),
+      average: statsRow.average == null ? null : Number(statsRow.average),
+      lowest: statsRow.lowest == null ? null : Number(statsRow.lowest),
+    },
+    trend,
+    readOnly: sessionRole === 'read',
+  };
 }
 
 function normalizeReview(review) {
@@ -1510,6 +1610,24 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/goals' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getGoalsList(sessionRole));
+    return;
+  }
+
+  if (req.url === '/api/projects' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getProjectsList(sessionRole));
+    return;
+  }
+
+  if (req.url === '/api/subjects' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getSubjectsList(sessionRole));
+    return;
+  }
+
   if (req.url === '/api/dashboard' && req.method === 'GET') {
     ensureSqliteStore();
     sendJson(res, getDashboardPayload(sessionRole));
@@ -1521,12 +1639,18 @@ async function handleApi(req, res) {
     const requestUrl = new URL(req.url, 'http://localhost');
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
+    const limit = queryLimit(requestUrl.searchParams, 20, 100);
+    const offset = queryOffset(requestUrl.searchParams);
+    const total = Number(sqliteScalar(`SELECT COUNT(*) FROM daily_reviews
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`) || 0);
+    const paging = limit ? `LIMIT ${limit} OFFSET ${offset}` : '';
     const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM daily_reviews
 WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
-ORDER BY date DESC;`).map(normalizeReview);
-    sendJson(res, { reviews, readOnly: sessionRole === 'read' });
+ORDER BY date DESC
+${paging};`).map(normalizeReview);
+    sendJson(res, { reviews, total, limit, offset, readOnly: sessionRole === 'read' });
     return;
   }
 
@@ -1540,6 +1664,13 @@ FROM study_time_records
 WHERE date = ${sqlString(date)}
 ORDER BY project_id;`);
     sendJson(res, { records, readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/mock-exams') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    sendJson(res, getMockExamList(requestUrl, sessionRole));
     return;
   }
 

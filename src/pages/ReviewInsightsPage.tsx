@@ -1,19 +1,27 @@
+import { useState } from 'react';
 import { ChartBox, ReviewTrendChart } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
 import { useReviewsData } from '../hooks/useReviewsData';
+import { dateRangeEndingToday, todayISO } from '../utils/date';
 import { getReviewAverageScore, getReviewTone, getReviewTrend } from '../utils/statistics';
 
+const reportPageSize = 10;
+
 export function ReviewInsightsPage() {
-  const { reviews } = useReviewsData();
-  const sortedReviews = [...reviews].sort((a, b) => b.date.localeCompare(a.date));
-  const trend = getReviewTrend(reviews, 30);
-  const reviewedDays = reviews.length;
+  const [page, setPage] = useState(1);
+  const trendStart = dateRangeEndingToday(30)[0] ?? todayISO();
+  const { reviews: trendReviews } = useReviewsData(trendStart, todayISO());
+  const { reviews: reportReviews, total } = useReviewsData(undefined, undefined, reportPageSize, (page - 1) * reportPageSize);
+  const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
+  const trend = getReviewTrend(trendReviews, 30);
+  const reviewedDays = total;
   const averageScore = reviewedDays
-    ? Math.round((reviews.reduce((sum, review) => sum + getReviewAverageScore(review), 0) / reviewedDays) * 10) / 10
+    ? Math.round((trendReviews.reduce((sum, review) => sum + getReviewAverageScore(review), 0) / Math.max(1, trendReviews.length)) * 10) / 10
     : 0;
-  const bestReview = [...reviews].sort((a, b) => getReviewAverageScore(b) - getReviewAverageScore(a))[0];
+  const bestReview = [...trendReviews].sort((a, b) => getReviewAverageScore(b) - getReviewAverageScore(a))[0];
+  const totalPages = Math.max(1, Math.ceil(total / reportPageSize));
 
   return (
     <Page title="复盘趋势" subtitle="从一段时间里看状态、满意度和每日复盘质量。">
@@ -24,7 +32,7 @@ export function ReviewInsightsPage() {
       </div>
 
       <ChartBox title="最近 30 天复盘评分趋势">
-        {reviews.length ? <ReviewTrendChart data={trend} /> : <EmptyState title="还没有复盘数据" description="完成一次每日复盘后，这里会显示趋势。" />}
+        {trendReviews.length ? <ReviewTrendChart data={trend} /> : <EmptyState title="还没有复盘数据" description="完成一次每日复盘后，这里会显示趋势。" />}
       </ChartBox>
 
       <div className="mt-5 card p-5">
@@ -61,6 +69,15 @@ export function ReviewInsightsPage() {
             );
           }) : <EmptyState title="还没有复盘记录" />}
         </div>
+        {total ? (
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-sm text-slate-500">
+            <span>共 {total} 条复盘，第 {page} / {totalPages} 页</span>
+            <div className="flex gap-2">
+              <button className="btn btn-soft" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button>
+              <button className="btn btn-soft" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>下一页</button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </Page>
   );

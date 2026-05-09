@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { CalendarDays, RefreshCw } from 'lucide-react';
 import { ChartBox, MinutesBar, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { serverApi, type LearningReport } from '../api/client';
+import { queryClient, queryKeys } from '../api/queryClient';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { minutesToHoursText } from '../utils/date';
 
@@ -15,10 +17,15 @@ const kindLabel: Record<LearningReport['kind'], string> = {
 
 export function ReportsPage() {
   const { readOnly } = useDashboardData();
-  const [reports, setReports] = useState<LearningReport[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(false);
+  const { data } = useQuery({
+    queryKey: queryKeys.reports,
+    queryFn: serverApi.getReports,
+    placeholderData: { reports: [] as LearningReport[] },
+  });
+  const reports = useMemo(() => data?.reports ?? [], [data?.reports]);
 
   const selectedReport = useMemo(
     () => reports.find((report) => report.id === selectedReportId) ?? reports[0],
@@ -27,31 +34,12 @@ export function ReportsPage() {
 
   const loadReports = async (preferred?: LearningReport) => {
     const result = await serverApi.getReports();
-    setReports(result.reports);
+    queryClient.setQueryData(queryKeys.reports, result);
     const matched = preferred
       ? result.reports.find((report) => report.kind === preferred.kind && report.periodStart === preferred.periodStart && report.periodEnd === preferred.periodEnd)
       : null;
     setSelectedReportId(matched?.id ?? result.reports[0]?.id ?? null);
   };
-
-  useEffect(() => {
-    let mounted = true;
-    const timeoutId = window.setTimeout(() => {
-      serverApi.getReports()
-        .then((result) => {
-          if (!mounted) return;
-          setReports(result.reports);
-          setSelectedReportId(result.reports[0]?.id ?? null);
-        })
-        .catch(() => {
-          if (mounted) setToast('学习报告读取失败');
-        });
-    }, 0);
-    return () => {
-      mounted = false;
-      window.clearTimeout(timeoutId);
-    };
-  }, []);
 
   const generate = async (kind: LearningReport['kind']) => {
     if (readOnly) return;

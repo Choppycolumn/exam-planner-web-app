@@ -1,4 +1,5 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
+import { invalidateServerQueries } from './queryClient';
 
 export interface ServerState {
   goals: Goal[];
@@ -32,6 +33,34 @@ export interface StatisticsSummary {
   distribution: Array<{ name: string; value: number }>;
   last7: Array<{ date: string; minutes: number }>;
   last30: Array<{ name: string; minutes: number }>;
+}
+
+export interface ReferenceList<T> {
+  items: T[];
+  readOnly?: boolean;
+}
+
+export interface ReviewsResponse {
+  reviews: DailyReview[];
+  total: number;
+  limit: number | null;
+  offset: number;
+  readOnly?: boolean;
+}
+
+export interface MockExamListResponse {
+  exams: MockExamRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  stats: {
+    latest: MockExamRecord | null;
+    highest: number | null;
+    average: number | null;
+    lowest: number | null;
+  };
+  trend: Array<{ date: string; score: number }>;
+  readOnly?: boolean;
 }
 
 export interface BackupStatus {
@@ -109,6 +138,7 @@ export const notifyDataChanged = () => {
   statePromise = null;
   dashboardCache = null;
   dashboardPromise = null;
+  invalidateServerQueries();
   window.dispatchEvent(new Event('server-data-changed'));
 };
 
@@ -135,9 +165,22 @@ function cachedDashboard() {
 export const serverApi = {
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
-  getReviews: (from?: string, to?: string) => apiRequest<{ reviews: DailyReview[]; readOnly?: boolean }>(`/reviews${from || to ? `?from=${encodeURIComponent(from || '1900-01-01')}&to=${encodeURIComponent(to || '2999-12-31')}` : ''}`),
+  getGoals: () => apiRequest<ReferenceList<Goal>>('/goals'),
+  getProjects: () => apiRequest<ReferenceList<StudyProject>>('/projects'),
+  getSubjects: () => apiRequest<ReferenceList<Subject>>('/subjects'),
+  getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (limit) params.set('limit', String(limit));
+    if (offset) params.set('offset', String(offset));
+    const query = params.toString();
+    return apiRequest<ReviewsResponse>(`/reviews${query ? `?${query}` : ''}`);
+  },
   getStudyRecordsByDate: (date: string) => apiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`),
   getStatisticsSummary: () => apiRequest<StatisticsSummary>('/statistics/summary'),
+  getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
+    apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
   activateGoal: (id: number) => apiRequest<void>('/goals/activate', { method: 'POST', body: { id } }),
   removeGoal: (id: number) => apiRequest<void>('/goals/remove', { method: 'POST', body: { id } }),

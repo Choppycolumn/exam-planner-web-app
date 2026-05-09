@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { serverApi, type ServerState } from '../api/client';
+import { queryKeys } from '../api/queryClient';
 
 const emptyState: ServerState = {
   goals: [],
@@ -14,22 +16,11 @@ const emptyState: ServerState = {
 };
 
 export function useAppData() {
-  const [state, setState] = useState<ServerState>(emptyState);
-
-  useEffect(() => {
-    let active = true;
-    const load = () => serverApi.getState().then((next) => {
-      if (active) setState(next);
-    }).catch(() => {
-      if (active) setState(emptyState);
-    });
-    load();
-    window.addEventListener('server-data-changed', load);
-    return () => {
-      active = false;
-      window.removeEventListener('server-data-changed', load);
-    };
-  }, []);
+  const { data: state = emptyState } = useQuery({
+    queryKey: queryKeys.state,
+    queryFn: serverApi.getState,
+    placeholderData: emptyState,
+  });
 
   const goals = useMemo(() => [...state.goals].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [state.goals]);
   const activeGoal = useMemo(() => goals.find((goal) => goal.isActive), [goals]);

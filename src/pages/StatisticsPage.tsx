@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { ChartBox, DistributionPie, MinutesBar, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
 import { serverApi, type StatisticsSummary } from '../api/client';
+import { queryKeys } from '../api/queryClient';
 import { minutesToHoursText, todayISO } from '../utils/date';
 
 const emptySummary: StatisticsSummary = {
@@ -15,22 +16,11 @@ const emptySummary: StatisticsSummary = {
 };
 
 export function StatisticsPage() {
-  const [summary, setSummary] = useState<StatisticsSummary>(emptySummary);
-
-  useEffect(() => {
-    let active = true;
-    const load = () => serverApi.getStatisticsSummary().then((next) => {
-      if (active) setSummary(next);
-    }).catch(() => {
-      if (active) setSummary(emptySummary);
-    });
-    void load();
-    window.addEventListener('server-data-changed', load);
-    return () => {
-      active = false;
-      window.removeEventListener('server-data-changed', load);
-    };
-  }, []);
+  const { data: summary = emptySummary } = useQuery({
+    queryKey: queryKeys.statistics,
+    queryFn: serverApi.getStatisticsSummary,
+    placeholderData: emptySummary,
+  });
 
   return (
     <Page title="数据统计" subtitle="用学习时间数据看投入结构和近期趋势。">

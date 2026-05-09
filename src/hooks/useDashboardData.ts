@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { serverApi, type DashboardData } from '../api/client';
+import { queryKeys } from '../api/queryClient';
 import { todayISO } from '../utils/date';
 
 const emptyDashboard: DashboardData = {
@@ -17,24 +18,11 @@ const emptyDashboard: DashboardData = {
 };
 
 export function useDashboardData() {
-  const [data, setData] = useState<DashboardData>(emptyDashboard);
+  const { data } = useQuery({
+    queryKey: queryKeys.dashboard,
+    queryFn: serverApi.getDashboard,
+    placeholderData: emptyDashboard,
+  });
 
-  useEffect(() => {
-    let active = true;
-    const load = () => serverApi.getDashboard()
-      .then((next) => {
-        if (active) setData(next);
-      })
-      .catch(() => {
-        if (active) setData(emptyDashboard);
-      });
-    void load();
-    window.addEventListener('server-data-changed', load);
-    return () => {
-      active = false;
-      window.removeEventListener('server-data-changed', load);
-    };
-  }, []);
-
-  return data;
+  return data ?? emptyDashboard;
 }

@@ -1,12 +1,12 @@
 /* eslint-disable react-hooks/set-state-in-effect -- Date/project switches should reset the editable day grid from IndexedDB. */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { ColorPicker } from '../components/ColorPicker';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { studyRepository } from '../db/repositories/studyRepository';
-import { useAppData } from '../hooks/useAppData';
+import { useStudyTimeData } from '../hooks/useStudyTimeData';
 import type { StudyProject } from '../types/models';
 import { minutesToHoursText, todayISO } from '../utils/date';
 
@@ -20,12 +20,11 @@ const splitMinutes = (totalMinutes = 0): Pick<StudyTimeRow, 'hours' | 'minutes'>
 const combineTime = (row?: StudyTimeRow) => Math.max(0, Number(row?.hours || 0) * 60 + Number(row?.minutes || 0));
 
 export function StudyTimePage() {
-  const { projects, activeProjects, studyRecords } = useAppData();
   const [date, setDate] = useState(todayISO());
+  const { projects, activeProjects, recordsForDate } = useStudyTimeData(date);
   const [rows, setRows] = useState<Record<number, StudyTimeRow>>({});
   const [projectDraft, setProjectDraft] = useState<Partial<StudyProject>>({ name: '', color: '#2563eb' });
   const [toast, setToast] = useState('');
-  const recordsForDate = useMemo(() => studyRecords.filter((record) => record.date === date), [studyRecords, date]);
 
   useEffect(() => {
     const next: Record<number, StudyTimeRow> = {};
