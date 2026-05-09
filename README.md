@@ -118,6 +118,8 @@ scripts/start-exam-planner.bat
 - Nginx 反向代理
 - systemd 服务：`exam-planner`
 - 简单密码登录，无用户名
+- 登录防护：同一 IP 连续输错 3 次锁定 30 分钟，失败响应随机延迟 1-2 秒
+- Nginx 限流：`/login` 每 IP 约 6 次/分钟，超出返回 429
 
 生产服务主要接口：
 

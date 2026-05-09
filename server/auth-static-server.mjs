@@ -11,12 +11,17 @@ const legacyDataFile = join(dataDir, 'db.json');
 const sqliteFile = join(dataDir, 'exam-planner.sqlite');
 const backupsDir = join(dataDir, 'backups');
 const dictionaryFile = join(dataDir, 'ecdict.csv');
+const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
 const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
+const loginFailureLimit = 3;
+const loginLockMs = 30 * 60 * 1000;
+const loginFailureDelayMinMs = 1000;
+const loginFailureDelaySpreadMs = 1000;
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -41,6 +46,7 @@ let reportTimerStarted = false;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
+let loginAttempts = loadLoginAttempts();
 
 function nowISO() {
   return new Date().toISOString();
@@ -1420,6 +1426,93 @@ function isValidSession(cookieHeader = '') {
   return Boolean(getSessionRole(cookieHeader));
 }
 
+function loadLoginAttempts() {
+  try {
+    if (!existsSync(loginAttemptsFile)) return {};
+    const parsed = JSON.parse(readFileSync(loginAttemptsFile, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLoginAttempts() {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(loginAttemptsFile, JSON.stringify(loginAttempts, null, 2), 'utf8');
+  } catch {
+    // Login attempt persistence is defensive; a write failure should not block the app.
+  }
+}
+
+function pruneLoginAttempts(now = Date.now()) {
+  let changed = false;
+  for (const [ip, entry] of Object.entries(loginAttempts)) {
+    const lastFailedAt = Number(entry.lastFailedAt || 0);
+    const lockedUntil = Number(entry.lockedUntil || 0);
+    if (lockedUntil <= now && lastFailedAt && now - lastFailedAt > 24 * 60 * 60 * 1000) {
+      delete loginAttempts[ip];
+      changed = true;
+    }
+  }
+  if (changed) saveLoginAttempts();
+}
+
+function getClientIp(req) {
+  const realIp = Array.isArray(req.headers['x-real-ip']) ? req.headers['x-real-ip'][0] : req.headers['x-real-ip'];
+  const forwardedFor = Array.isArray(req.headers['x-forwarded-for']) ? req.headers['x-forwarded-for'][0] : req.headers['x-forwarded-for'];
+  const rawIp = String(realIp || forwardedFor?.split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
+  return rawIp.replace(/^::ffff:/, '');
+}
+
+function getLoginLock(ip) {
+  const now = Date.now();
+  const entry = loginAttempts[ip];
+  if (!entry) return null;
+  const lockedUntil = Number(entry.lockedUntil || 0);
+  if (lockedUntil > now) {
+    return { lockedUntil, remainingMs: lockedUntil - now };
+  }
+  if (lockedUntil) {
+    delete loginAttempts[ip];
+    saveLoginAttempts();
+  }
+  return null;
+}
+
+function recordLoginSuccess(ip) {
+  if (loginAttempts[ip]) {
+    delete loginAttempts[ip];
+    saveLoginAttempts();
+  }
+}
+
+function recordLoginFailure(ip) {
+  pruneLoginAttempts();
+  const now = Date.now();
+  const entry = loginAttempts[ip] || { failures: 0, lastFailedAt: 0, lockedUntil: 0 };
+  const failures = Number(entry.failures || 0) + 1;
+  const lockedUntil = failures >= loginFailureLimit ? now + loginLockMs : 0;
+  loginAttempts[ip] = { failures, lastFailedAt: now, lockedUntil };
+  saveLoginAttempts();
+  return loginAttempts[ip];
+}
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => {
+    setTimeout(resolveSleep, ms);
+  });
+}
+
+function loginFailureDelay() {
+  return sleep(loginFailureDelayMinMs + Math.floor(Math.random() * loginFailureDelaySpreadMs));
+}
+
+function lockMessage(remainingMs) {
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+  return `登录失败次数过多，已临时锁定。请 ${minutes} 分钟后再试。`;
+}
+
 function loginPage(error = '') {
   return `<!doctype html>
 <html lang="zh-CN">
@@ -1773,10 +1866,18 @@ ORDER BY project_id;`);
 
 createServer(async (req, res) => {
   if (req.url === '/login' && req.method === 'POST') {
+    const clientIp = getClientIp(req);
     const params = new URLSearchParams(await readBody(req));
+    const locked = getLoginLock(clientIp);
+    if (locked) {
+      await loginFailureDelay();
+      sendHtml(res, loginPage(lockMessage(locked.remainingMs)), 429);
+      return;
+    }
     const password = params.get('password');
     const role = password === appPassword ? 'write' : password === readOnlyPassword ? 'read' : '';
     if (role) {
+      recordLoginSuccess(clientIp);
       res.writeHead(302, {
         location: '/',
         'set-cookie': `${cookieName}=${encodeURIComponent(createSessionValue(role))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
@@ -1784,7 +1885,14 @@ createServer(async (req, res) => {
       res.end();
       return;
     }
-    sendHtml(res, loginPage('密码不正确，请重试。'), 401);
+    const attempt = recordLoginFailure(clientIp);
+    await loginFailureDelay();
+    if (attempt.lockedUntil && attempt.lockedUntil > Date.now()) {
+      sendHtml(res, loginPage(lockMessage(attempt.lockedUntil - Date.now())), 429);
+      return;
+    }
+    const remainingAttempts = Math.max(0, loginFailureLimit - Number(attempt.failures || 0));
+    sendHtml(res, loginPage(`密码不正确，请重试。剩余 ${remainingAttempts} 次后将锁定 30 分钟。`), 401);
     return;
   }
 
