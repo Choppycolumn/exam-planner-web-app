@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
@@ -120,9 +120,16 @@ function sqlString(value) {
   return `'${String(value ?? '').replace(/'/g, "''")}'`;
 }
 
-function runSqlite(script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
+function sqlValue(value) {
+  if (value === undefined || value === null) return 'NULL';
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
+  return sqlString(value);
+}
+
+function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  const result = spawnSync('sqlite3', [sqliteFile], {
+  const result = spawnSync('sqlite3', [databaseFile], {
     input: script,
     encoding: 'utf8',
     maxBuffer,
@@ -134,6 +141,10 @@ function runSqlite(script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
     throw new Error(`sqlite3 failed: ${result.stderr || result.stdout}`);
   }
   return result.stdout;
+}
+
+function runSqlite(script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
+  return runSqliteFile(sqliteFile, script, { maxBuffer });
 }
 
 function sqliteScalar(sql) {
@@ -164,10 +175,295 @@ function readStateFromSqlite() {
   return normalizeState(rows[0]?.state_json ? JSON.parse(rows[0].state_json) : {});
 }
 
+function createStructuredTables() {
+  runSqlite(`CREATE TABLE IF NOT EXISTS goals (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  deadline TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  type TEXT NOT NULL DEFAULT '考研',
+  notes TEXT NOT NULL DEFAULT '',
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS daily_reviews (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL UNIQUE,
+  summary TEXT NOT NULL DEFAULT '',
+  wins TEXT NOT NULL DEFAULT '',
+  problems TEXT NOT NULL DEFAULT '',
+  tomorrow_plan TEXT NOT NULL DEFAULT '',
+  score INTEGER NOT NULL DEFAULT 6,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS study_projects (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#2563eb',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS study_time_records (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL,
+  project_id INTEGER NOT NULL,
+  project_name_snapshot TEXT NOT NULL,
+  minutes INTEGER NOT NULL DEFAULT 0 CHECK (minutes >= 0),
+  note TEXT NOT NULL DEFAULT '',
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  UNIQUE(date, project_id)
+);
+CREATE TABLE IF NOT EXISTS subjects (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#2563eb',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS mock_exam_records (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  subject_name_snapshot TEXT NOT NULL,
+  score REAL NOT NULL DEFAULT 0,
+  full_score REAL NOT NULL DEFAULT 100 CHECK (full_score > 0),
+  paper_name TEXT NOT NULL DEFAULT '',
+  duration_minutes INTEGER NOT NULL DEFAULT 0 CHECK (duration_minutes >= 0),
+  wrong_count INTEGER NOT NULL DEFAULT 0 CHECK (wrong_count >= 0),
+  note TEXT NOT NULL DEFAULT '',
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS short_term_tasks (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  due_date TEXT NOT NULL,
+  urgency TEXT NOT NULL DEFAULT 'medium',
+  is_completed INTEGER NOT NULL DEFAULT 0,
+  completed_at TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS water_intake_records (
+  id INTEGER PRIMARY KEY,
+  date TEXT NOT NULL UNIQUE,
+  cups INTEGER NOT NULL DEFAULT 0 CHECK (cups >= 0),
+  cup_ml INTEGER NOT NULL DEFAULT 500 CHECK (cup_ml > 0),
+  target_cups INTEGER NOT NULL DEFAULT 6 CHECK (target_cups > 0),
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS confusing_words_backup (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  exported_at TEXT,
+  backed_up_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
+CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
+CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
+CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date ON mock_exam_records(subject_id, date);
+CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);`);
+}
+
+function insertRowsSql(table, columns, rows) {
+  if (!rows.length) return '';
+  const values = rows
+    .map((row) => `(${columns.map((column) => sqlValue(row[column])).join(', ')})`)
+    .join(',\n');
+  return `INSERT INTO ${table} (${columns.join(', ')}) VALUES\n${values};`;
+}
+
+function writeStateToTables(state) {
+  const normalized = normalizeState(state);
+  const timestamp = nowISO();
+  const scripts = [
+    'BEGIN;',
+    'DELETE FROM goals;',
+    'DELETE FROM daily_reviews;',
+    'DELETE FROM study_projects;',
+    'DELETE FROM study_time_records;',
+    'DELETE FROM subjects;',
+    'DELETE FROM mock_exam_records;',
+    'DELETE FROM short_term_tasks;',
+    'DELETE FROM water_intake_records;',
+    'DELETE FROM confusing_words_backup;',
+  ];
+
+  scripts.push(insertRowsSql('goals', ['id', 'name', 'description', 'deadline', 'is_active', 'type', 'notes', 'schema_version', 'created_at', 'updated_at'], normalized.goals.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    name: item.name || '',
+    description: item.description || '',
+    deadline: item.deadline || todayISO(),
+    is_active: Boolean(item.isActive),
+    type: item.type || '考研',
+    notes: item.notes || '',
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('daily_reviews', ['id', 'date', 'summary', 'wins', 'problems', 'tomorrow_plan', 'score', 'schema_version', 'created_at', 'updated_at'], normalized.dailyReviews.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    date: item.date || todayISO(),
+    summary: item.summary || '',
+    wins: item.wins || '',
+    problems: item.problems || '',
+    tomorrow_plan: item.tomorrowPlan || '',
+    score: Math.max(1, Math.min(10, Number(item.score || 6))),
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('study_projects', ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'], normalized.studyProjects.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    name: item.name || '',
+    color: item.color || projectColors[index % projectColors.length],
+    is_active: item.isActive !== false,
+    sort_order: Number(item.sortOrder || index + 1),
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('study_time_records', ['id', 'date', 'project_id', 'project_name_snapshot', 'minutes', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.studyTimeRecords.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    date: item.date || todayISO(),
+    project_id: Number(item.projectId || 0),
+    project_name_snapshot: item.projectNameSnapshot || '',
+    minutes: Math.max(0, Number(item.minutes || 0)),
+    note: item.note || '',
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('subjects', ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'], normalized.subjects.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    name: item.name || '',
+    color: item.color || subjectColors[index % subjectColors.length],
+    is_active: item.isActive !== false,
+    sort_order: Number(item.sortOrder || index + 1),
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('mock_exam_records', ['id', 'date', 'subject_id', 'subject_name_snapshot', 'score', 'full_score', 'paper_name', 'duration_minutes', 'wrong_count', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.mockExamRecords.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    date: item.date || todayISO(),
+    subject_id: Number(item.subjectId || 0),
+    subject_name_snapshot: item.subjectNameSnapshot || '',
+    score: Number(item.score || 0),
+    full_score: Math.max(1, Number(item.fullScore || 100)),
+    paper_name: item.paperName || '',
+    duration_minutes: Math.max(0, Number(item.durationMinutes || 0)),
+    wrong_count: Math.max(0, Number(item.wrongCount || 0)),
+    note: item.note || '',
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('short_term_tasks', ['id', 'title', 'due_date', 'urgency', 'is_completed', 'completed_at', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.shortTermTasks.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    title: item.title || '',
+    due_date: item.dueDate || todayISO(),
+    urgency: item.urgency || 'medium',
+    is_completed: Boolean(item.isCompleted),
+    completed_at: item.completedAt || null,
+    note: item.note || '',
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  scripts.push(insertRowsSql('water_intake_records', ['id', 'date', 'cups', 'cup_ml', 'target_cups', 'schema_version', 'created_at', 'updated_at'], normalized.waterIntakeRecords.map((item, index) => ({
+    id: Number(item.id || index + 1),
+    date: item.date || todayISO(),
+    cups: Math.max(0, Number(item.cups || 0)),
+    cup_ml: Math.max(1, Number(item.cupMl || 500)),
+    target_cups: Math.max(1, Number(item.targetCups || 6)),
+    schema_version: Number(item.schemaVersion || entitySchemaVersion),
+    created_at: item.createdAt || timestamp,
+    updated_at: item.updatedAt || timestamp,
+  }))));
+  if (normalized.confusingWordsBackup) {
+    const payload = {
+      ...normalized.confusingWordsBackup,
+      groups: Array.isArray(normalized.confusingWordsBackup.groups) ? normalized.confusingWordsBackup.groups : [],
+    };
+    scripts.push(insertRowsSql('confusing_words_backup', ['id', 'schema_version', 'exported_at', 'backed_up_at', 'payload_json'], [{
+      id: 1,
+      schema_version: Number(payload.schemaVersion || entitySchemaVersion),
+      exported_at: payload.exportedAt || timestamp,
+      backed_up_at: payload.backedUpAt || timestamp,
+      payload_json: JSON.stringify(payload),
+    }]));
+  }
+  scripts.push(`INSERT INTO app_state (id, state_json, updated_at)
+VALUES (1, ${sqlString(JSON.stringify(normalized))}, datetime('now'))
+ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;`);
+  scripts.push('COMMIT;');
+  runSqlite(scripts.filter(Boolean).join('\n'), { maxBuffer: 128 * 1024 * 1024 });
+}
+
+function readStateFromTables() {
+  const goals = sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM goals ORDER BY id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+  const dailyReviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM daily_reviews ORDER BY date DESC;`).map(normalizeReview);
+  const studyProjects = sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM study_projects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+  const studyTimeRecords = sqliteJson(`SELECT id, date, project_id AS projectId, project_name_snapshot AS projectNameSnapshot, minutes, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM study_time_records ORDER BY date DESC, project_id;`);
+  const subjects = sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM subjects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+  const mockExamRecords = sqliteJson(`SELECT id, date, subject_id AS subjectId, subject_name_snapshot AS subjectNameSnapshot, score, full_score AS fullScore,
+paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM mock_exam_records ORDER BY date DESC, id DESC;`);
+  const shortTermTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted, completed_at AS completedAt, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM short_term_tasks ORDER BY due_date, id;`).map((item) => ({ ...item, isCompleted: Boolean(item.isCompleted), completedAt: item.completedAt || undefined }));
+  const waterIntakeRecords = sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM water_intake_records ORDER BY date DESC;`);
+  const confusingRows = sqliteJson('SELECT payload_json AS payloadJson FROM confusing_words_backup WHERE id = 1 LIMIT 1;');
+  const confusingWordsBackup = confusingRows[0]?.payloadJson ? JSON.parse(confusingRows[0].payloadJson) : null;
+  return normalizeState({ goals, dailyReviews, studyProjects, studyTimeRecords, subjects, mockExamRecords, shortTermTasks, waterIntakeRecords, confusingWordsBackup });
+}
+
+function readLegacyStateForMigration() {
+  const stateCount = Number(sqliteScalar('SELECT COUNT(*) FROM app_state WHERE id = 1;') || 0);
+  if (stateCount) return readStateFromSqlite();
+  if (existsSync(legacyDataFile)) return normalizeState(JSON.parse(readFileSync(legacyDataFile, 'utf8')));
+  return baseState();
+}
+
 function createBackupFile(kind = 'manual', note = '') {
   mkdirSync(backupsDir, { recursive: true });
-  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
   const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
+  runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
+  if (existsSync(filePath)) unlinkSync(filePath);
   runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
   runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
@@ -177,6 +473,54 @@ VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
   return { kind, filePath, createdAt: nowISO() };
+}
+
+function backupFileToRecord(fileName) {
+  const filePath = join(backupsDir, fileName);
+  const stats = statSync(filePath);
+  const match = fileName.match(/^exam-planner-([a-z-]+)-(.+)\.sqlite$/);
+  return {
+    fileName,
+    kind: match?.[1] || 'unknown',
+    createdAt: stats.mtime.toISOString(),
+    sizeBytes: stats.size,
+  };
+}
+
+function listBackupFiles() {
+  if (!existsSync(backupsDir)) return [];
+  return readdirSync(backupsDir)
+    .filter((name) => /^exam-planner-[a-z-]+-.+\.sqlite$/.test(name))
+    .map(backupFileToRecord)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function restoreBackupFile(fileName) {
+  if (!/^[a-zA-Z0-9._-]+$/.test(fileName || '')) {
+    throw new Error('Invalid backup file name');
+  }
+  const sourceFile = join(backupsDir, fileName);
+  if (!existsSync(sourceFile) || !sourceFile.startsWith(backupsDir)) {
+    throw new Error('Backup file not found');
+  }
+  const integrity = runSqliteFile(sourceFile, 'PRAGMA integrity_check;').trim();
+  if (integrity !== 'ok') {
+    throw new Error(`Backup integrity check failed: ${integrity}`);
+  }
+
+  const safetyBackup = createBackupFile('pre-restore', `automatic safety backup before restoring ${fileName}`);
+  runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
+  copyFileSync(sourceFile, sqliteFile);
+  for (const suffix of ['-wal', '-shm']) {
+    const sidecar = `${sqliteFile}${suffix}`;
+    if (existsSync(sidecar)) unlinkSync(sidecar);
+  }
+  sqliteReady = false;
+  dictionaryIndexChecked = false;
+  ensureSqliteStore();
+  runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
+VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`restored from ${fileName}; safety backup ${safetyBackup.filePath}`)});`);
+  return { restoredFrom: fileName, safetyBackup };
 }
 
 function cleanupWeeklyBackups(keepCount = 12) {
@@ -205,19 +549,20 @@ function ensureWeeklyBackup() {
 
 function getBackupStatus() {
   ensureSqliteStore();
+  const backups = listBackupFiles();
   const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
 FROM backup_log
 ORDER BY datetime(created_at) DESC
 LIMIT 1;`);
-  const backupCount = Number(sqliteScalar('SELECT COUNT(*) FROM backup_log;') || 0);
   const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
   const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
   const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
   return {
-    storage: 'sqlite',
+    storage: 'sqlite-tables',
     sqliteFile,
     sqliteSizeBytes: existsSync(sqliteFile) ? statSync(sqliteFile).size : 0,
-    backupCount,
+    backupCount: backups.length,
+    backups,
     lastBackup: backupRows[0] || null,
     lastWeeklyBackupAt: lastWeeklyBackupAt || null,
     dictionaryCount,
@@ -264,22 +609,30 @@ CREATE TABLE IF NOT EXISTS backup_log (
 );
 CREATE INDEX IF NOT EXISTS idx_backup_log_created_at ON backup_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_dictionary_entries_frequency ON dictionary_entries(frequency);`);
+  createStructuredTables();
 
   const stateCount = Number(sqliteScalar('SELECT COUNT(*) FROM app_state WHERE id = 1;') || 0);
-  if (!stateCount) {
-    let initialState = baseState();
-    if (existsSync(legacyDataFile)) {
-      const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-      const legacyBackupDir = join(backupsDir, `auto-pre-sqlite-${timestamp}`);
-      mkdirSync(legacyBackupDir, { recursive: true });
-      writeFileSync(join(legacyBackupDir, 'db.json'), readFileSync(legacyDataFile));
-      initialState = JSON.parse(readFileSync(legacyDataFile, 'utf8'));
-    }
-    writeStateToSqlite(initialState);
+  if (!stateCount && existsSync(legacyDataFile)) {
+    const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    const legacyBackupDir = join(backupsDir, `auto-pre-sqlite-${timestamp}`);
+    mkdirSync(legacyBackupDir, { recursive: true });
+    writeFileSync(join(legacyBackupDir, 'db.json'), readFileSync(legacyDataFile));
+    writeStateToSqlite(JSON.parse(readFileSync(legacyDataFile, 'utf8')));
+  } else if (!stateCount) {
+    writeStateToSqlite(baseState());
+  }
+
+  const structuredVersion = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'structured_schema_version' LIMIT 1;");
+  if (structuredVersion !== '1') {
+    createBackupFile('pre-tables', 'automatic backup before structured table migration');
+    writeStateToTables(readLegacyStateForMigration());
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '1', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('storage_backend', 'sqlite', datetime('now'))
+VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   sqliteReady = true;
   ensureWeeklyBackup();
@@ -289,12 +642,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 
 function readState() {
   ensureSqliteStore();
-  return readStateFromSqlite();
+  return readStateFromTables();
 }
 
 function writeState(state) {
   ensureSqliteStore();
-  writeStateToSqlite(state);
+  writeStateToTables(state);
 }
 
 function nextId(items) {
@@ -529,6 +882,18 @@ function readBody(req) {
   });
 }
 
+async function readJsonBody(req) {
+  const body = await readBody(req);
+  if (!body) return {};
+  try {
+    return JSON.parse(body);
+  } catch {
+    const error = new Error('Invalid JSON body');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function sendHtml(res, html, status = 200) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -565,7 +930,7 @@ async function handleApi(req, res) {
   }
 
   if (req.url === '/api/import' && req.method === 'POST') {
-    const body = JSON.parse((await readBody(req)) || '{}');
+    const body = await readJsonBody(req);
     if (body.password !== appPassword) {
       sendJson(res, { error: 'Invalid password' }, 401);
       return;
@@ -605,7 +970,7 @@ async function handleApi(req, res) {
   }
 
   if (req.url === '/api/confusing-words/backup') {
-    const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
+    const body = req.method === 'POST' ? await readJsonBody(req) : {};
     const sessionRole = getSessionRole(req.headers.cookie);
     const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
     if (!hasBackupAccess) {
@@ -657,8 +1022,15 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/backups/restore' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const result = restoreBackupFile(body.fileName);
+    sendJson(res, { ok: true, ...result });
+    return;
+  }
+
   const state = readState();
-  const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
+  const body = req.method === 'POST' ? await readJsonBody(req) : {};
   const timestamp = nowISO();
 
   if (req.url === '/api/state' && req.method === 'GET') {
@@ -783,7 +1155,16 @@ createServer(async (req, res) => {
   }
 
   if (req.url?.startsWith('/api/')) {
-    await handleApi(req, res);
+    try {
+      await handleApi(req, res);
+    } catch (error) {
+      console.error(error);
+      if (!res.headersSent) {
+        sendJson(res, { error: error.message || 'Server error' }, error.statusCode || 500);
+      } else {
+        res.end();
+      }
+    }
     return;
   }
 

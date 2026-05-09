@@ -1,4 +1,4 @@
-import { Cloud, Download, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
+import { Cloud, Download, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
@@ -20,6 +20,14 @@ function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+const backupKindLabel: Record<string, string> = {
+  manual: '手动',
+  weekly: '每周',
+  'pre-tables': '拆表前',
+  'pre-restore': '恢复前',
+  restore: '恢复记录',
+};
 
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks } = useAppData();
@@ -144,6 +152,22 @@ export function SettingsPage() {
     setTimeout(() => setToast(''), 2200);
   };
 
+  const restoreServerBackup = async (fileName: string) => {
+    const firstConfirm = confirm(`确定要恢复这个服务器备份吗？\n${fileName}`);
+    if (!firstConfirm) return;
+    const secondConfirm = confirm('恢复会用该备份覆盖当前服务器数据。系统会先自动创建一份恢复前安全备份。仍然继续吗？');
+    if (!secondConfirm) return;
+    try {
+      await serverApi.restoreServerBackup(fileName);
+      await refreshBackupStatus();
+      notifyDataChanged();
+      setToast('服务器备份已恢复');
+    } catch {
+      setToast('恢复失败，请稍后重试');
+    }
+    setTimeout(() => setToast(''), 2600);
+  };
+
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
       <div className="grid gap-4 md:grid-cols-3">
@@ -162,7 +186,7 @@ export function SettingsPage() {
         <dl className="mt-4 grid gap-4 border-y border-slate-100 py-4 md:grid-cols-4">
           <div>
             <dt className="text-xs font-semibold text-slate-500">存储方式</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus?.storage ?? '读取中'}</dd>
+            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus?.storage === 'sqlite-tables' ? '结构化 SQLite' : backupStatus?.storage ?? '读取中'}</dd>
           </div>
           <div>
             <dt className="text-xs font-semibold text-slate-500">数据库大小</dt>
@@ -184,6 +208,29 @@ export function SettingsPage() {
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn btn-soft" onClick={() => void runServerBackup()}><Cloud size={16} />立即创建服务器备份</button>
           <button className="btn btn-soft" onClick={() => void refreshBackupStatus()}>刷新状态</button>
+        </div>
+        <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+          <div className="grid grid-cols-[1fr_90px_110px_92px] bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+            <span>备份文件</span>
+            <span>类型</span>
+            <span>大小</span>
+            <span className="text-right">操作</span>
+          </div>
+          {backupStatus?.backups?.length ? backupStatus.backups.slice(0, 12).map((backup) => (
+            <div key={backup.fileName} className="grid grid-cols-[1fr_90px_110px_92px] items-center gap-2 border-t border-slate-100 px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-800">{backup.fileName}</p>
+                <p className="mt-0.5 text-xs text-slate-500">{new Date(backup.createdAt).toLocaleString()}</p>
+              </div>
+              <span className="text-slate-600">{backupKindLabel[backup.kind] ?? backup.kind}</span>
+              <span className="text-slate-600">{formatBytes(backup.sizeBytes)}</span>
+              <button className="justify-self-end rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => void restoreServerBackup(backup.fileName)}>
+                <RotateCcw size={13} className="mr-1 inline" />恢复
+              </button>
+            </div>
+          )) : (
+            <div className="border-t border-slate-100 px-3 py-6 text-center text-sm text-slate-500">还没有可恢复的服务器备份</div>
+          )}
         </div>
       </div>
       <div className="mt-5">

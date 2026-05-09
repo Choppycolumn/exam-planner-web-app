@@ -13,10 +13,11 @@ export interface ServerState {
 }
 
 export interface BackupStatus {
-  storage: 'sqlite';
+  storage: 'sqlite' | 'sqlite-tables';
   sqliteFile: string;
   sqliteSizeBytes: number;
   backupCount: number;
+  backups: Array<{ fileName: string; kind: string; createdAt: string; sizeBytes: number }>;
   lastBackup: { kind: string; filePath: string; createdAt: string; note?: string } | null;
   lastWeeklyBackupAt: string | null;
   dictionaryCount: number;
@@ -66,5 +67,6 @@ export const serverApi = {
     apiRequest<void>('/water/save', { method: 'POST', body: record }),
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
+  restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };
