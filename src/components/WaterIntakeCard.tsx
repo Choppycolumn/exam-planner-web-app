@@ -21,7 +21,6 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
   const today = todayISO();
   const currentCups = cups;
   const style = tone(currentCups);
-  const percent = Math.min(100, Math.round((currentCups / targetCups) * 100));
   const holdAnimationStyle = { '--water-hold-duration': `${holdMs}ms` } as CSSProperties;
 
   const saveCups = async (nextCups: number) => {
@@ -82,16 +81,7 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
         {!readOnly ? <button className="rounded-lg bg-white/70 px-2 py-1 text-xs font-semibold" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void reset(); }}>清零</button> : null}
       </div>
 
-      <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-white/70">
-        <div className="h-full rounded-full bg-current opacity-35 transition-all" style={{ width: `${percent}%` }} />
-        {holding ? (
-          <div
-            className="water-hold-fill absolute inset-y-0 left-0 w-full origin-left rounded-full bg-current"
-            style={holdAnimationStyle}
-          />
-        ) : null}
-      </div>
-      <p className="mt-3 text-xs font-medium opacity-75">{readOnly ? '只读模式不可记录' : currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按卡片任意位置 2 秒记一杯'}</p>
+      <p className="mt-4 text-xs font-medium opacity-75">{readOnly ? '只读模式不可记录' : currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按卡片任意位置 2 秒记一杯'}</p>
       </div>
     </section>
   );
