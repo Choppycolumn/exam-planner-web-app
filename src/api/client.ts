@@ -12,6 +12,28 @@ export interface ServerState {
   readOnly?: boolean;
 }
 
+export interface DashboardData {
+  activeGoal: Goal | null;
+  today: string;
+  todayTotal: number;
+  distribution: Array<{ name: string; value: number }>;
+  trend: Array<{ date: string; minutes: number }>;
+  latestExam: MockExamRecord | null;
+  todayReview: DailyReview | null;
+  yesterdayReview: DailyReview | null;
+  visibleTasks: ShortTermTask[];
+  todayWaterRecord: WaterIntakeRecord | null;
+  readOnly?: boolean;
+}
+
+export interface StatisticsSummary {
+  today: string;
+  todayTotal: number;
+  distribution: Array<{ name: string; value: number }>;
+  last7: Array<{ date: string; minutes: number }>;
+  last30: Array<{ name: string; minutes: number }>;
+}
+
 export interface BackupStatus {
   storage: 'sqlite' | 'sqlite-tables';
   sqliteFile: string;
@@ -63,6 +85,11 @@ type ApiOptions = {
   body?: unknown;
 };
 
+let stateCache: ServerState | null = null;
+let statePromise: Promise<ServerState> | null = null;
+let dashboardCache: DashboardData | null = null;
+let dashboardPromise: Promise<DashboardData> | null = null;
+
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method: options.method ?? 'GET',
@@ -77,10 +104,40 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
   return response.json() as Promise<T>;
 }
 
-export const notifyDataChanged = () => window.dispatchEvent(new Event('server-data-changed'));
+export const notifyDataChanged = () => {
+  stateCache = null;
+  statePromise = null;
+  dashboardCache = null;
+  dashboardPromise = null;
+  window.dispatchEvent(new Event('server-data-changed'));
+};
+
+function cachedState() {
+  if (stateCache) return Promise.resolve(stateCache);
+  statePromise ??= apiRequest<ServerState>('/state').then((state) => {
+    stateCache = state;
+    statePromise = null;
+    return state;
+  });
+  return statePromise;
+}
+
+function cachedDashboard() {
+  if (dashboardCache) return Promise.resolve(dashboardCache);
+  dashboardPromise ??= apiRequest<DashboardData>('/dashboard').then((data) => {
+    dashboardCache = data;
+    dashboardPromise = null;
+    return data;
+  });
+  return dashboardPromise;
+}
 
 export const serverApi = {
-  getState: () => apiRequest<ServerState>('/state'),
+  getState: () => cachedState(),
+  getDashboard: () => cachedDashboard(),
+  getReviews: (from?: string, to?: string) => apiRequest<{ reviews: DailyReview[]; readOnly?: boolean }>(`/reviews${from || to ? `?from=${encodeURIComponent(from || '1900-01-01')}&to=${encodeURIComponent(to || '2999-12-31')}` : ''}`),
+  getStudyRecordsByDate: (date: string) => apiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`),
+  getStatisticsSummary: () => apiRequest<StatisticsSummary>('/statistics/summary'),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
   activateGoal: (id: number) => apiRequest<void>('/goals/activate', { method: 'POST', body: { id } }),
   removeGoal: (id: number) => apiRequest<void>('/goals/remove', { method: 'POST', body: { id } }),

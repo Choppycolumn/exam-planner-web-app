@@ -1,42 +1,31 @@
-import { useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BookOpen, CalendarCheck, ClipboardList, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { ChartBox, DistributionPie, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
 import { WaterIntakeCard } from '../components/WaterIntakeCard';
 import { tasksRepository } from '../db/repositories/tasksRepository';
-import { useAppData } from '../hooks/useAppData';
+import { useDashboardData } from '../hooks/useDashboardData';
 import type { TaskUrgency } from '../types/models';
-import { calculateCountdownDays, getDueStatus, minutesToHoursText, previousDateISO, todayISO } from '../utils/date';
+import { calculateCountdownDays, getDueStatus, minutesToHoursText, todayISO } from '../utils/date';
 import {
-  getDailyProjectDistribution,
-  getDailyTotalMinutes,
-  getLast7DaysTotals,
   getReviewAverageScore,
   getReviewTone,
-  getSubjectExamStats,
-  getVisibleShortTermTasks,
   urgencyClassName,
   urgencyLabel,
 } from '../utils/statistics';
+import { routeLoaders } from '../router/preload';
+
+const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
 export function DashboardPage() {
-  const { activeGoal, studyRecords, exams, reviews, shortTermTasks, waterIntakeRecords, readOnly } = useAppData();
+  const { activeGoal, todayTotal, distribution, trend, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
+  const [chartsReady, setChartsReady] = useState(false);
   const today = todayISO();
-  const todayTotal = getDailyTotalMinutes(studyRecords, today);
-  const distribution = getDailyProjectDistribution(studyRecords, today);
-  const trend = getLast7DaysTotals(studyRecords);
-  const latestExam = getSubjectExamStats(exams).latest;
-  const todayReview = reviews.find((review) => review.date === today);
-  const yesterdayDate = previousDateISO(today);
-  const yesterdayReview = reviews.find((review) => review.date === yesterdayDate);
-  const reviewScore = getReviewAverageScore(todayReview);
+  const reviewScore = getReviewAverageScore(todayReview ?? undefined);
   const reviewTone = getReviewTone(reviewScore);
-  const visibleTasks = getVisibleShortTermTasks(shortTermTasks, today);
-  const todayWaterRecord = waterIntakeRecords.find((record) => record.date === today);
   const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
 
   const saveTask = async () => {
@@ -44,6 +33,11 @@ export function DashboardPage() {
     await tasksRepository.save(taskDraft);
     setTaskDraft({ title: '', dueDate: todayISO(), urgency: 'medium' });
   };
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setChartsReady(true), 250);
+    return () => window.clearTimeout(timeoutId);
+  }, []);
 
   return (
     <Page title="早上好，今天继续稳稳推进" subtitle="第一眼看目标、看今天、看趋势。">
@@ -71,7 +65,7 @@ export function DashboardPage() {
           hint={latestExam ? latestExam.paperName : '记录一次模考后显示'}
           icon={<ClipboardList size={18} />}
         />
-        <WaterIntakeCard key={waterCardKey} record={todayWaterRecord} readOnly={readOnly} />
+        <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (
@@ -125,14 +119,11 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-        <ChartBox title="今日时间分布">
-          {distribution.length ? <DistributionPie data={distribution} /> : <EmptyState title="今天还没有填写学习时间" description="从学习时间页面录入后，这里会自动生成分布图。" />}
-        </ChartBox>
-        <ChartBox title="最近 7 天学习趋势">
-          <TrendLine data={trend} />
-        </ChartBox>
-      </div>
+      {chartsReady ? (
+        <Suspense fallback={<div className="mt-6 grid gap-4 lg:grid-cols-2"><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div></div>}>
+          <LazyDashboardCharts distribution={distribution} trend={trend} />
+        </Suspense>
+      ) : null}
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Link className="card block p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/study-time">

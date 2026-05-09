@@ -5,7 +5,7 @@ import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { serverApi, type LearningReport } from '../api/client';
-import { useAppData } from '../hooks/useAppData';
+import { useDashboardData } from '../hooks/useDashboardData';
 import { minutesToHoursText } from '../utils/date';
 
 const kindLabel: Record<LearningReport['kind'], string> = {
@@ -14,7 +14,7 @@ const kindLabel: Record<LearningReport['kind'], string> = {
 };
 
 export function ReportsPage() {
-  const { readOnly } = useAppData();
+  const { readOnly } = useDashboardData();
   const [reports, setReports] = useState<LearningReport[]>([]);
   const [selectedReportId, setSelectedReportId] = useState<number | null>(null);
   const [toast, setToast] = useState('');

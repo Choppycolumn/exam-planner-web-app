@@ -2,11 +2,11 @@ import { ChartBox, ReviewTrendChart } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
-import { useAppData } from '../hooks/useAppData';
+import { useReviewsData } from '../hooks/useReviewsData';
 import { getReviewAverageScore, getReviewTone, getReviewTrend } from '../utils/statistics';
 
 export function ReviewInsightsPage() {
-  const { reviews } = useAppData();
+  const { reviews } = useReviewsData();
   const sortedReviews = [...reviews].sort((a, b) => b.date.localeCompare(a.date));
   const trend = getReviewTrend(reviews, 30);
   const reviewedDays = reviews.length;

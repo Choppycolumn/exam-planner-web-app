@@ -4,12 +4,12 @@ import { Save } from 'lucide-react';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { reviewsRepository } from '../db/repositories/reviewsRepository';
-import { useAppData } from '../hooks/useAppData';
+import { useReviewsData } from '../hooks/useReviewsData';
 import { previousDateISO, todayISO } from '../utils/date';
 import { getReviewAverageScore, getReviewTone } from '../utils/statistics';
 
 export function ReviewsPage() {
-  const { reviews } = useAppData();
+  const { reviews } = useReviewsData();
   const [date, setDate] = useState(todayISO());
   const current = useMemo(() => reviews.find((review) => review.date === date), [reviews, date]);
   const yesterdayDate = previousDateISO(date);

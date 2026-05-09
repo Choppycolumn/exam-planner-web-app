@@ -1,8 +1,10 @@
+import { useEffect } from 'react';
 import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, FileText, Home, Languages, Settings } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
-import { useAppData } from '../hooks/useAppData';
+import { useDashboardData } from '../hooks/useDashboardData';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
+import { preloadSecondaryRoutes } from '../router/preload';
 
 const navItems = [
   { to: '/', label: '首页', icon: Home },
@@ -17,8 +19,10 @@ const navItems = [
 ];
 
 export function Layout() {
-  const { activeGoal, readOnly } = useAppData();
+  const { activeGoal, readOnly } = useDashboardData();
   const location = useLocation();
+
+  useEffect(() => preloadSecondaryRoutes(), []);
 
   return (
     <div className="min-h-screen bg-[#f7f8fb] text-slate-900">

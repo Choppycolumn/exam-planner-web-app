@@ -898,10 +898,6 @@ function writeState(state) {
   writeStateToTables(state);
 }
 
-function nextId(items) {
-  return items.reduce((max, item) => Math.max(max, Number(item.id || 0)), 0) + 1;
-}
-
 function sendJson(res, data, status = 200) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -1026,25 +1022,262 @@ LIMIT 1;`);
   return result;
 }
 
-function applySave(items, payload, createDefaults) {
+function nextTableId(table) {
+  return Number(sqliteScalar(`SELECT COALESCE(MAX(id), 0) + 1 FROM ${table};`) || 1);
+}
+
+function tableChanged() {
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('data_updated_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+}
+
+function saveGoalSql(payload) {
   const timestamp = nowISO();
-  if (payload.id) {
-    const index = items.findIndex((item) => item.id === Number(payload.id));
-    if (index >= 0) {
-      items[index] = { ...items[index], ...payload, updatedAt: timestamp };
-      return items[index].id;
-    }
+  if (payload.isActive) {
+    runSqlite(`UPDATE goals SET is_active = 0, updated_at = ${sqlString(timestamp)} WHERE id <> ${sqlValue(Number(payload.id || 0))};`);
   }
-  const next = {
-    id: nextId(items),
-    schemaVersion: entitySchemaVersion,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    ...createDefaults(payload),
-    ...payload,
+  if (payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM goals WHERE id = ${sqlValue(Number(payload.id))};`) || 0)) {
+    runSqlite(`UPDATE goals SET
+name = ${sqlValue(payload.name)},
+description = ${sqlValue(payload.description || '')},
+deadline = ${sqlValue(payload.deadline || todayISO())},
+is_active = ${sqlValue(Boolean(payload.isActive))},
+type = ${sqlValue(payload.type || '考研')},
+notes = ${sqlValue(payload.notes || '')},
+updated_at = ${sqlValue(timestamp)}
+WHERE id = ${sqlValue(Number(payload.id))};`);
+    tableChanged();
+    return Number(payload.id);
+  }
+  const id = nextTableId('goals');
+  runSqlite(`INSERT INTO goals (id, name, description, deadline, is_active, type, notes, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(payload.name || '')}, ${sqlValue(payload.description || '')}, ${sqlValue(payload.deadline || todayISO())}, ${sqlValue(payload.isActive !== false)}, ${sqlValue(payload.type || '考研')}, ${sqlValue(payload.notes || '')}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)});`);
+  tableChanged();
+  return id;
+}
+
+function saveProjectSql(payload) {
+  const timestamp = nowISO();
+  if (payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM study_projects WHERE id = ${sqlValue(Number(payload.id))};`) || 0)) {
+    runSqlite(`UPDATE study_projects SET
+name = ${sqlValue(payload.name || '')},
+color = ${sqlValue(payload.color || '#2563eb')},
+is_active = ${sqlValue(payload.isActive !== false)},
+sort_order = ${sqlValue(Number(payload.sortOrder || 0))},
+updated_at = ${sqlValue(timestamp)}
+WHERE id = ${sqlValue(Number(payload.id))};`);
+    tableChanged();
+    return Number(payload.id);
+  }
+  const id = nextTableId('study_projects');
+  const sortOrder = Number(payload.sortOrder || sqliteScalar('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM study_projects;') || id);
+  runSqlite(`INSERT INTO study_projects (id, name, color, is_active, sort_order, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(payload.name || '')}, ${sqlValue(payload.color || '#2563eb')}, 1, ${sqlValue(sortOrder)}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)});`);
+  tableChanged();
+  return id;
+}
+
+function saveSubjectSql(payload) {
+  const timestamp = nowISO();
+  if (payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM subjects WHERE id = ${sqlValue(Number(payload.id))};`) || 0)) {
+    runSqlite(`UPDATE subjects SET
+name = ${sqlValue(payload.name || '')},
+color = ${sqlValue(payload.color || '#2563eb')},
+is_active = ${sqlValue(payload.isActive !== false)},
+sort_order = ${sqlValue(Number(payload.sortOrder || 0))},
+updated_at = ${sqlValue(timestamp)}
+WHERE id = ${sqlValue(Number(payload.id))};`);
+    tableChanged();
+    return Number(payload.id);
+  }
+  const id = nextTableId('subjects');
+  const sortOrder = Number(payload.sortOrder || sqliteScalar('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM subjects;') || id);
+  runSqlite(`INSERT INTO subjects (id, name, color, is_active, sort_order, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(payload.name || '')}, ${sqlValue(payload.color || '#2563eb')}, 1, ${sqlValue(sortOrder)}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)});`);
+  tableChanged();
+  return id;
+}
+
+function saveExamSql(payload) {
+  const timestamp = nowISO();
+  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM mock_exam_records WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
+    ? Number(payload.id)
+    : nextTableId('mock_exam_records');
+  const fields = {
+    date: payload.date || todayISO(),
+    subjectId: Number(payload.subjectId || 0),
+    subjectNameSnapshot: payload.subjectNameSnapshot || '',
+    score: Number(payload.score || 0),
+    fullScore: Math.max(1, Number(payload.fullScore || 100)),
+    paperName: payload.paperName || '',
+    durationMinutes: Math.max(0, Number(payload.durationMinutes || 0)),
+    wrongCount: Math.max(0, Number(payload.wrongCount || 0)),
+    note: payload.note || '',
   };
-  items.push(next);
-  return next.id;
+  runSqlite(`INSERT INTO mock_exam_records (id, date, subject_id, subject_name_snapshot, score, full_score, paper_name, duration_minutes, wrong_count, note, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(fields.date)}, ${sqlValue(fields.subjectId)}, ${sqlValue(fields.subjectNameSnapshot)}, ${sqlValue(fields.score)}, ${sqlValue(fields.fullScore)}, ${sqlValue(fields.paperName)}, ${sqlValue(fields.durationMinutes)}, ${sqlValue(fields.wrongCount)}, ${sqlValue(fields.note)}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+ON CONFLICT(id) DO UPDATE SET
+date = excluded.date,
+subject_id = excluded.subject_id,
+subject_name_snapshot = excluded.subject_name_snapshot,
+score = excluded.score,
+full_score = excluded.full_score,
+paper_name = excluded.paper_name,
+duration_minutes = excluded.duration_minutes,
+wrong_count = excluded.wrong_count,
+note = excluded.note,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+  return id;
+}
+
+function saveTaskSql(payload) {
+  const timestamp = nowISO();
+  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM short_term_tasks WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
+    ? Number(payload.id)
+    : nextTableId('short_term_tasks');
+  runSqlite(`INSERT INTO short_term_tasks (id, title, due_date, urgency, is_completed, completed_at, note, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(payload.title || '')}, ${sqlValue(payload.dueDate || todayISO())}, ${sqlValue(payload.urgency || 'medium')}, ${sqlValue(Boolean(payload.isCompleted))}, ${sqlValue(payload.completedAt || null)}, ${sqlValue(payload.note || '')}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+ON CONFLICT(id) DO UPDATE SET
+title = excluded.title,
+due_date = excluded.due_date,
+urgency = excluded.urgency,
+is_completed = excluded.is_completed,
+completed_at = excluded.completed_at,
+note = excluded.note,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+  return id;
+}
+
+function upsertReviewSql(payload) {
+  const timestamp = nowISO();
+  const review = normalizeReview(payload);
+  const id = payload.id || Number(sqliteScalar(`SELECT id FROM daily_reviews WHERE date = ${sqlValue(payload.date || todayISO())} LIMIT 1;`) || 0) || nextTableId('daily_reviews');
+  runSqlite(`INSERT INTO daily_reviews (id, date, summary, wins, problems, tomorrow_plan, score, schema_version, created_at, updated_at)
+VALUES (${sqlValue(id)}, ${sqlValue(payload.date || todayISO())}, ${sqlValue(review.summary || '')}, ${sqlValue(review.wins || '')}, ${sqlValue(review.problems || '')}, ${sqlValue(review.tomorrowPlan || '')}, ${sqlValue(Math.max(1, Math.min(10, Number(review.score || 6))))}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+ON CONFLICT(date) DO UPDATE SET
+summary = excluded.summary,
+wins = excluded.wins,
+problems = excluded.problems,
+tomorrow_plan = excluded.tomorrow_plan,
+score = excluded.score,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+  return id;
+}
+
+function saveDayRecordsSql(date, records = []) {
+  const timestamp = nowISO();
+  const statements = ['BEGIN;'];
+  let nextRecordId = nextTableId('study_time_records');
+  for (const record of records) {
+    const existingId = Number(sqliteScalar(`SELECT id FROM study_time_records WHERE date = ${sqlValue(date)} AND project_id = ${sqlValue(Number(record.projectId || 0))} LIMIT 1;`) || 0);
+    const id = existingId || nextRecordId++;
+    statements.push(`INSERT INTO study_time_records (id, date, project_id, project_name_snapshot, minutes, note, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(date)}, ${sqlValue(Number(record.projectId || 0))}, ${sqlValue(record.projectNameSnapshot || '')}, ${sqlValue(Math.max(0, Number(record.minutes || 0)))}, ${sqlValue(record.note || '')}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+ON CONFLICT(date, project_id) DO UPDATE SET
+project_name_snapshot = excluded.project_name_snapshot,
+minutes = excluded.minutes,
+note = excluded.note,
+updated_at = excluded.updated_at;`);
+  }
+  statements.push('COMMIT;');
+  runSqlite(statements.join('\n'));
+  tableChanged();
+}
+
+function saveWaterSql(payload) {
+  const timestamp = nowISO();
+  const date = payload.date || todayISO();
+  const id = Number(sqliteScalar(`SELECT id FROM water_intake_records WHERE date = ${sqlValue(date)} LIMIT 1;`) || 0) || nextTableId('water_intake_records');
+  runSqlite(`INSERT INTO water_intake_records (id, date, cups, cup_ml, target_cups, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(date)}, ${sqlValue(Math.max(0, Number(payload.cups || 0)))}, ${sqlValue(Math.max(1, Number(payload.cupMl || 500)))}, ${sqlValue(Math.max(1, Number(payload.targetCups || 6)))}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+ON CONFLICT(date) DO UPDATE SET
+cups = excluded.cups,
+cup_ml = excluded.cup_ml,
+target_cups = excluded.target_cups,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+}
+
+function getLastNDaysTotals(days, endDate = todayISO()) {
+  const startDate = addDaysISO(endDate, -(days - 1));
+  const rows = sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
+FROM study_time_records
+WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
+GROUP BY date;`);
+  const map = new Map(rows.map((row) => [row.date, Number(row.minutes || 0)]));
+  return dateRange(startDate, endDate).map((date) => ({ date, minutes: map.get(date) || 0 }));
+}
+
+function getProjectTotals(startDate, endDate) {
+  return sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS minutes
+FROM study_time_records
+WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
+GROUP BY project_name_snapshot
+HAVING minutes > 0
+ORDER BY minutes DESC, name;`).map((row) => ({ name: row.name, minutes: Number(row.minutes || 0) }));
+}
+
+function getDashboardPayload(sessionRole) {
+  const today = todayISO();
+  const yesterday = addDaysISO(today, -1);
+  const activeGoal = sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`).map((goal) => ({ ...goal, isActive: Boolean(goal.isActive) }))[0] || null;
+  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
+  const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
+FROM study_time_records
+WHERE date = ${sqlString(today)}
+GROUP BY project_name_snapshot
+HAVING value > 0
+ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
+  const trend = getLastNDaysTotals(7, today);
+  const latestExam = sqliteJson(`SELECT id, date, subject_id AS subjectId, subject_name_snapshot AS subjectNameSnapshot, score, full_score AS fullScore,
+paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM mock_exam_records ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
+  const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM daily_reviews WHERE date IN (${sqlString(today)}, ${sqlString(yesterday)});`).map(normalizeReview);
+  const visibleTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted, completed_at AS completedAt, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM short_term_tasks
+WHERE is_completed = 0 OR date(completed_at) = date(${sqlString(today)})
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id;`).map((task) => ({ ...task, isCompleted: Boolean(task.isCompleted), completedAt: task.completedAt || undefined }));
+  const waterRecord = sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
+
+  return {
+    activeGoal,
+    today,
+    todayTotal,
+    distribution,
+    trend,
+    latestExam,
+    todayReview: reviews.find((review) => review.date === today) || null,
+    yesterdayReview: reviews.find((review) => review.date === yesterday) || null,
+    visibleTasks,
+    todayWaterRecord: waterRecord,
+    readOnly: sessionRole === 'read',
+  };
+}
+
+function getStatisticsSummary() {
+  const today = todayISO();
+  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
+  const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
+FROM study_time_records
+WHERE date = ${sqlString(today)}
+GROUP BY project_name_snapshot
+HAVING value > 0
+ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
+  const last7 = getLastNDaysTotals(7, today);
+  const last30 = getProjectTotals(addDaysISO(today, -29), today);
+  return { today, todayTotal, distribution, last7, last30 };
 }
 
 function normalizeReview(review) {
@@ -1277,6 +1510,45 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/dashboard' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getDashboardPayload(sessionRole));
+    return;
+  }
+
+  if (req.url?.startsWith('/api/reviews') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const from = requestUrl.searchParams.get('from') || '1900-01-01';
+    const to = requestUrl.searchParams.get('to') || '2999-12-31';
+    const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM daily_reviews
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+ORDER BY date DESC;`).map(normalizeReview);
+    sendJson(res, { reviews, readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/study-records') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const date = requestUrl.searchParams.get('date') || todayISO();
+    const records = sqliteJson(`SELECT id, date, project_id AS projectId, project_name_snapshot AS projectNameSnapshot, minutes, note,
+schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
+FROM study_time_records
+WHERE date = ${sqlString(date)}
+ORDER BY project_id;`);
+    sendJson(res, { records, readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url === '/api/statistics/summary' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getStatisticsSummary());
+    return;
+  }
+
   if (req.url?.startsWith('/api/reports') && req.method === 'GET') {
     ensureSqliteStore();
     ensureAutomaticReports();
@@ -1293,9 +1565,66 @@ async function handleApi(req, res) {
     return;
   }
 
-  const state = readState();
   const body = req.method === 'POST' ? await readJsonBody(req) : {};
   const timestamp = nowISO();
+
+  if (req.url === '/api/reset' && req.method === 'POST') {
+    writeState(baseState());
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  const directRoutes = {
+    '/api/goals/save': () => saveGoalSql(body),
+    '/api/projects/save': () => saveProjectSql(body),
+    '/api/subjects/save': () => saveSubjectSql(body),
+    '/api/exams/save': () => saveExamSql(body),
+    '/api/tasks/save': () => saveTaskSql(body),
+  };
+
+  if (req.method === 'POST' && directRoutes[req.url]) {
+    sendJson(res, directRoutes[req.url]());
+    return;
+  }
+
+  if (req.url === '/api/goals/activate' && req.method === 'POST') {
+    runSqlite(`UPDATE goals SET is_active = CASE WHEN id = ${sqlValue(Number(body.id))} THEN 1 ELSE 0 END, updated_at = ${sqlValue(timestamp)};`);
+    tableChanged();
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/water/save' && req.method === 'POST') {
+    saveWaterSql(body);
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/goals/remove' && req.method === 'POST') runSqlite(`DELETE FROM goals WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/projects/remove' && req.method === 'POST') runSqlite(`UPDATE study_projects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/subjects/remove' && req.method === 'POST') runSqlite(`UPDATE subjects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/exams/remove' && req.method === 'POST') runSqlite(`DELETE FROM mock_exam_records WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/tasks/remove' && req.method === 'POST') runSqlite(`DELETE FROM short_term_tasks WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/tasks/toggle' && req.method === 'POST') runSqlite(`UPDATE short_term_tasks SET is_completed = ${sqlValue(Boolean(body.completed))}, completed_at = ${sqlValue(body.completed ? timestamp : null)}, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
+  else if (req.url === '/api/reviews/upsert' && req.method === 'POST') {
+    sendJson(res, upsertReviewSql(body));
+    return;
+  } else if (req.url === '/api/study-records/save-day' && req.method === 'POST') {
+    saveDayRecordsSql(body.date || todayISO(), body.records || []);
+    sendJson(res, { ok: true });
+    return;
+  } else if (req.method === 'POST' && req.url !== '/api/reset') {
+    sendJson(res, { error: 'Not found' }, 404);
+    return;
+  }
+
+  if (req.method === 'POST') {
+    tableChanged();
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  const state = readState();
 
   if (req.url === '/api/state' && req.method === 'GET') {
     const normalized = {
@@ -1308,91 +1637,7 @@ async function handleApi(req, res) {
     return;
   }
 
-  if (req.url === '/api/reset' && req.method === 'POST') {
-    writeState(baseState());
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  const routes = {
-    '/api/goals/save': () => {
-      if (body.isActive) state.goals = state.goals.map((goal) => goal.id !== body.id ? { ...goal, isActive: false, updatedAt: timestamp } : goal);
-      return applySave(state.goals, body, () => ({ name: '', description: '', deadline: todayISO(), isActive: true, type: '考研', notes: '' }));
-    },
-    '/api/projects/save': () => applySave(state.studyProjects, body, () => ({ name: '', color: '#2563eb', isActive: true, sortOrder: state.studyProjects.length + 1 })),
-    '/api/subjects/save': () => applySave(state.subjects, body, () => ({ name: '', color: '#2563eb', isActive: true, sortOrder: state.subjects.length + 1 })),
-    '/api/exams/save': () => applySave(state.mockExamRecords, body, () => ({ date: todayISO(), score: 0, fullScore: 100, paperName: '', durationMinutes: 0, wrongCount: 0, note: '' })),
-    '/api/tasks/save': () => applySave(state.shortTermTasks, body, () => ({ title: '', dueDate: todayISO(), urgency: 'medium', isCompleted: false, completedAt: undefined, note: '' })),
-  };
-
-  if (req.method === 'POST' && routes[req.url]) {
-    const id = routes[req.url]();
-    writeState(state);
-    sendJson(res, id);
-    return;
-  }
-
-  if (req.url === '/api/goals/activate' && req.method === 'POST') {
-    state.goals = state.goals.map((goal) => ({ ...goal, isActive: goal.id === Number(body.id), updatedAt: timestamp }));
-    writeState(state);
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/water/save' && req.method === 'POST') {
-    const records = Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [];
-    const date = body.date || todayISO();
-    const existingIndex = records.findIndex((item) => item.date === date);
-    const payload = {
-      date,
-      cups: Math.max(0, Number(body.cups || 0)),
-      cupMl: Math.max(1, Number(body.cupMl || 500)),
-      targetCups: Math.max(1, Number(body.targetCups || 7)),
-      updatedAt: timestamp,
-    };
-    if (existingIndex >= 0) records[existingIndex] = { ...records[existingIndex], ...payload };
-    else records.push({ id: nextId(records), schemaVersion: entitySchemaVersion, createdAt: timestamp, ...payload });
-    state.waterIntakeRecords = records;
-    writeState(state);
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/goals/remove' && req.method === 'POST') state.goals = state.goals.filter((item) => item.id !== Number(body.id));
-  else if (req.url === '/api/projects/remove' && req.method === 'POST') state.studyProjects = state.studyProjects.map((item) => item.id === Number(body.id) ? { ...item, isActive: false, updatedAt: timestamp } : item);
-  else if (req.url === '/api/subjects/remove' && req.method === 'POST') state.subjects = state.subjects.map((item) => item.id === Number(body.id) ? { ...item, isActive: false, updatedAt: timestamp } : item);
-  else if (req.url === '/api/exams/remove' && req.method === 'POST') state.mockExamRecords = state.mockExamRecords.filter((item) => item.id !== Number(body.id));
-  else if (req.url === '/api/tasks/remove' && req.method === 'POST') state.shortTermTasks = state.shortTermTasks.filter((item) => item.id !== Number(body.id));
-  else if (req.url === '/api/tasks/toggle' && req.method === 'POST') state.shortTermTasks = state.shortTermTasks.map((item) => item.id === Number(body.id) ? { ...item, isCompleted: Boolean(body.completed), completedAt: body.completed ? timestamp : undefined, updatedAt: timestamp } : item);
-  else if (req.url === '/api/reviews/upsert' && req.method === 'POST') {
-    const existingIndex = state.dailyReviews.findIndex((review) => review.date === body.date);
-    if (existingIndex >= 0) {
-      state.dailyReviews[existingIndex] = normalizeReview({ ...state.dailyReviews[existingIndex], ...body, updatedAt: timestamp });
-      writeState(state);
-      sendJson(res, state.dailyReviews[existingIndex].id);
-      return;
-    }
-    const id = applySave(state.dailyReviews, normalizeReview(body), () => ({ date: todayISO(), summary: '', wins: '', problems: '', tomorrowPlan: '', score: 6 }));
-    writeState(state);
-    sendJson(res, id);
-    return;
-  } else if (req.url === '/api/study-records/save-day' && req.method === 'POST') {
-    for (const record of body.records || []) {
-      const existingIndex = state.studyTimeRecords.findIndex((item) => item.date === body.date && item.projectId === record.projectId);
-      const payload = { ...record, date: body.date, minutes: Math.max(0, Number(record.minutes || 0)), note: record.note || '', updatedAt: timestamp };
-      if (existingIndex >= 0) state.studyTimeRecords[existingIndex] = { ...state.studyTimeRecords[existingIndex], ...payload };
-      else state.studyTimeRecords.push({ id: nextId(state.studyTimeRecords), schemaVersion: entitySchemaVersion, createdAt: timestamp, ...payload });
-    }
-    writeState(state);
-    sendJson(res, { ok: true });
-    return;
-  } else {
-    sendJson(res, { error: 'Not found' }, 404);
-    return;
-  }
-
-  writeState(state);
-  sendJson(res, { ok: true });
+  sendJson(res, { error: 'Not found' }, 404);
 }
 
 createServer(async (req, res) => {

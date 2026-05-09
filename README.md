@@ -31,6 +31,16 @@
 - SQLite
 - Nginx 反向代理
 
+## 性能优化
+
+- 首页优先加载：路由按页面懒加载，进入首页后再后台预加载其他页面。
+- 图表按需加载：Recharts 被拆到独立 `Charts` chunk，只有首页图表、统计页和报告页需要时才加载。
+- 首屏轻量接口：首页使用 `/api/dashboard`，不再依赖全量 `/api/state`。
+- 统计服务端聚合：最近 7 天趋势、今日分布、最近 30 天项目累计由 SQLite 聚合后返回。
+- 写入单表化：复盘、学习时间、任务、喝水、模考等保存接口直接更新对应 SQLite 表。
+- 兼容迁移隔离：Dexie/IndexedDB 迁移逻辑只在迁移页加载，不进入主应用首屏包。
+- 前端缓存：全量状态和首页摘要做轻量缓存，保存后局部失效并重新拉取需要的数据。
+
 ## 数据策略
 
 项目当前采用混合数据策略：
@@ -109,6 +119,10 @@ scripts/start-exam-planner.bat
 
 - `/login`
 - `/health`
+- `/api/dashboard`
+- `/api/reviews?from=&to=`
+- `/api/study-records?date=`
+- `/api/statistics/summary`
 - `/api/state`
 - `/api/*/save`
 - `/api/backups/status`
