@@ -7,6 +7,8 @@ const emptyDashboard: DashboardData = {
   activeGoal: null,
   today: todayISO(),
   todayTotal: 0,
+  totalStudyMinutes: 0,
+  studyTargetMinutes: 0,
   distribution: [],
   trend: [],
   latestExam: null,

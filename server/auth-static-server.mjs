@@ -18,6 +18,7 @@ const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
 const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
+const studyTargetMinutesKey = 'study_target_minutes';
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
@@ -1223,6 +1224,23 @@ updated_at = excluded.updated_at;`);
   tableChanged();
 }
 
+function getStudyTargetMinutes() {
+  return Math.max(0, Number(sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0);
+}
+
+function saveStudyTargetMinutes(payload) {
+  const hours = Number(payload.targetHours ?? 0);
+  const explicitMinutes = Number(payload.targetMinutes ?? NaN);
+  const minutes = Number.isFinite(explicitMinutes)
+    ? Math.max(0, Math.round(explicitMinutes))
+    : Math.max(0, Math.round(hours * 60));
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES (${sqlString(studyTargetMinutesKey)}, ${sqlString(String(minutes))}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  tableChanged();
+  return { targetMinutes: minutes, targetHours: Math.round((minutes / 60) * 10) / 10 };
+}
+
 function getLastNDaysTotals(days, endDate = todayISO()) {
   const startDate = addDaysISO(endDate, -(days - 1));
   const rows = sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
@@ -1253,6 +1271,8 @@ function getDashboardPayload(sessionRole) {
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`).map((goal) => ({ ...goal, isActive: Boolean(goal.isActive) }))[0] || null;
   const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
+  const totalStudyMinutes = Number(sqliteScalar('SELECT COALESCE(SUM(minutes), 0) FROM study_time_records;') || 0);
+  const studyTargetMinutes = getStudyTargetMinutes();
   const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
 FROM study_time_records
 WHERE date = ${sqlString(today)}
@@ -1280,6 +1300,8 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     activeGoal,
     today,
     todayTotal,
+    totalStudyMinutes,
+    studyTargetMinutes,
     distribution,
     trend,
     latestExam,
@@ -1721,6 +1743,13 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/settings/study-target' && req.method === 'GET') {
+    ensureSqliteStore();
+    const targetMinutes = getStudyTargetMinutes();
+    sendJson(res, { targetMinutes, targetHours: Math.round((targetMinutes / 60) * 10) / 10, readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url === '/api/dashboard' && req.method === 'GET') {
     ensureSqliteStore();
     sendJson(res, getDashboardPayload(sessionRole));
@@ -1821,6 +1850,11 @@ ORDER BY project_id;`);
   if (req.url === '/api/water/save' && req.method === 'POST') {
     saveWaterSql(body);
     sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/settings/study-target' && req.method === 'POST') {
+    sendJson(res, saveStudyTargetMinutes(body));
     return;
   }
 

@@ -1,4 +1,4 @@
-import { Cloud, Download, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
+import { Cloud, Download, Hourglass, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
@@ -30,8 +30,9 @@ const backupKindLabel: Record<string, string> = {
 };
 
 export function SettingsPage() {
-  const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks } = useAppData();
+  const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
   const [toast, setToast] = useState('');
+  const [studyTargetHours, setStudyTargetHours] = useState('');
   const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
   const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
@@ -48,13 +49,13 @@ export function SettingsPage() {
   useEffect(() => {
     let mounted = true;
     const timeoutId = window.setTimeout(() => {
-      serverApi.getBackupStatus()
-        .then((status) => {
-          if (mounted) setBackupStatus(status);
+      Promise.allSettled([serverApi.getBackupStatus(), serverApi.getStudyTarget()])
+        .then(([backupResult, targetResult]) => {
+          if (!mounted) return;
+          if (backupResult.status === 'fulfilled') setBackupStatus(backupResult.value);
+          else setBackupStatus(null);
+          if (targetResult.status === 'fulfilled') setStudyTargetHours(targetResult.value.targetHours ? String(targetResult.value.targetHours) : '');
         })
-        .catch(() => {
-          if (mounted) setBackupStatus(null);
-        });
     }, 0);
     return () => {
       mounted = false;
@@ -71,6 +72,20 @@ export function SettingsPage() {
     link.download = `exam-planner-export-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
+  };
+
+  const saveStudyTarget = async () => {
+    const nextTarget = studyTargetHours.trim() ? Number(studyTargetHours) : 0;
+    if (!Number.isFinite(nextTarget) || nextTarget < 0) return alert('目标时长不能小于 0');
+    try {
+      const result = await serverApi.saveStudyTarget(nextTarget);
+      setStudyTargetHours(result.targetHours ? String(result.targetHours) : '');
+      notifyDataChanged();
+      setToast('学习总时长目标已保存');
+    } catch {
+      setToast('保存失败，请稍后重试');
+    }
+    setTimeout(() => setToast(''), 1800);
   };
 
   const exportConfusingWords = () => {
@@ -179,6 +194,27 @@ export function SettingsPage() {
         <h2 className="text-base font-semibold">数据保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
+      </div>
+      <div className="mt-5 card p-5">
+        <h2 className="flex items-center gap-2 text-base font-semibold"><Hourglass size={18} />学习总时长目标</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">这里设置的是到当前长期目标截止日期前，希望累计完成的总学习小时数。首页会自动显示已完成总时长、距离目标还差多少，以及平均每天还需要学多久。</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-[240px_auto]">
+          <label>
+            <span className="label">目标总时长（小时）</span>
+            <input
+              className="field"
+              type="number"
+              min={0}
+              step={0.5}
+              placeholder="例如 1500"
+              value={studyTargetHours}
+              onChange={(event) => setStudyTargetHours(event.target.value)}
+            />
+          </label>
+          <div className="flex items-end">
+            <button className="btn btn-primary" disabled={readOnly} onClick={() => void saveStudyTarget()}>保存目标时长</button>
+          </div>
+        </div>
       </div>
       <div className="mt-5 card p-5">
         <h2 className="text-base font-semibold">服务器备份系统</h2>

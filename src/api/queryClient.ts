@@ -18,6 +18,7 @@ export const queryKeys = {
   goals: ['server', 'goals'] as const,
   projects: ['server', 'projects'] as const,
   subjects: ['server', 'subjects'] as const,
+  studyTarget: ['server', 'settings', 'study-target'] as const,
   statistics: ['server', 'statistics'] as const,
   reports: ['server', 'reports'] as const,
   reviews: (from?: string, to?: string, limit?: number, offset?: number) => ['server', 'reviews', from ?? '', to ?? '', limit ?? 0, offset ?? 0] as const,

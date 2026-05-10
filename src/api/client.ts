@@ -17,6 +17,8 @@ export interface DashboardData {
   activeGoal: Goal | null;
   today: string;
   todayTotal: number;
+  totalStudyMinutes: number;
+  studyTargetMinutes: number;
   distribution: Array<{ name: string; value: number }>;
   trend: Array<{ date: string; minutes: number }>;
   latestExam: MockExamRecord | null;
@@ -60,6 +62,12 @@ export interface MockExamListResponse {
     lowest: number | null;
   };
   trend: Array<{ date: string; score: number }>;
+  readOnly?: boolean;
+}
+
+export interface StudyTargetSetting {
+  targetMinutes: number;
+  targetHours: number;
   readOnly?: boolean;
 }
 
@@ -168,6 +176,8 @@ export const serverApi = {
   getGoals: () => apiRequest<ReferenceList<Goal>>('/goals'),
   getProjects: () => apiRequest<ReferenceList<StudyProject>>('/projects'),
   getSubjects: () => apiRequest<ReferenceList<Subject>>('/subjects'),
+  getStudyTarget: () => apiRequest<StudyTargetSetting>('/settings/study-target'),
+  saveStudyTarget: (targetHours: number) => apiRequest<StudyTargetSetting>('/settings/study-target', { method: 'POST', body: { targetHours } }),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);

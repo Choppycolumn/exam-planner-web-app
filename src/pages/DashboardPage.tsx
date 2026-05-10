@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { BookOpen, CalendarCheck, ClipboardList, Plus, Target, Trash2 } from 'lucide-react';
+import { BookOpen, CalendarCheck, ClipboardList, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
@@ -20,13 +20,23 @@ import { routeLoaders } from '../router/preload';
 const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
 export function DashboardPage() {
-  const { activeGoal, todayTotal, distribution, trend, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
+  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, distribution, trend, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const [chartsReady, setChartsReady] = useState(false);
   const today = todayISO();
   const reviewScore = getReviewAverageScore(todayReview ?? undefined);
   const reviewTone = getReviewTone(reviewScore);
   const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
+  const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
+  const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
+  const dailyRequiredMinutes = goalDaysLeft ? Math.ceil(remainingStudyMinutes / goalDaysLeft) : 0;
+  const studyTargetHint = !studyTargetMinutes
+    ? '在设置页填写目标总时长'
+    : remainingStudyMinutes <= 0
+      ? '已达到目标时长'
+      : activeGoal
+        ? `距目标还差 ${minutesToHoursText(remainingStudyMinutes)}，每天约 ${minutesToHoursText(dailyRequiredMinutes)}`
+        : `距目标还差 ${minutesToHoursText(remainingStudyMinutes)}，请先设置长期目标`;
 
   const saveTask = async () => {
     if (!taskDraft.title.trim()) return alert('请填写短期目标名称');
@@ -41,7 +51,7 @@ export function DashboardPage() {
 
   return (
     <Page title="早上好，今天继续稳稳推进" subtitle="第一眼看目标、看今天、看趋势。">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <MetricCard
           label="当前长期目标"
           value={activeGoal ? `${calculateCountdownDays(activeGoal.deadline)} 天` : '未设置'}
@@ -49,6 +59,12 @@ export function DashboardPage() {
           icon={<Target size={18} />}
         />
         <MetricCard label="今日总学习" value={minutesToHoursText(todayTotal)} hint={today} icon={<BookOpen size={18} />} />
+        <MetricCard
+          label="目前学习总时长"
+          value={minutesToHoursText(totalStudyMinutes)}
+          hint={studyTargetHint}
+          icon={<Hourglass size={18} />}
+        />
         <Link className={`card block border p-5 ${todayReview ? reviewTone.className : 'border-slate-200 bg-white text-slate-700'}`} to="/reviews">
           <div className="flex items-start justify-between gap-3">
             <div>
