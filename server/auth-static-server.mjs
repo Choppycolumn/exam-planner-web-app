@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
@@ -12,6 +12,9 @@ const sqliteFile = join(dataDir, 'exam-planner.sqlite');
 const backupsDir = join(dataDir, 'backups');
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
+const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
+const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
+const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
@@ -392,6 +395,20 @@ CREATE TABLE IF NOT EXISTS error_theme_occurrences (
   created_at TEXT NOT NULL,
   UNIQUE(theme_id, review_id, field, evidence)
 );
+CREATE TABLE IF NOT EXISTS review_sentence_embeddings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  review_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  field TEXT NOT NULL,
+  sentence TEXT NOT NULL,
+  sentence_hash TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  backend TEXT NOT NULL,
+  vector_json TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(sentence_hash, model_name)
+);
 CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
@@ -410,7 +427,9 @@ CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind,
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
-CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_batch ON error_theme_occurrences(batch_id);`);
+CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_batch ON error_theme_occurrences(batch_id);
+CREATE INDEX IF NOT EXISTS idx_review_sentence_embeddings_date ON review_sentence_embeddings(date);
+CREATE INDEX IF NOT EXISTS idx_review_sentence_embeddings_hash_model ON review_sentence_embeddings(sentence_hash, model_name);`);
 }
 
 function insertRowsSql(table, columns, rows) {
@@ -736,29 +755,206 @@ function classifyReviewSegment(segment, fieldKey) {
   return candidates.sort((a, b) => b.confidence - a.confidence)[0] || null;
 }
 
-function extractReviewProblemCandidates(review) {
-  const fields = [
-    { key: 'problems', label: '今日问题' },
-    { key: 'summary', label: '今日总结' },
-    { key: 'tomorrowPlan', label: '明日计划' },
-  ];
+function sentenceHash(text) {
+  return createHash('sha256').update(String(text || '')).digest('hex');
+}
+
+function extractReviewProblemSegments(reviews) {
+  const fields = reviewProblemFields;
+  const segments = [];
+  for (const review of reviews) {
+    for (const field of fields) {
+      for (const sentence of splitReviewSentences(review[field.key])) {
+        segments.push({
+          reviewId: Number(review.id),
+          date: review.date,
+          fieldKey: field.key,
+          field: field.label,
+          sentence,
+          sentenceHash: sentenceHash(sentence),
+        });
+      }
+    }
+  }
+  return segments;
+}
+
+function hasProblemCue(segment, fieldKey) {
+  if (fieldKey === 'problems') return true;
+  return /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡|低|差|难|困|熬夜|分心|浮躁|计划|执行|需要|改进|调整|补|复盘|提高|波动)/.test(String(segment || ''));
+}
+
+function extractRuleProblemCandidates(reviews) {
   const candidates = [];
-  for (const field of fields) {
-    for (const sentence of splitReviewSentences(review[field.key])) {
-      const matched = classifyReviewSegment(sentence, field.key);
-      if (!matched) continue;
-      candidates.push({
-        reviewId: Number(review.id),
-        date: review.date,
-        themeId: matched.theme.id,
-        label: matched.theme.label,
-        field: field.label,
-        evidence: sentence,
-        confidence: matched.confidence,
-      });
+  for (const review of reviews) {
+    for (const field of reviewProblemFields) {
+      for (const sentence of splitReviewSentences(review[field.key])) {
+        if (!hasProblemCue(sentence, field.key)) continue;
+        const matched = classifyReviewSegment(sentence, field.key);
+        if (!matched) continue;
+        candidates.push({
+          reviewId: Number(review.id),
+          date: review.date,
+          themeId: matched.theme.id,
+          label: matched.theme.label,
+          field: field.label,
+          evidence: sentence,
+          confidence: matched.confidence,
+          source: 'local-rule-batch',
+        });
+      }
     }
   }
   return candidates;
+}
+
+function resolveEmbeddingPython() {
+  const serverDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
+  const candidates = [
+    process.env.EMBEDDING_PYTHON,
+    join(serverDir, '.venv', 'bin', 'python'),
+    join(serverDir, '.venv', 'Scripts', 'python.exe'),
+    'python3',
+    'python',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    if (!result.error && result.status === 0) return candidate;
+  }
+  return null;
+}
+
+function getEmbeddingStatus() {
+  const python = resolveEmbeddingPython();
+  const baseStatus = {
+    available: false,
+    backend: 'unavailable',
+    modelName: embeddingModelName,
+    cacheDir: embeddingCacheDir,
+    workerFile: embeddingWorkerFile,
+    python,
+    error: '',
+  };
+  if (!python) return { ...baseStatus, error: 'Python executable not found' };
+  if (!existsSync(embeddingWorkerFile)) return { ...baseStatus, error: 'embedding_worker.py not found' };
+  const result = spawnSync(python, ['-c', 'import fastembed; print("fastembed")'], { encoding: 'utf8', timeout: 10000 });
+  if (result.error) return { ...baseStatus, error: result.error.message };
+  if (result.status !== 0) return { ...baseStatus, error: result.stderr || result.stdout || 'fastembed import failed' };
+  return { ...baseStatus, available: true, backend: 'fastembed', error: '' };
+}
+
+function runEmbeddingWorker(texts) {
+  const python = resolveEmbeddingPython();
+  if (!python) throw new Error('Python executable not found');
+  if (!existsSync(embeddingWorkerFile)) throw new Error('embedding_worker.py not found');
+  const result = spawnSync(python, [embeddingWorkerFile], {
+    input: JSON.stringify({ texts, modelName: embeddingModelName, cacheDir: embeddingCacheDir }),
+    encoding: 'utf8',
+    timeout: 180000,
+    maxBuffer: 96 * 1024 * 1024,
+    env: {
+      ...process.env,
+      HF_ENDPOINT: process.env.HF_ENDPOINT || 'https://hf-mirror.com',
+      EMBEDDING_MODEL_NAME: embeddingModelName,
+      EMBEDDING_CACHE_DIR: embeddingCacheDir,
+    },
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'embedding worker failed');
+  const payload = JSON.parse(result.stdout || '{}');
+  if (!payload.ok) throw new Error(payload.error || 'embedding worker unavailable');
+  return payload;
+}
+
+function cosineSimilarity(a, b) {
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const av = Number(a[index] || 0);
+    const bv = Number(b[index] || 0);
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function storeSentenceEmbeddings(segments, vectors, backend, modelName, dimensions, timestamp) {
+  segments.forEach((segment, index) => {
+    const vector = vectors[index];
+    if (!vector) return;
+    runSqlite(`INSERT OR IGNORE INTO review_sentence_embeddings (review_id, date, field, sentence, sentence_hash, model_name, backend, vector_json, dimensions, created_at)
+VALUES (${sqlValue(segment.reviewId)}, ${sqlString(segment.date)}, ${sqlString(segment.field)}, ${sqlString(segment.sentence)}, ${sqlString(segment.sentenceHash)}, ${sqlString(modelName)}, ${sqlString(backend)}, ${sqlString(JSON.stringify(vector))}, ${sqlValue(dimensions)}, ${sqlString(timestamp)});`);
+  });
+}
+
+function themeSeedText(theme) {
+  return `${theme.label}。典型表现：${theme.keywords.join('、')}`;
+}
+
+function semanticThresholdForField(fieldKey, hasCue) {
+  if (fieldKey === 'problems') return 0.42;
+  if (fieldKey === 'tomorrowPlan') return hasCue ? 0.48 : 0.6;
+  return hasCue ? 0.52 : 0.64;
+}
+
+function extractEmbeddingProblemCandidates(reviews, timestamp) {
+  const segments = extractReviewProblemSegments(reviews);
+  if (!segments.length) {
+    return { candidates: [], modelName: embeddingModelName, source: 'local-embedding-batch', backend: 'fastembed', dimensions: 0, embeddedSentenceCount: 0 };
+  }
+  const seedTexts = reviewProblemThemes.map(themeSeedText);
+  const workerResult = runEmbeddingWorker([...segments.map((item) => item.sentence), ...seedTexts]);
+  const vectors = workerResult.embeddings || [];
+  const segmentVectors = vectors.slice(0, segments.length);
+  const seedVectors = vectors.slice(segments.length);
+  const modelName = workerResult.modelName || embeddingModelName;
+  const backend = workerResult.backend || 'fastembed';
+  const dimensions = Number(workerResult.dimensions || segmentVectors[0]?.length || 0);
+  storeSentenceEmbeddings(segments, segmentVectors, backend, modelName, dimensions, timestamp);
+
+  const candidates = [];
+  segments.forEach((segment, index) => {
+    const vector = segmentVectors[index];
+    if (!vector) return;
+    let best = null;
+    seedVectors.forEach((seedVector, seedIndex) => {
+      const similarity = cosineSimilarity(vector, seedVector);
+      if (!best || similarity > best.similarity) {
+        best = { similarity, theme: reviewProblemThemes[seedIndex] };
+      }
+    });
+    if (!best) return;
+    const cue = hasProblemCue(segment.sentence, segment.fieldKey);
+    const threshold = semanticThresholdForField(segment.fieldKey, cue);
+    if (best.similarity < threshold) return;
+    candidates.push({
+      reviewId: segment.reviewId,
+      date: segment.date,
+      themeId: best.theme.id,
+      label: best.theme.label,
+      field: segment.field,
+      evidence: segment.sentence,
+      confidence: Math.min(0.97, Math.max(0.55, Math.round(best.similarity * 100) / 100)),
+      source: 'local-embedding-batch',
+    });
+  });
+  return { candidates, modelName, source: 'local-embedding-batch', backend, dimensions, embeddedSentenceCount: segments.length };
+}
+
+function mergeProblemCandidates(primary, secondary) {
+  const seen = new Set();
+  const merged = [];
+  for (const candidate of [...primary, ...secondary]) {
+    const key = `${candidate.themeId}|${candidate.reviewId}|${candidate.field}|${candidate.evidence}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(candidate);
+  }
+  return merged;
 }
 
 function upsertErrorTheme(themeId, label, timestamp) {
@@ -778,13 +974,13 @@ SET
   updated_at = ${sqlString(nowISO())};`);
 }
 
-function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp }) {
+function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp, source, modelName, note }) {
   runSqlite(`INSERT INTO error_theme_batches (source, model_name, period_start, period_end, review_count, occurrence_count, theme_count, status, created_at, completed_at, note)
-VALUES ('local-model-batch', 'local-review-topic-v1', ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, 'completed', ${sqlString(timestamp)}, ${sqlString(timestamp)}, 'manual or scheduled local batch classification');`);
+VALUES (${sqlString(source)}, ${sqlString(modelName)}, ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, 'completed', ${sqlString(timestamp)}, ${sqlString(timestamp)}, ${sqlString(note)});`);
   return Number(sqliteScalar(`SELECT id FROM error_theme_batches WHERE created_at = ${sqlString(timestamp)} ORDER BY id DESC LIMIT 1;`) || 0);
 }
 
-function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO()) {
+function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO(), options = {}) {
   ensureSqliteStore();
   const timestamp = nowISO();
   const from = periodStart || '1900-01-01';
@@ -793,7 +989,23 @@ function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO()) 
 FROM daily_reviews
 WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
 ORDER BY date;`);
-  const candidates = reviews.flatMap(extractReviewProblemCandidates);
+  const ruleCandidates = extractRuleProblemCandidates(reviews);
+  let embeddingMeta = null;
+  let candidates = ruleCandidates;
+  if (options.mode !== 'rules') {
+    try {
+      embeddingMeta = extractEmbeddingProblemCandidates(reviews, timestamp);
+      candidates = mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates);
+    } catch (error) {
+      embeddingMeta = { error: error instanceof Error ? error.message : String(error), source: 'local-rule-batch', modelName: 'local-review-topic-v1', backend: 'rule-fallback', dimensions: 0, embeddedSentenceCount: 0 };
+      candidates = ruleCandidates;
+    }
+  }
+  const batchSource = embeddingMeta && !embeddingMeta.error ? 'local-embedding-batch' : 'local-rule-batch';
+  const modelName = embeddingMeta && !embeddingMeta.error ? embeddingMeta.modelName : 'local-review-topic-v1';
+  const note = embeddingMeta?.error
+    ? `embedding unavailable, fell back to rules: ${embeddingMeta.error}`
+    : `manual local batch classification; backend=${embeddingMeta?.backend || 'rules'}; dimensions=${embeddingMeta?.dimensions || 0}`;
   const themeKeys = new Set(candidates.map((item) => item.themeId));
   const batchId = insertErrorThemeBatch({
     periodStart: from,
@@ -802,6 +1014,9 @@ ORDER BY date;`);
     occurrenceCount: candidates.length,
     themeCount: themeKeys.size,
     timestamp,
+    source: batchSource,
+    modelName,
+    note,
   });
   const themeIdMap = new Map();
   for (const candidate of candidates) {
@@ -810,10 +1025,24 @@ ORDER BY date;`);
     }
     const themeRowId = themeIdMap.get(candidate.themeId);
     runSqlite(`INSERT OR IGNORE INTO error_theme_occurrences (theme_id, batch_id, review_id, date, field, evidence, confidence, source, created_at)
-VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.reviewId)}, ${sqlString(candidate.date)}, ${sqlString(candidate.field)}, ${sqlString(candidate.evidence)}, ${sqlValue(candidate.confidence)}, 'local-model-batch', ${sqlString(timestamp)});`);
+VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.reviewId)}, ${sqlString(candidate.date)}, ${sqlString(candidate.field)}, ${sqlString(candidate.evidence)}, ${sqlValue(candidate.confidence)}, ${sqlString(candidate.source || batchSource)}, ${sqlString(timestamp)});`);
   }
   refreshErrorThemeStats();
-  return { batchId, periodStart: from, periodEnd: to, reviewCount: reviews.length, occurrenceCount: candidates.length, themeCount: themeKeys.size, modelName: 'local-review-topic-v1', completedAt: timestamp };
+  return {
+    batchId,
+    periodStart: from,
+    periodEnd: to,
+    reviewCount: reviews.length,
+    occurrenceCount: candidates.length,
+    themeCount: themeKeys.size,
+    modelName,
+    source: batchSource,
+    backend: embeddingMeta?.backend || 'rules',
+    dimensions: embeddingMeta?.dimensions || 0,
+    embeddedSentenceCount: embeddingMeta?.embeddedSentenceCount || 0,
+    fallbackReason: embeddingMeta?.error || '',
+    completedAt: timestamp,
+  };
 }
 
 function getErrorThemePeriodSummary(periodStart, periodEnd, limit = 6) {
@@ -1230,6 +1459,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     createBackupFile('pre-error-themes', 'automatic backup before error theme library migration');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', '3', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 4) {
+    createBackupFile('pre-embeddings', 'automatic backup before local embedding tables migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '4', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
@@ -2145,6 +2380,13 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (req.url === '/api/error-themes/embedding/status' && req.method === 'GET') {
+    ensureSqliteStore();
+    const embeddingRows = Number(sqliteScalar('SELECT COUNT(*) FROM review_sentence_embeddings;') || 0);
+    sendJson(res, { ...getEmbeddingStatus(), embeddingRows, readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url?.startsWith('/api/error-themes/analysis') && req.method === 'GET') {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
@@ -2156,7 +2398,7 @@ ORDER BY project_id;`);
 
   if (req.url === '/api/error-themes/batch/run' && req.method === 'POST') {
     const body = await readJsonBody(req);
-    const result = runErrorThemeBatch(body.from || '1900-01-01', body.to || todayISO());
+    const result = runErrorThemeBatch(body.from || '1900-01-01', body.to || todayISO(), { mode: body.mode === 'rules' ? 'rules' : 'embedding' });
     sendJson(res, { ok: true, result, analysis: getErrorThemeAnalysis(body.from || '1900-01-01', body.to || todayISO()) });
     return;
   }

@@ -22,6 +22,7 @@ export const queryKeys = {
   statistics: ['server', 'statistics'] as const,
   reports: ['server', 'reports'] as const,
   errorThemes: (from?: string, to?: string) => ['server', 'error-themes', from ?? '', to ?? ''] as const,
+  embeddingStatus: ['server', 'error-themes', 'embedding-status'] as const,
   reviews: (from?: string, to?: string, limit?: number, offset?: number) => ['server', 'reviews', from ?? '', to ?? '', limit ?? 0, offset ?? 0] as const,
   studyRecords: (date: string) => ['server', 'study-records', date] as const,
   mockExams: (subjectId: number | 'all', limit: number, offset: number) => ['server', 'mock-exams', subjectId, limit, offset] as const,

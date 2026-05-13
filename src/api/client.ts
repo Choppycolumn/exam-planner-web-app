@@ -127,7 +127,24 @@ export interface ErrorThemeBatchResult {
   occurrenceCount: number;
   themeCount: number;
   modelName: string;
+  source: string;
+  backend: string;
+  dimensions: number;
+  embeddedSentenceCount: number;
+  fallbackReason: string;
   completedAt: string;
+}
+
+export interface EmbeddingStatus {
+  available: boolean;
+  backend: string;
+  modelName: string;
+  cacheDir: string;
+  workerFile: string;
+  python: string | null;
+  error: string;
+  embeddingRows: number;
+  readOnly?: boolean;
 }
 
 export interface ErrorThemeAnalysis {
@@ -275,7 +292,8 @@ export const serverApi = {
     const query = params.toString();
     return apiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`);
   },
-  runErrorThemeBatch: (from?: string, to?: string) =>
-    apiRequest<{ ok: true; result: ErrorThemeBatchResult; analysis: ErrorThemeAnalysis }>('/error-themes/batch/run', { method: 'POST', body: { from, to } }),
+  getEmbeddingStatus: () => apiRequest<EmbeddingStatus>('/error-themes/embedding/status'),
+  runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding') =>
+    apiRequest<{ ok: true; result: ErrorThemeBatchResult; analysis: ErrorThemeAnalysis }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode } }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

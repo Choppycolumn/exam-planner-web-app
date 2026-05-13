@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
-import { serverApi, type ErrorThemeAnalysis } from '../api/client';
+import { serverApi, type EmbeddingStatus, type ErrorThemeAnalysis } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { ChartBox, ReviewTrendChart } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
@@ -35,6 +35,18 @@ const emptyErrorThemeAnalysis: ErrorThemeAnalysis = {
   readOnly: false,
 };
 
+const emptyEmbeddingStatus: EmbeddingStatus = {
+  available: false,
+  backend: 'unavailable',
+  modelName: 'BAAI/bge-small-zh-v1.5',
+  cacheDir: '',
+  workerFile: '',
+  python: null,
+  error: '',
+  embeddingRows: 0,
+  readOnly: false,
+};
+
 export function ReviewInsightsPage() {
   const [page, setPage] = useState(1);
   const [problemRange, setProblemRange] = useState<ProblemRange>('30');
@@ -49,6 +61,11 @@ export function ReviewInsightsPage() {
     queryKey: queryKeys.errorThemes(problemStart, problemEnd),
     queryFn: () => serverApi.getErrorThemeAnalysis(problemStart, problemEnd),
     placeholderData: emptyErrorThemeAnalysis,
+  });
+  const { data: embeddingStatus = emptyEmbeddingStatus } = useQuery({
+    queryKey: queryKeys.embeddingStatus,
+    queryFn: serverApi.getEmbeddingStatus,
+    placeholderData: emptyEmbeddingStatus,
   });
   const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
   const trend = getReviewTrend(trendReviews, 30);
@@ -65,10 +82,12 @@ export function ReviewInsightsPage() {
     if (readOnly) return;
     setBatchLoading(true);
     try {
-      const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd);
+      const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd, 'embedding');
       queryClient.setQueryData(queryKeys.errorThemes(problemStart, problemEnd), result.analysis);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.embeddingStatus });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
-      setToast(`批处理完成：识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据`);
+      const modeLabel = result.result.source === 'local-embedding-batch' ? 'embedding' : '规则兜底';
+      setToast(`批处理完成：${modeLabel} 识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据`);
     } catch {
       setToast('批处理失败，请稍后重试');
     } finally {
@@ -93,7 +112,7 @@ export function ReviewInsightsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">错误主题库分析</h2>
-            <p className="mt-1 text-sm text-slate-500">批处理会把复盘里的证据句写入错误主题库，下面的统计只从主题库读取。</p>
+            <p className="mt-1 text-sm text-slate-500">本地 embedding 会先把复盘句子转成语义向量，再写入错误主题库；不可用时自动规则兜底。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -111,15 +130,27 @@ export function ReviewInsightsPage() {
             </div>
             <button className="btn btn-primary" disabled={readOnly || batchLoading} onClick={() => void runBatch()}>
               <RefreshCw size={16} className={batchLoading ? 'animate-spin' : ''} />
-              手动开始本地模型批处理
+              手动开始本地 embedding 批处理
             </button>
           </div>
+        </div>
+
+        <div className={`mt-4 rounded-lg border p-4 ${embeddingStatus.available ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold">本地 embedding 模型：{embeddingStatus.available ? '可用' : '未就绪，批处理会规则兜底'}</p>
+            <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold">{embeddingStatus.embeddingRows} 条向量已落库</span>
+          </div>
+          <p className="mt-2 text-xs leading-5">
+            模型：{embeddingStatus.modelName}，后端：{embeddingStatus.backend}
+            {embeddingStatus.error ? `，状态：${embeddingStatus.error}` : ''}
+          </p>
         </div>
 
         {errorThemeAnalysis.latestBatch ? (
           <p className="mt-3 text-xs text-slate-500">
             最近批处理：{new Date(errorThemeAnalysis.latestBatch.completedAt || errorThemeAnalysis.latestBatch.createdAt).toLocaleString()}，
-            范围 {errorThemeAnalysis.latestBatch.periodStart} 至 {errorThemeAnalysis.latestBatch.periodEnd}。
+            范围 {errorThemeAnalysis.latestBatch.periodStart} 至 {errorThemeAnalysis.latestBatch.periodEnd}，
+            来源 {errorThemeAnalysis.latestBatch.source}。
           </p>
         ) : null}
 
