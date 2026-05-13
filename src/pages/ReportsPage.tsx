@@ -131,10 +131,31 @@ export function ReportsPage() {
                   </ul>
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">下期建议</h3>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
-                    {selectedReport.suggestions.map((item) => <li key={item}>{item}</li>)}
-                  </ul>
+                  <h3 className="text-sm font-semibold text-slate-900">共性错误总结</h3>
+                  {selectedReport.commonProblems?.length ? (
+                    <div className="mt-3 space-y-3">
+                      {selectedReport.commonProblems.map((problem) => (
+                        <article key={problem.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-rose-800">{problem.label}</p>
+                            <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">{problem.count} 天提到</span>
+                          </div>
+                          <p className="mt-2 text-xs leading-5 text-rose-700">出现日期：{problem.dates.join('、')}</p>
+                          <div className="mt-2 space-y-2">
+                            {problem.examples.map((example) => (
+                              <p key={`${example.date}-${example.field}-${example.text}`} className="rounded bg-white/80 p-2 text-xs leading-5 text-slate-600">
+                                <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.text}
+                              </p>
+                            ))}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-500">
+                      本周期未识别到反复出现的共性问题。刷新报告后会按复盘文字重新统计。
+                    </p>
+                  )}
                 </div>
               </div>
             </section>

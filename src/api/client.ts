@@ -1,4 +1,5 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
+import type { CommonProblemSummary } from '../types/reports';
 import { invalidateServerQueries } from './queryClient';
 
 export interface ServerState {
@@ -111,6 +112,7 @@ export interface LearningReport {
   };
   highlights: string[];
   suggestions: string[];
+  commonProblems?: CommonProblemSummary[];
   dailyTotals: Array<{ date: string; minutes: number }>;
   projectTotals: Array<{ name: string; minutes: number }>;
   reviews: Array<{ date: string; score: number; summary: string; wins: string; problems: string; tomorrowPlan: string }>;
