@@ -354,6 +354,44 @@ CREATE TABLE IF NOT EXISTS learning_reports (
   updated_at TEXT NOT NULL,
   UNIQUE(kind, period_start, period_end)
 );
+CREATE TABLE IF NOT EXISTS error_theme_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL DEFAULT 'local-model-batch',
+  model_name TEXT NOT NULL DEFAULT 'local-review-topic-v1',
+  period_start TEXT NOT NULL,
+  period_end TEXT NOT NULL,
+  review_count INTEGER NOT NULL DEFAULT 0,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  theme_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'completed',
+  created_at TEXT NOT NULL,
+  completed_at TEXT,
+  note TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS error_themes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  normalized_label TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL,
+  first_seen_at TEXT,
+  last_seen_at TEXT,
+  occurrence_count INTEGER NOT NULL DEFAULT 0,
+  review_day_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS error_theme_occurrences (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  theme_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL,
+  review_id INTEGER NOT NULL,
+  date TEXT NOT NULL,
+  field TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.6,
+  source TEXT NOT NULL DEFAULT 'local-model-batch',
+  created_at TEXT NOT NULL,
+  UNIQUE(theme_id, review_id, field, evidence)
+);
 CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
@@ -368,7 +406,11 @@ CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date_id ON mock_exam_re
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_visible ON short_term_tasks(is_completed, urgency, due_date);
 CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
-CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);`);
+CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
+CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
+CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
+CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_batch ON error_theme_occurrences(batch_id);`);
 }
 
 function insertRowsSql(table, columns, rows) {
@@ -660,6 +702,205 @@ function buildReviewProblemSummary(reviews, limit = 6) {
     .slice(0, limit);
 }
 
+function splitReviewSentences(text) {
+  return String(text || '')
+    .split(/[。！？!?；;\n\r]+/)
+    .map((item) => compactText(item, 120))
+    .filter((item) => item.length >= 2);
+}
+
+function keywordMatches(text, keywords) {
+  const normalized = String(text || '').toLowerCase();
+  return keywords.filter((keyword) => normalized.includes(String(keyword).toLowerCase()));
+}
+
+function looksLikeResolvedStatement(text, keyword) {
+  const normalized = String(text || '').toLowerCase();
+  const normalizedKeyword = String(keyword).toLowerCase();
+  const index = normalized.indexOf(normalizedKeyword);
+  if (index < 0) return false;
+  const prefix = normalized.slice(Math.max(0, index - 5), index);
+  return /(没有|沒|未|不再|无|避免了|克服了|减少了|改善了)/.test(prefix);
+}
+
+function classifyReviewSegment(segment, fieldKey) {
+  const candidates = [];
+  for (const theme of reviewProblemThemes) {
+    const matches = keywordMatches(segment, theme.keywords)
+      .filter((keyword) => !looksLikeResolvedStatement(segment, keyword));
+    if (!matches.length) continue;
+    const fieldWeight = fieldKey === 'problems' ? 0.16 : fieldKey === 'tomorrowPlan' ? 0.08 : 0;
+    const confidence = Math.min(0.96, Math.round((0.5 + fieldWeight + matches.length * 0.12) * 100) / 100);
+    candidates.push({ theme, confidence, matchedKeywords: matches });
+  }
+  return candidates.sort((a, b) => b.confidence - a.confidence)[0] || null;
+}
+
+function extractReviewProblemCandidates(review) {
+  const fields = [
+    { key: 'problems', label: '今日问题' },
+    { key: 'summary', label: '今日总结' },
+    { key: 'tomorrowPlan', label: '明日计划' },
+  ];
+  const candidates = [];
+  for (const field of fields) {
+    for (const sentence of splitReviewSentences(review[field.key])) {
+      const matched = classifyReviewSegment(sentence, field.key);
+      if (!matched) continue;
+      candidates.push({
+        reviewId: Number(review.id),
+        date: review.date,
+        themeId: matched.theme.id,
+        label: matched.theme.label,
+        field: field.label,
+        evidence: sentence,
+        confidence: matched.confidence,
+      });
+    }
+  }
+  return candidates;
+}
+
+function upsertErrorTheme(themeId, label, timestamp) {
+  runSqlite(`INSERT INTO error_themes (normalized_label, label, created_at, updated_at)
+VALUES (${sqlString(themeId)}, ${sqlString(label)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
+ON CONFLICT(normalized_label) DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at;`);
+  return Number(sqliteScalar(`SELECT id FROM error_themes WHERE normalized_label = ${sqlString(themeId)} LIMIT 1;`) || 0);
+}
+
+function refreshErrorThemeStats() {
+  runSqlite(`UPDATE error_themes
+SET
+  occurrence_count = (SELECT COUNT(*) FROM error_theme_occurrences WHERE theme_id = error_themes.id),
+  review_day_count = (SELECT COUNT(DISTINCT date) FROM error_theme_occurrences WHERE theme_id = error_themes.id),
+  first_seen_at = (SELECT MIN(date) FROM error_theme_occurrences WHERE theme_id = error_themes.id),
+  last_seen_at = (SELECT MAX(date) FROM error_theme_occurrences WHERE theme_id = error_themes.id),
+  updated_at = ${sqlString(nowISO())};`);
+}
+
+function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp }) {
+  runSqlite(`INSERT INTO error_theme_batches (source, model_name, period_start, period_end, review_count, occurrence_count, theme_count, status, created_at, completed_at, note)
+VALUES ('local-model-batch', 'local-review-topic-v1', ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, 'completed', ${sqlString(timestamp)}, ${sqlString(timestamp)}, 'manual or scheduled local batch classification');`);
+  return Number(sqliteScalar(`SELECT id FROM error_theme_batches WHERE created_at = ${sqlString(timestamp)} ORDER BY id DESC LIMIT 1;`) || 0);
+}
+
+function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO()) {
+  ensureSqliteStore();
+  const timestamp = nowISO();
+  const from = periodStart || '1900-01-01';
+  const to = periodEnd || todayISO();
+  const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan
+FROM daily_reviews
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+ORDER BY date;`);
+  const candidates = reviews.flatMap(extractReviewProblemCandidates);
+  const themeKeys = new Set(candidates.map((item) => item.themeId));
+  const batchId = insertErrorThemeBatch({
+    periodStart: from,
+    periodEnd: to,
+    reviewCount: reviews.length,
+    occurrenceCount: candidates.length,
+    themeCount: themeKeys.size,
+    timestamp,
+  });
+  const themeIdMap = new Map();
+  for (const candidate of candidates) {
+    if (!themeIdMap.has(candidate.themeId)) {
+      themeIdMap.set(candidate.themeId, upsertErrorTheme(candidate.themeId, candidate.label, timestamp));
+    }
+    const themeRowId = themeIdMap.get(candidate.themeId);
+    runSqlite(`INSERT OR IGNORE INTO error_theme_occurrences (theme_id, batch_id, review_id, date, field, evidence, confidence, source, created_at)
+VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.reviewId)}, ${sqlString(candidate.date)}, ${sqlString(candidate.field)}, ${sqlString(candidate.evidence)}, ${sqlValue(candidate.confidence)}, 'local-model-batch', ${sqlString(timestamp)});`);
+  }
+  refreshErrorThemeStats();
+  return { batchId, periodStart: from, periodEnd: to, reviewCount: reviews.length, occurrenceCount: candidates.length, themeCount: themeKeys.size, modelName: 'local-review-topic-v1', completedAt: timestamp };
+}
+
+function getErrorThemePeriodSummary(periodStart, periodEnd, limit = 6) {
+  const themes = sqliteJson(`SELECT t.id, t.normalized_label AS normalizedLabel, t.label, COUNT(o.id) AS count, COUNT(DISTINCT o.date) AS days
+FROM error_themes t
+JOIN error_theme_occurrences o ON o.theme_id = t.id
+WHERE o.date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+GROUP BY t.id
+ORDER BY days DESC, count DESC, MAX(o.date) DESC, t.label
+LIMIT ${Number(limit)};`);
+  return themes.map((theme) => {
+    const dates = sqliteJson(`SELECT DISTINCT date FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(theme.id)} AND date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+ORDER BY date;`).map((item) => item.date);
+    const examples = sqliteJson(`SELECT date, field, evidence AS text FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(theme.id)} AND date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+ORDER BY date DESC, confidence DESC, id DESC
+LIMIT 3;`);
+    return {
+      id: theme.normalizedLabel,
+      label: theme.label,
+      count: Number(theme.days || 0),
+      dates,
+      keywords: reviewProblemThemes.find((item) => item.id === theme.normalizedLabel)?.keywords || [],
+      examples,
+    };
+  });
+}
+
+function getErrorThemeAnalysis(periodStart = '1900-01-01', periodEnd = todayISO()) {
+  ensureSqliteStore();
+  const from = periodStart || '1900-01-01';
+  const to = periodEnd || todayISO();
+  const latestBatch = sqliteJson(`SELECT id, source, model_name AS modelName, period_start AS periodStart, period_end AS periodEnd,
+review_count AS reviewCount, occurrence_count AS occurrenceCount, theme_count AS themeCount, status, created_at AS createdAt, completed_at AS completedAt, note
+FROM error_theme_batches
+ORDER BY created_at DESC, id DESC
+LIMIT 1;`)[0] || null;
+  const themes = sqliteJson(`SELECT t.id, t.normalized_label AS normalizedLabel, t.label,
+COUNT(o.id) AS occurrenceCount,
+COUNT(DISTINCT o.date) AS reviewDayCount,
+ROUND(AVG(o.confidence), 2) AS averageConfidence,
+MIN(o.date) AS firstSeenAt,
+MAX(o.date) AS lastSeenAt
+FROM error_themes t
+JOIN error_theme_occurrences o ON o.theme_id = t.id
+WHERE o.date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+GROUP BY t.id
+ORDER BY reviewDayCount DESC, occurrenceCount DESC, lastSeenAt DESC, t.label
+LIMIT 12;`);
+  const enrichedThemes = themes.map((theme) => ({
+    id: Number(theme.id),
+    normalizedLabel: theme.normalizedLabel,
+    label: theme.label,
+    occurrenceCount: Number(theme.occurrenceCount || 0),
+    reviewDayCount: Number(theme.reviewDayCount || 0),
+    averageConfidence: Number(theme.averageConfidence || 0),
+    firstSeenAt: theme.firstSeenAt,
+    lastSeenAt: theme.lastSeenAt,
+    examples: sqliteJson(`SELECT date, field, evidence, confidence FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(theme.id)} AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+ORDER BY date DESC, confidence DESC, id DESC
+LIMIT 3;`),
+  }));
+  const timeline = sqliteJson(`SELECT date, COUNT(*) AS count
+FROM error_theme_occurrences
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+GROUP BY date
+ORDER BY date;`).map((item) => ({ date: item.date, count: Number(item.count || 0) }));
+  const totals = sqliteJson(`SELECT COUNT(*) AS occurrenceCount, COUNT(DISTINCT theme_id) AS themeCount, COUNT(DISTINCT date) AS reviewDayCount
+FROM error_theme_occurrences
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`)[0] || { occurrenceCount: 0, themeCount: 0, reviewDayCount: 0 };
+  return {
+    periodStart: from,
+    periodEnd: to,
+    latestBatch,
+    summary: {
+      occurrenceCount: Number(totals.occurrenceCount || 0),
+      themeCount: Number(totals.themeCount || 0),
+      reviewDayCount: Number(totals.reviewDayCount || 0),
+      topTheme: enrichedThemes[0] || null,
+    },
+    themes: enrichedThemes,
+    timeline,
+  };
+}
+
 function buildReportTitle(kind, periodStart, periodEnd) {
   const label = kind === 'monthly' ? '月报' : '周报';
   return `${periodStart} 至 ${periodEnd} 学习${label}`;
@@ -720,7 +961,8 @@ WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)};`)[0] |
   if (taskCompletionRate !== null && taskCompletionRate < 60) suggestions.push('短期目标完成率偏低，下一周期建议减少同时推进的目标数量。');
   if (topProject && totalMinutes > 0 && Number(topProject.minutes) / totalMinutes > 0.7) suggestions.push('学习投入集中度较高，注意给薄弱科目保留固定时间块。');
   if (!suggestions.length) suggestions.push('节奏比较稳，下一周期继续保持记录、复盘和任务闭环。');
-  const commonProblems = buildReviewProblemSummary(reviews);
+  const themeLibraryProblems = getErrorThemePeriodSummary(periodStart, periodEnd);
+  const commonProblems = themeLibraryProblems.length ? themeLibraryProblems : buildReviewProblemSummary(reviews);
 
   return {
     kind,
@@ -982,6 +1224,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     createBackupFile('pre-reports', 'automatic backup before learning reports migration');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', '2', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 3) {
+    createBackupFile('pre-error-themes', 'automatic backup before error theme library migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '3', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
@@ -1897,6 +2145,22 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (req.url?.startsWith('/api/error-themes/analysis') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const from = requestUrl.searchParams.get('from') || '1900-01-01';
+    const to = requestUrl.searchParams.get('to') || todayISO();
+    sendJson(res, { ...getErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url === '/api/error-themes/batch/run' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const result = runErrorThemeBatch(body.from || '1900-01-01', body.to || todayISO());
+    sendJson(res, { ok: true, result, analysis: getErrorThemeAnalysis(body.from || '1900-01-01', body.to || todayISO()) });
+    return;
+  }
+
   if (req.url?.startsWith('/api/reports') && req.method === 'GET') {
     ensureSqliteStore();
     ensureAutomaticReports();
@@ -1905,6 +2169,7 @@ ORDER BY project_id;`);
   }
 
   if (req.url === '/api/reports/generate' && req.method === 'POST') {
+    ensureSqliteStore();
     const body = await readJsonBody(req);
     const kind = body.kind === 'monthly' ? 'monthly' : 'weekly';
     const period = body.period === 'previous' ? previousPeriod(kind) : currentPeriod(kind);

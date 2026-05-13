@@ -119,6 +119,57 @@ export interface LearningReport {
   exams: Array<{ date: string; subjectName: string; score: number; fullScore: number; paperName: string }>;
 }
 
+export interface ErrorThemeBatchResult {
+  batchId: number;
+  periodStart: string;
+  periodEnd: string;
+  reviewCount: number;
+  occurrenceCount: number;
+  themeCount: number;
+  modelName: string;
+  completedAt: string;
+}
+
+export interface ErrorThemeAnalysis {
+  periodStart: string;
+  periodEnd: string;
+  latestBatch: {
+    id: number;
+    source: string;
+    modelName: string;
+    periodStart: string;
+    periodEnd: string;
+    reviewCount: number;
+    occurrenceCount: number;
+    themeCount: number;
+    status: string;
+    createdAt: string;
+    completedAt: string | null;
+    note: string;
+  } | null;
+  summary: {
+    occurrenceCount: number;
+    themeCount: number;
+    reviewDayCount: number;
+    topTheme: ErrorThemeAnalysisTheme | null;
+  };
+  themes: ErrorThemeAnalysisTheme[];
+  timeline: Array<{ date: string; count: number }>;
+  readOnly?: boolean;
+}
+
+export interface ErrorThemeAnalysisTheme {
+  id: number;
+  normalizedLabel: string;
+  label: string;
+  occurrenceCount: number;
+  reviewDayCount: number;
+  averageConfidence: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  examples: Array<{ date: string; field: string; evidence: string; confidence: number }>;
+}
+
 type ApiOptions = {
   method?: string;
   body?: unknown;
@@ -217,5 +268,14 @@ export const serverApi = {
   getReports: () => apiRequest<{ reports: LearningReport[] }>('/reports'),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
     apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
+  getErrorThemeAnalysis: (from?: string, to?: string) => {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const query = params.toString();
+    return apiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`);
+  },
+  runErrorThemeBatch: (from?: string, to?: string) =>
+    apiRequest<{ ok: true; result: ErrorThemeBatchResult; analysis: ErrorThemeAnalysis }>('/error-themes/batch/run', { method: 'POST', body: { from, to } }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

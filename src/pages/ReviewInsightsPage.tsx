@@ -1,11 +1,15 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { RefreshCw } from 'lucide-react';
+import { serverApi, type ErrorThemeAnalysis } from '../api/client';
+import { queryClient, queryKeys } from '../api/queryClient';
 import { ChartBox, ReviewTrendChart } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
+import { Toast } from '../components/Toast';
 import { useReviewsData } from '../hooks/useReviewsData';
 import { dateRangeEndingToday, todayISO } from '../utils/date';
-import { getReviewProblemThemes } from '../utils/reviewProblems';
 import { getReviewAverageScore, getReviewTone, getReviewTrend } from '../utils/statistics';
 
 const reportPageSize = 10;
@@ -16,24 +20,62 @@ const problemRangeOptions = [
 ] as const;
 type ProblemRange = typeof problemRangeOptions[number]['value'];
 
+const emptyErrorThemeAnalysis: ErrorThemeAnalysis = {
+  periodStart: '1900-01-01',
+  periodEnd: todayISO(),
+  latestBatch: null,
+  summary: {
+    occurrenceCount: 0,
+    themeCount: 0,
+    reviewDayCount: 0,
+    topTheme: null,
+  },
+  themes: [],
+  timeline: [],
+  readOnly: false,
+};
+
 export function ReviewInsightsPage() {
   const [page, setPage] = useState(1);
   const [problemRange, setProblemRange] = useState<ProblemRange>('30');
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [toast, setToast] = useState('');
   const trendStart = dateRangeEndingToday(30)[0] ?? todayISO();
   const problemStart = problemRange === 'all' ? undefined : dateRangeEndingToday(Number(problemRange))[0] ?? todayISO();
   const problemEnd = problemRange === 'all' ? undefined : todayISO();
   const { reviews: trendReviews } = useReviewsData(trendStart, todayISO());
-  const { reviews: problemReviews } = useReviewsData(problemStart, problemEnd);
-  const { reviews: reportReviews, total } = useReviewsData(undefined, undefined, reportPageSize, (page - 1) * reportPageSize);
+  const { reviews: reportReviews, total, readOnly: reviewsReadOnly } = useReviewsData(undefined, undefined, reportPageSize, (page - 1) * reportPageSize);
+  const { data: errorThemeAnalysis = emptyErrorThemeAnalysis } = useQuery({
+    queryKey: queryKeys.errorThemes(problemStart, problemEnd),
+    queryFn: () => serverApi.getErrorThemeAnalysis(problemStart, problemEnd),
+    placeholderData: emptyErrorThemeAnalysis,
+  });
   const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
   const trend = getReviewTrend(trendReviews, 30);
-  const problemThemes = getReviewProblemThemes(problemReviews);
+  const readOnly = reviewsReadOnly || Boolean(errorThemeAnalysis.readOnly);
   const reviewedDays = total;
   const averageScore = reviewedDays
     ? Math.round((trendReviews.reduce((sum, review) => sum + getReviewAverageScore(review), 0) / Math.max(1, trendReviews.length)) * 10) / 10
     : 0;
   const bestReview = [...trendReviews].sort((a, b) => getReviewAverageScore(b) - getReviewAverageScore(a))[0];
   const totalPages = Math.max(1, Math.ceil(total / reportPageSize));
+  const maxTimelineCount = Math.max(1, ...errorThemeAnalysis.timeline.map((item) => item.count));
+
+  const runBatch = async () => {
+    if (readOnly) return;
+    setBatchLoading(true);
+    try {
+      const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd);
+      queryClient.setQueryData(queryKeys.errorThemes(problemStart, problemEnd), result.analysis);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
+      setToast(`批处理完成：识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据`);
+    } catch {
+      setToast('批处理失败，请稍后重试');
+    } finally {
+      setBatchLoading(false);
+      window.setTimeout(() => setToast(''), 2600);
+    }
+  };
 
   return (
     <Page title="复盘趋势" subtitle="从一段时间里看状态、满意度和每日复盘质量。">
@@ -50,45 +92,98 @@ export function ReviewInsightsPage() {
       <section className="mt-5 card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">问题主题统计</h2>
-            <p className="mt-1 text-sm text-slate-500">按复盘文字识别周期内反复出现的共性卡点。</p>
+            <h2 className="text-base font-semibold text-slate-900">错误主题库分析</h2>
+            <p className="mt-1 text-sm text-slate-500">批处理会把复盘里的证据句写入错误主题库，下面的统计只从主题库读取。</p>
           </div>
-          <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-            {problemRangeOptions.map((option) => (
-              <button
-                key={option.value}
-                className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
-                  problemRange === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800'
-                }`}
-                onClick={() => setProblemRange(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+              {problemRangeOptions.map((option) => (
+                <button
+                  key={option.value}
+                  className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
+                    problemRange === option.value ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                  onClick={() => setProblemRange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button className="btn btn-primary" disabled={readOnly || batchLoading} onClick={() => void runBatch()}>
+              <RefreshCw size={16} className={batchLoading ? 'animate-spin' : ''} />
+              手动开始本地模型批处理
+            </button>
           </div>
         </div>
 
-        {problemThemes.length ? (
-          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            {problemThemes.map((problem) => (
-              <article key={problem.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="font-semibold text-rose-800">{problem.label}</h3>
-                  <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">{problem.count} 天提到</span>
-                </div>
-                <p className="mt-2 text-xs leading-5 text-rose-700">出现日期：{problem.dates.join('、')}</p>
-                <div className="mt-3 space-y-2">
-                  {problem.examples.map((example) => (
-                    <p key={`${example.date}-${example.field}-${example.text}`} className="rounded bg-white/80 p-3 text-sm leading-6 text-slate-600">
-                      <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.text}
-                    </p>
-                  ))}
-                </div>
-              </article>
-            ))}
+        {errorThemeAnalysis.latestBatch ? (
+          <p className="mt-3 text-xs text-slate-500">
+            最近批处理：{new Date(errorThemeAnalysis.latestBatch.completedAt || errorThemeAnalysis.latestBatch.createdAt).toLocaleString()}，
+            范围 {errorThemeAnalysis.latestBatch.periodStart} 至 {errorThemeAnalysis.latestBatch.periodEnd}。
+          </p>
+        ) : null}
+
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold text-slate-500">主题数</p>
+            <p className="mt-2 text-xl font-semibold text-slate-950">{errorThemeAnalysis.summary.themeCount}</p>
           </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold text-slate-500">证据句</p>
+            <p className="mt-2 text-xl font-semibold text-slate-950">{errorThemeAnalysis.summary.occurrenceCount}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold text-slate-500">涉及天数</p>
+            <p className="mt-2 text-xl font-semibold text-slate-950">{errorThemeAnalysis.summary.reviewDayCount}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold text-slate-500">最高频问题</p>
+            <p className="mt-2 line-clamp-1 text-base font-semibold text-slate-950">{errorThemeAnalysis.summary.topTheme?.label ?? '暂无'}</p>
+          </div>
+        </div>
+
+        {errorThemeAnalysis.themes.length ? (
+          <>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              {errorThemeAnalysis.themes.map((problem) => (
+                <article key={problem.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="font-semibold text-rose-800">{problem.label}</h3>
+                    <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">
+                      {problem.reviewDayCount} 天 / {problem.occurrenceCount} 条
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-rose-700">
+                    首次：{problem.firstSeenAt}，最近：{problem.lastSeenAt}，平均置信度 {Math.round(problem.averageConfidence * 100)}%
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {problem.examples.map((example) => (
+                      <p key={`${problem.id}-${example.date}-${example.field}-${example.evidence}`} className="rounded bg-white/80 p-3 text-sm leading-6 text-slate-600">
+                        <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.evidence}
+                      </p>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
+              <h3 className="text-sm font-semibold text-slate-900">周期内错误密度</h3>
+              <div className="mt-3 space-y-2">
+                {errorThemeAnalysis.timeline.map((item) => (
+                  <div key={item.date} className="grid grid-cols-[88px_1fr_40px] items-center gap-3 text-sm">
+                    <span className="text-slate-500">{item.date.slice(5)}</span>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-rose-400" style={{ width: `${Math.max(8, (item.count / maxTimelineCount) * 100)}%` }} />
+                    </div>
+                    <span className="text-right font-semibold text-slate-700">{item.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
         ) : (
-          <EmptyState title="暂无反复出现的问题主题" description="这里只做共性错误统计，不生成建议；复盘文字越具体，识别越稳定。" />
+          <EmptyState title="错误主题库暂无数据" description="点击“手动开始本地模型批处理”后，系统会把历史复盘里的共性错误写入主题库。" />
         )}
       </section>
 
@@ -136,6 +231,7 @@ export function ReviewInsightsPage() {
           </div>
         ) : null}
       </div>
+      <Toast message={toast} />
     </Page>
   );
 }
