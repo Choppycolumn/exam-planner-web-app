@@ -125,6 +125,8 @@ export interface ErrorThemeBatchResult {
   periodEnd: string;
   reviewCount: number;
   occurrenceCount: number;
+  rawCandidateCount: number;
+  deduplicatedCount: number;
   themeCount: number;
   modelName: string;
   source: string;

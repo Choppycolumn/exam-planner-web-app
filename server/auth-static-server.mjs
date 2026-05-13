@@ -632,7 +632,7 @@ const reviewProblemThemes = [
   {
     id: 'attention',
     label: '注意力分散 / 拖延',
-    keywords: ['拖延', '拖拉', '分心', '走神', '浮躁', '静不下心', '手机', '短视频', '娱乐', '摸鱼', '专注度', '注意力', '控制不住'],
+    keywords: ['拖延', '拖拉', '分心', '走神', '浮躁', '静不下心', '手机', '短视频', '娱乐', '娱乐时间', '摸鱼', '专注度', '注意力', '控制不住', '微信', '小红书', '抖音', '视频号', 'b站', 'B站', 'bilibili', '刷视频', '刷手机', '刷了'],
   },
   {
     id: 'english-reading',
@@ -652,7 +652,7 @@ const reviewProblemThemes = [
   {
     id: 'planning',
     label: '计划执行 / 时间安排',
-    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '赶不上', '进度', '效率', '执行', '任务', '拖到'],
+    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '赶不上', '效率', '效率低', '效率低下', '效率不高', '执行', '任务', '拖到'],
   },
   {
     id: 'energy',
@@ -723,7 +723,7 @@ function buildReviewProblemSummary(reviews, limit = 6) {
 
 function splitReviewSentences(text) {
   return String(text || '')
-    .split(/[。！？!?；;\n\r]+/)
+    .split(/[。！？!?；;，,、\s\n\r]+/)
     .map((item) => compactText(item, 120))
     .filter((item) => item.length >= 2);
 }
@@ -781,7 +781,19 @@ function extractReviewProblemSegments(reviews) {
 
 function hasProblemCue(segment, fieldKey) {
   if (fieldKey === 'problems') return true;
-  return /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡|低|差|难|困|熬夜|分心|浮躁|计划|执行|需要|改进|调整|补|复盘|提高|波动)/.test(String(segment || ''));
+  const text = String(segment || '');
+  const negativeCue = /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡住|卡了|低下|不高|较差|太差|难|困|熬夜|分心|浮躁|静不下心|抖音|微信|小红书|视频号|刷视频|刷手机|效率低|效率低下|效率不高)/;
+  if (fieldKey === 'tomorrowPlan') {
+    return negativeCue.test(text) || /(卸载|关闭|限制).*(抖音|微信|小红书|视频号|手机)/.test(text);
+  }
+  return negativeCue.test(text);
+}
+
+function isClearlyPositiveSegment(segment, fieldKey) {
+  if (fieldKey === 'problems') return false;
+  const text = String(segment || '');
+  const positiveCue = /(有进步|明显进步|做得不错|比较顺利|完成了|已完成|保持|稳定|掌握|按计划|效率提高|状态不错)/;
+  return positiveCue.test(text) && !hasProblemCue(text, fieldKey);
 }
 
 function extractRuleProblemCandidates(reviews) {
@@ -790,6 +802,7 @@ function extractRuleProblemCandidates(reviews) {
     for (const field of reviewProblemFields) {
       for (const sentence of splitReviewSentences(review[field.key])) {
         if (!hasProblemCue(sentence, field.key)) continue;
+        if (isClearlyPositiveSegment(sentence, field.key)) continue;
         const matched = classifyReviewSegment(sentence, field.key);
         if (!matched) continue;
         candidates.push({
@@ -896,9 +909,9 @@ function themeSeedText(theme) {
 }
 
 function semanticThresholdForField(fieldKey, hasCue) {
-  if (fieldKey === 'problems') return 0.42;
-  if (fieldKey === 'tomorrowPlan') return hasCue ? 0.48 : 0.6;
-  return hasCue ? 0.52 : 0.64;
+  if (fieldKey === 'problems') return hasCue ? 0.68 : 0.76;
+  if (fieldKey === 'tomorrowPlan') return hasCue ? 0.74 : 0.82;
+  return hasCue ? 0.78 : 0.86;
 }
 
 function extractEmbeddingProblemCandidates(reviews, timestamp) {
@@ -920,17 +933,25 @@ function extractEmbeddingProblemCandidates(reviews, timestamp) {
   segments.forEach((segment, index) => {
     const vector = segmentVectors[index];
     if (!vector) return;
+    if (!hasProblemCue(segment.sentence, segment.fieldKey)) return;
+    if (isClearlyPositiveSegment(segment.sentence, segment.fieldKey)) return;
+    if (classifyReviewSegment(segment.sentence, segment.fieldKey)) return;
     let best = null;
+    let secondBest = null;
     seedVectors.forEach((seedVector, seedIndex) => {
       const similarity = cosineSimilarity(vector, seedVector);
       if (!best || similarity > best.similarity) {
+        secondBest = best;
         best = { similarity, theme: reviewProblemThemes[seedIndex] };
+      } else if (!secondBest || similarity > secondBest.similarity) {
+        secondBest = { similarity, theme: reviewProblemThemes[seedIndex] };
       }
     });
     if (!best) return;
     const cue = hasProblemCue(segment.sentence, segment.fieldKey);
     const threshold = semanticThresholdForField(segment.fieldKey, cue);
     if (best.similarity < threshold) return;
+    if (secondBest && best.similarity - secondBest.similarity < 0.035) return;
     candidates.push({
       reviewId: segment.reviewId,
       date: segment.date,
@@ -949,12 +970,36 @@ function mergeProblemCandidates(primary, secondary) {
   const seen = new Set();
   const merged = [];
   for (const candidate of [...primary, ...secondary]) {
-    const key = `${candidate.themeId}|${candidate.reviewId}|${candidate.field}|${candidate.evidence}`;
+    const key = `${candidate.themeId}|${candidate.reviewId}|${String(candidate.evidence || '').replace(/\s+/g, '')}`;
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(candidate);
   }
   return merged;
+}
+
+function candidateRank(candidate) {
+  const fieldRank = candidate.field === '今日问题' ? 30 : candidate.field === '明日计划' ? 20 : 10;
+  const sourceRank = candidate.source === 'local-rule-batch' ? 3 : 1;
+  return fieldRank + sourceRank + Number(candidate.confidence || 0);
+}
+
+function dedupeProblemCandidates(candidates) {
+  const grouped = new Map();
+  for (const candidate of candidates) {
+    const key = `${candidate.themeId}|${candidate.reviewId}`;
+    const current = grouped.get(key);
+    if (!current || candidateRank(candidate) > candidateRank(current)) {
+      grouped.set(key, candidate);
+    }
+  }
+  return Array.from(grouped.values());
+}
+
+function clearGeneratedErrorThemeOccurrences(periodStart, periodEnd) {
+  runSqlite(`DELETE FROM error_theme_occurrences
+WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
+  AND source IN ('local-embedding-batch', 'local-rule-batch', 'local-model-batch');`);
 }
 
 function upsertErrorTheme(themeId, label, timestamp) {
@@ -1001,6 +1046,9 @@ ORDER BY date;`);
       candidates = ruleCandidates;
     }
   }
+  const rawCandidateCount = candidates.length;
+  candidates = dedupeProblemCandidates(candidates);
+  clearGeneratedErrorThemeOccurrences(from, to);
   const batchSource = embeddingMeta && !embeddingMeta.error ? 'local-embedding-batch' : 'local-rule-batch';
   const modelName = embeddingMeta && !embeddingMeta.error ? embeddingMeta.modelName : 'local-review-topic-v1';
   const note = embeddingMeta?.error
@@ -1034,6 +1082,8 @@ VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.revi
     periodEnd: to,
     reviewCount: reviews.length,
     occurrenceCount: candidates.length,
+    rawCandidateCount,
+    deduplicatedCount: Math.max(0, rawCandidateCount - candidates.length),
     themeCount: themeKeys.size,
     modelName,
     source: batchSource,

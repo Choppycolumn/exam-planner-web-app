@@ -87,7 +87,7 @@ export function ReviewInsightsPage() {
       await queryClient.invalidateQueries({ queryKey: queryKeys.embeddingStatus });
       await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
       const modeLabel = result.result.source === 'local-embedding-batch' ? 'embedding' : '规则兜底';
-      setToast(`批处理完成：${modeLabel} 识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据`);
+      setToast(`批处理完成：${modeLabel} 识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据，合并重复 ${result.result.deduplicatedCount} 条`);
     } catch {
       setToast('批处理失败，请稍后重试');
     } finally {
