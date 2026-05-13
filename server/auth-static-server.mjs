@@ -647,12 +647,12 @@ const reviewProblemThemes = [
   {
     id: 'math-errors',
     label: '数学错题 / 概念计算',
-    keywords: ['数学', '高数', '高等数学', '线代', '线性代数', '概率', '错题', '计算错误', '计算', '公式', '概念', '题错'],
+    keywords: ['数学错', '高数错', '线代错', '线性代数错', '概率错', '错题', '错太多', '做错', '算错', '计算错误', '计算失误', '公式', '概念', '题错', '不会做', '不会算'],
   },
   {
     id: 'planning',
     label: '计划执行 / 时间安排',
-    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '赶不上', '效率', '效率低', '效率低下', '效率不高', '执行', '任务', '拖到'],
+    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '没看', '没学', '没做', '没复习', '没开始', '没推进', '没碰', '赶不上', '效率', '效率低', '效率低下', '效率不高', '执行', '任务', '拖到'],
   },
   {
     id: 'energy',
@@ -743,8 +743,15 @@ function looksLikeResolvedStatement(text, keyword) {
 }
 
 function classifyReviewSegment(segment, fieldKey) {
+  const normalizedSegment = String(segment || '');
+  const planningTheme = reviewProblemThemes.find((theme) => theme.id === 'planning');
+  if (planningTheme && isStudyNotDoneSegment(normalizedSegment)) {
+    const fieldWeight = fieldKey === 'problems' ? 0.16 : fieldKey === 'tomorrowPlan' ? 0.08 : 0;
+    return { theme: planningTheme, confidence: Math.min(0.96, 0.78 + fieldWeight), matchedKeywords: ['没看'] };
+  }
   const candidates = [];
   for (const theme of reviewProblemThemes) {
+    if (theme.id === 'math-errors' && !isMathErrorSegment(normalizedSegment)) continue;
     const matches = keywordMatches(segment, theme.keywords)
       .filter((keyword) => !looksLikeResolvedStatement(segment, keyword));
     if (!matches.length) continue;
@@ -787,6 +794,20 @@ function hasProblemCue(segment, fieldKey) {
     return negativeCue.test(text) || /(卸载|关闭|限制).*(抖音|微信|小红书|视频号|手机)/.test(text);
   }
   return negativeCue.test(text);
+}
+
+function isStudyNotDoneSegment(segment) {
+  const text = String(segment || '');
+  const subjectPattern = /(高数|高等数学|线代|线性代数|概率|数学|英语阅读|阅读|专业课|政治|单词|真题|错题|课程)/;
+  const notDonePattern = /(没看|没学|没做|没复习|没开始|没推进|没碰|没刷|没练|未看|未学|未做|未复习|未开始|未推进)/;
+  return (subjectPattern.test(text) && notDonePattern.test(text)) || /(又没看|还是没看|还没看|没怎么看|没来得及看)/.test(text);
+}
+
+function isMathErrorSegment(segment) {
+  const text = String(segment || '');
+  const mathSubjectPattern = /(数学|高数|高等数学|线代|线性代数|概率)/;
+  const mathErrorPattern = /(错|计算|算错|公式|概念|题|不会做|不会算|证明|推导)/;
+  return /(计算错误|计算失误|错题|错太多|题错|算错)/.test(text) || (mathSubjectPattern.test(text) && mathErrorPattern.test(text));
 }
 
 function isClearlyPositiveSegment(segment, fieldKey) {
