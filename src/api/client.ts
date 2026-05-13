@@ -137,6 +137,24 @@ export interface ErrorThemeBatchResult {
   completedAt: string;
 }
 
+export interface ErrorThemeBatchJob {
+  id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  periodStart: string;
+  periodEnd: string;
+  mode: string;
+  trigger: string;
+  startedAt: string;
+  completedAt: string | null;
+  result: ErrorThemeBatchResult | null;
+  error: string;
+}
+
+export interface ErrorThemeOption {
+  id: string;
+  label: string;
+}
+
 export interface EmbeddingStatus {
   available: boolean;
   backend: string;
@@ -186,7 +204,7 @@ export interface ErrorThemeAnalysisTheme {
   averageConfidence: number;
   firstSeenAt: string;
   lastSeenAt: string;
-  examples: Array<{ date: string; field: string; evidence: string; confidence: number }>;
+  examples: Array<{ occurrenceId: number; date: string; field: string; evidence: string; confidence: number; source: string }>;
 }
 
 type ApiOptions = {
@@ -295,7 +313,19 @@ export const serverApi = {
     return apiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`);
   },
   getEmbeddingStatus: () => apiRequest<EmbeddingStatus>('/error-themes/embedding/status'),
+  getErrorThemeOptions: () => apiRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('/error-themes/options'),
+  getErrorThemeBatchStatus: () => apiRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('/error-themes/batch/status'),
   runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding') =>
-    apiRequest<{ ok: true; result: ErrorThemeBatchResult; analysis: ErrorThemeAnalysis }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode } }),
+    apiRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode } }),
+  saveErrorThemeCorrection: (body: {
+    occurrenceId: number;
+    sentence: string;
+    action: 'relabel' | 'ignore';
+    targetThemeKey?: string;
+    sourceThemeKey?: string;
+    sourceLabel?: string;
+    from?: string;
+    to?: string;
+  }) => apiRequest<{ ok: true; analysis: ErrorThemeAnalysis }>('/error-themes/corrections/save', { method: 'POST', body }),
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

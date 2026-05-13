@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, X } from 'lucide-react';
 import { serverApi, type EmbeddingStatus, type ErrorThemeAnalysis } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { ChartBox, ReviewTrendChart } from '../components/Charts';
@@ -67,6 +67,20 @@ export function ReviewInsightsPage() {
     queryFn: serverApi.getEmbeddingStatus,
     placeholderData: emptyEmbeddingStatus,
   });
+  const { data: themeOptionsData = { themes: [] } } = useQuery({
+    queryKey: queryKeys.errorThemeOptions,
+    queryFn: serverApi.getErrorThemeOptions,
+    placeholderData: { themes: [] },
+  });
+  const { data: batchStatus = { job: null } } = useQuery({
+    queryKey: queryKeys.errorThemeBatchStatus,
+    queryFn: serverApi.getErrorThemeBatchStatus,
+    refetchInterval: (query) => {
+      const status = query.state.data?.job?.status;
+      return status === 'queued' || status === 'running' ? 5000 : false;
+    },
+    placeholderData: { job: null },
+  });
   const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
   const trend = getReviewTrend(trendReviews, 30);
   const readOnly = reviewsReadOnly || Boolean(errorThemeAnalysis.readOnly);
@@ -77,22 +91,69 @@ export function ReviewInsightsPage() {
   const bestReview = [...trendReviews].sort((a, b) => getReviewAverageScore(b) - getReviewAverageScore(a))[0];
   const totalPages = Math.max(1, Math.ceil(total / reportPageSize));
   const maxTimelineCount = Math.max(1, ...errorThemeAnalysis.timeline.map((item) => item.count));
+  const activeJob = batchStatus.job?.status === 'queued' || batchStatus.job?.status === 'running' ? batchStatus.job : null;
 
   const runBatch = async () => {
     if (readOnly) return;
     setBatchLoading(true);
     try {
       const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd, 'embedding');
-      queryClient.setQueryData(queryKeys.errorThemes(problemStart, problemEnd), result.analysis);
-      await queryClient.invalidateQueries({ queryKey: queryKeys.embeddingStatus });
-      await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
-      const modeLabel = result.result.source === 'local-embedding-batch' ? 'embedding' : '规则兜底';
-      setToast(`批处理完成：${modeLabel} 识别 ${result.result.themeCount} 类，生成 ${result.result.occurrenceCount} 条证据，合并重复 ${result.result.deduplicatedCount} 条`);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.errorThemeBatchStatus });
+      setToast(result.started ? '后台批处理已开始，完成后会自动刷新报告' : '已有批处理正在运行');
     } catch {
       setToast('批处理失败，请稍后重试');
     } finally {
       setBatchLoading(false);
       window.setTimeout(() => setToast(''), 2600);
+    }
+  };
+
+  const refreshAfterCorrection = async (analysis?: ErrorThemeAnalysis) => {
+    if (analysis) queryClient.setQueryData(queryKeys.errorThemes(problemStart, problemEnd), analysis);
+    await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.errorThemes(problemStart, problemEnd) });
+  };
+
+  const relabelExample = async (problemLabel: string, problemKey: string, example: ErrorThemeAnalysis['themes'][number]['examples'][number], targetThemeKey: string) => {
+    if (readOnly || !targetThemeKey || targetThemeKey === problemKey) return;
+    try {
+      const result = await serverApi.saveErrorThemeCorrection({
+        occurrenceId: example.occurrenceId,
+        sentence: example.evidence,
+        action: 'relabel',
+        targetThemeKey,
+        sourceThemeKey: problemKey,
+        sourceLabel: problemLabel,
+        from: problemStart,
+        to: problemEnd,
+      });
+      await refreshAfterCorrection(result.analysis);
+      setToast('分类已修正，并写入纠错样本库');
+    } catch {
+      setToast('修正失败，请稍后重试');
+    } finally {
+      window.setTimeout(() => setToast(''), 2400);
+    }
+  };
+
+  const ignoreExample = async (problemLabel: string, problemKey: string, example: ErrorThemeAnalysis['themes'][number]['examples'][number]) => {
+    if (readOnly) return;
+    try {
+      const result = await serverApi.saveErrorThemeCorrection({
+        occurrenceId: example.occurrenceId,
+        sentence: example.evidence,
+        action: 'ignore',
+        sourceThemeKey: problemKey,
+        sourceLabel: problemLabel,
+        from: problemStart,
+        to: problemEnd,
+      });
+      await refreshAfterCorrection(result.analysis);
+      setToast('这条证据已忽略，并写入纠错样本库');
+    } catch {
+      setToast('忽略失败，请稍后重试');
+    } finally {
+      window.setTimeout(() => setToast(''), 2400);
     }
   };
 
@@ -128,9 +189,9 @@ export function ReviewInsightsPage() {
                 </button>
               ))}
             </div>
-            <button className="btn btn-primary" disabled={readOnly || batchLoading} onClick={() => void runBatch()}>
-              <RefreshCw size={16} className={batchLoading ? 'animate-spin' : ''} />
-              手动开始本地 embedding 批处理
+            <button className="btn btn-primary" disabled={readOnly || batchLoading || Boolean(activeJob)} onClick={() => void runBatch()}>
+              <RefreshCw size={16} className={batchLoading || activeJob ? 'animate-spin' : ''} />
+              {activeJob ? '后台批处理中' : '手动开始本地 embedding 批处理'}
             </button>
           </div>
         </div>
@@ -151,6 +212,13 @@ export function ReviewInsightsPage() {
             最近批处理：{new Date(errorThemeAnalysis.latestBatch.completedAt || errorThemeAnalysis.latestBatch.createdAt).toLocaleString()}，
             范围 {errorThemeAnalysis.latestBatch.periodStart} 至 {errorThemeAnalysis.latestBatch.periodEnd}，
             来源 {errorThemeAnalysis.latestBatch.source}。
+          </p>
+        ) : null}
+        {batchStatus.job ? (
+          <p className="mt-2 text-xs text-slate-500">
+            后台任务：{batchStatus.job.status}
+            {batchStatus.job.result ? `，最近完成 ${batchStatus.job.result.occurrenceCount} 条证据` : ''}
+            {batchStatus.job.error ? `，错误：${batchStatus.job.error}` : ''}
           </p>
         ) : null}
 
@@ -189,9 +257,28 @@ export function ReviewInsightsPage() {
                   </p>
                   <div className="mt-3 space-y-2">
                     {problem.examples.map((example) => (
-                      <p key={`${problem.id}-${example.date}-${example.field}-${example.evidence}`} className="rounded bg-white/80 p-3 text-sm leading-6 text-slate-600">
-                        <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.evidence}
-                      </p>
+                      <div key={`${problem.id}-${example.occurrenceId}-${example.evidence}`} className="rounded bg-white/80 p-3 text-sm leading-6 text-slate-600">
+                        <p>
+                          <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.evidence}
+                        </p>
+                        {!readOnly ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                            <select
+                              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-slate-700"
+                              defaultValue={problem.normalizedLabel}
+                              onChange={(event) => void relabelExample(problem.label, problem.normalizedLabel, example, event.target.value)}
+                            >
+                              {themeOptionsData.themes.map((theme) => (
+                                <option key={theme.id} value={theme.id}>{theme.label}</option>
+                              ))}
+                            </select>
+                            <button className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 font-semibold text-slate-500 hover:text-rose-700" onClick={() => void ignoreExample(problem.label, problem.normalizedLabel, example)}>
+                              <X size={12} />忽略
+                            </button>
+                            <span className="text-slate-400">来源：{example.source}</span>
+                          </div>
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 </article>

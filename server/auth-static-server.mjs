@@ -14,7 +14,7 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
-const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
+const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'intfloat/multilingual-e5-large';
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
@@ -47,6 +47,8 @@ const dictionaryCache = new Map();
 let sqliteReady = false;
 let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
+let nightlyErrorThemeTimerStarted = false;
+let errorThemeBatchJob = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
@@ -409,6 +411,22 @@ CREATE TABLE IF NOT EXISTS review_sentence_embeddings (
   created_at TEXT NOT NULL,
   UNIQUE(sentence_hash, model_name)
 );
+CREATE TABLE IF NOT EXISTS error_theme_corrections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sentence_hash TEXT NOT NULL,
+  sentence TEXT NOT NULL,
+  action TEXT NOT NULL DEFAULT 'relabel',
+  target_theme_key TEXT,
+  target_label TEXT,
+  source_theme_key TEXT,
+  source_label TEXT,
+  review_id INTEGER,
+  date TEXT,
+  field TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  UNIQUE(sentence_hash, action, target_theme_key)
+);
 CREATE INDEX IF NOT EXISTS idx_daily_reviews_date ON daily_reviews(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
@@ -429,7 +447,9 @@ CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occur
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_batch ON error_theme_occurrences(batch_id);
 CREATE INDEX IF NOT EXISTS idx_review_sentence_embeddings_date ON review_sentence_embeddings(date);
-CREATE INDEX IF NOT EXISTS idx_review_sentence_embeddings_hash_model ON review_sentence_embeddings(sentence_hash, model_name);`);
+CREATE INDEX IF NOT EXISTS idx_review_sentence_embeddings_hash_model ON review_sentence_embeddings(sentence_hash, model_name);
+CREATE INDEX IF NOT EXISTS idx_error_theme_corrections_hash ON error_theme_corrections(sentence_hash);
+CREATE INDEX IF NOT EXISTS idx_error_theme_corrections_target ON error_theme_corrections(target_theme_key);`);
 }
 
 function insertRowsSql(table, columns, rows) {
@@ -677,6 +697,14 @@ const reviewProblemFields = [
   { key: 'tomorrowPlan', label: '明日计划' },
 ];
 
+function getErrorThemeOptions() {
+  return reviewProblemThemes.map((theme) => ({ id: theme.id, label: theme.label }));
+}
+
+function themeOptionById(themeId) {
+  return getErrorThemeOptions().find((theme) => theme.id === themeId) || null;
+}
+
 function textIncludesKeyword(text, keywords) {
   const normalized = String(text || '').toLowerCase();
   return keywords.some((keyword) => normalized.includes(String(keyword).toLowerCase()));
@@ -766,6 +794,10 @@ function sentenceHash(text) {
   return createHash('sha256').update(String(text || '')).digest('hex');
 }
 
+function segmentKey(segment) {
+  return `${segment.reviewId}|${segment.field}|${segment.sentenceHash}`;
+}
+
 function extractReviewProblemSegments(reviews) {
   const fields = reviewProblemFields;
   const segments = [];
@@ -817,11 +849,13 @@ function isClearlyPositiveSegment(segment, fieldKey) {
   return positiveCue.test(text) && !hasProblemCue(text, fieldKey);
 }
 
-function extractRuleProblemCandidates(reviews) {
+function extractRuleProblemCandidates(reviews, skippedSegmentKeys = new Set()) {
   const candidates = [];
   for (const review of reviews) {
     for (const field of reviewProblemFields) {
       for (const sentence of splitReviewSentences(review[field.key])) {
+        const key = segmentKey({ reviewId: Number(review.id), field: field.label, sentenceHash: sentenceHash(sentence) });
+        if (skippedSegmentKeys.has(key)) continue;
         if (!hasProblemCue(sentence, field.key)) continue;
         if (isClearlyPositiveSegment(sentence, field.key)) continue;
         const matched = classifyReviewSegment(sentence, field.key);
@@ -884,7 +918,7 @@ function runEmbeddingWorker(texts) {
   const result = spawnSync(python, [embeddingWorkerFile], {
     input: JSON.stringify({ texts, modelName: embeddingModelName, cacheDir: embeddingCacheDir }),
     encoding: 'utf8',
-    timeout: 180000,
+    timeout: 45 * 60 * 1000,
     maxBuffer: 96 * 1024 * 1024,
     env: {
       ...process.env,
@@ -935,7 +969,7 @@ function semanticThresholdForField(fieldKey, hasCue) {
   return hasCue ? 0.78 : 0.86;
 }
 
-function extractEmbeddingProblemCandidates(reviews, timestamp) {
+function extractEmbeddingProblemCandidates(reviews, timestamp, skippedSegmentKeys = new Set()) {
   const segments = extractReviewProblemSegments(reviews);
   if (!segments.length) {
     return { candidates: [], modelName: embeddingModelName, source: 'local-embedding-batch', backend: 'fastembed', dimensions: 0, embeddedSentenceCount: 0 };
@@ -954,6 +988,7 @@ function extractEmbeddingProblemCandidates(reviews, timestamp) {
   segments.forEach((segment, index) => {
     const vector = segmentVectors[index];
     if (!vector) return;
+    if (skippedSegmentKeys.has(segmentKey(segment))) return;
     if (!hasProblemCue(segment.sentence, segment.fieldKey)) return;
     if (isClearlyPositiveSegment(segment.sentence, segment.fieldKey)) return;
     if (classifyReviewSegment(segment.sentence, segment.fieldKey)) return;
@@ -999,6 +1034,45 @@ function mergeProblemCandidates(primary, secondary) {
   return merged;
 }
 
+function loadErrorThemeCorrections() {
+  return sqliteJson(`SELECT id, sentence_hash AS sentenceHash, sentence, action, target_theme_key AS targetThemeKey,
+target_label AS targetLabel, source_theme_key AS sourceThemeKey, source_label AS sourceLabel, review_id AS reviewId, date, field
+FROM error_theme_corrections
+ORDER BY updated_at DESC, created_at DESC, id DESC;`);
+}
+
+function correctionMatchesSegment(correction, segment) {
+  if (correction.sentenceHash === segment.sentenceHash) return true;
+  const correctionText = String(correction.sentence || '').replace(/\s+/g, '');
+  const segmentText = String(segment.sentence || '').replace(/\s+/g, '');
+  return correctionText.length >= 4 && segmentText.length >= 4 && (correctionText.includes(segmentText) || segmentText.includes(correctionText));
+}
+
+function extractCorrectionProblemCandidates(reviews, corrections) {
+  const candidates = [];
+  const handledSegmentKeys = new Set();
+  const segments = extractReviewProblemSegments(reviews);
+  for (const segment of segments) {
+    const correction = corrections.find((item) => correctionMatchesSegment(item, segment));
+    if (!correction) continue;
+    handledSegmentKeys.add(segmentKey(segment));
+    if (correction.action === 'ignore') continue;
+    const target = themeOptionById(correction.targetThemeKey);
+    if (!target) continue;
+    candidates.push({
+      reviewId: segment.reviewId,
+      date: segment.date,
+      themeId: target.id,
+      label: target.label,
+      field: segment.field,
+      evidence: segment.sentence,
+      confidence: 0.99,
+      source: 'local-correction-sample',
+    });
+  }
+  return { candidates, handledSegmentKeys };
+}
+
 function candidateRank(candidate) {
   const fieldRank = candidate.field === '今日问题' ? 30 : candidate.field === '明日计划' ? 20 : 10;
   const sourceRank = candidate.source === 'local-rule-batch' ? 3 : 1;
@@ -1020,7 +1094,7 @@ function dedupeProblemCandidates(candidates) {
 function clearGeneratedErrorThemeOccurrences(periodStart, periodEnd) {
   runSqlite(`DELETE FROM error_theme_occurrences
 WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)}
-  AND source IN ('local-embedding-batch', 'local-rule-batch', 'local-model-batch');`);
+  AND source IN ('local-embedding-batch', 'local-rule-batch', 'local-model-batch', 'local-correction-sample');`);
 }
 
 function upsertErrorTheme(themeId, label, timestamp) {
@@ -1040,6 +1114,56 @@ SET
   updated_at = ${sqlString(nowISO())};`);
 }
 
+function saveErrorThemeCorrection(payload) {
+  ensureSqliteStore();
+  const timestamp = nowISO();
+  const occurrenceId = Number(payload.occurrenceId || 0);
+  const occurrence = occurrenceId
+    ? sqliteJson(`SELECT o.id, o.review_id AS reviewId, o.date, o.field, o.evidence, o.theme_id AS themeId,
+t.normalized_label AS sourceThemeKey, t.label AS sourceLabel
+FROM error_theme_occurrences o
+JOIN error_themes t ON t.id = o.theme_id
+WHERE o.id = ${sqlValue(occurrenceId)}
+LIMIT 1;`)[0]
+    : null;
+  const sentence = String(payload.sentence || occurrence?.evidence || '').trim();
+  if (!sentence) throw new Error('Missing correction sentence');
+  const action = payload.action === 'ignore' ? 'ignore' : 'relabel';
+  const target = action === 'relabel' ? themeOptionById(payload.targetThemeKey) : null;
+  if (action === 'relabel' && !target) throw new Error('Invalid target theme');
+  const hash = sentenceHash(sentence);
+  runSqlite(`INSERT INTO error_theme_corrections (sentence_hash, sentence, action, target_theme_key, target_label, source_theme_key, source_label, review_id, date, field, created_at, updated_at)
+VALUES (${sqlString(hash)}, ${sqlString(sentence)}, ${sqlString(action)}, ${sqlValue(target?.id || null)}, ${sqlValue(target?.label || null)}, ${sqlValue(payload.sourceThemeKey || occurrence?.sourceThemeKey || null)}, ${sqlValue(payload.sourceLabel || occurrence?.sourceLabel || null)}, ${sqlValue(Number(payload.reviewId || occurrence?.reviewId || 0) || null)}, ${sqlValue(payload.date || occurrence?.date || null)}, ${sqlValue(payload.field || occurrence?.field || null)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
+ON CONFLICT(sentence_hash, action, target_theme_key) DO UPDATE SET
+  sentence = excluded.sentence,
+  source_theme_key = excluded.source_theme_key,
+  source_label = excluded.source_label,
+  review_id = excluded.review_id,
+  date = excluded.date,
+  field = excluded.field,
+  updated_at = excluded.updated_at;`);
+
+  if (occurrenceId && action === 'ignore') {
+    runSqlite(`DELETE FROM error_theme_occurrences WHERE id = ${sqlValue(occurrenceId)};`);
+  } else if (occurrenceId && target) {
+    const targetThemeId = upsertErrorTheme(target.id, target.label, timestamp);
+    runSqlite(`UPDATE error_theme_occurrences
+SET theme_id = ${sqlValue(targetThemeId)}, confidence = 0.99, source = 'local-correction-sample', created_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(occurrenceId)};`);
+  }
+  refreshErrorThemeStats();
+  return {
+    ok: true,
+    correction: {
+      sentenceHash: hash,
+      sentence,
+      action,
+      targetThemeKey: target?.id || null,
+      targetLabel: target?.label || null,
+    },
+  };
+}
+
 function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp, source, modelName, note }) {
   runSqlite(`INSERT INTO error_theme_batches (source, model_name, period_start, period_end, review_count, occurrence_count, theme_count, status, created_at, completed_at, note)
 VALUES (${sqlString(source)}, ${sqlString(modelName)}, ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, 'completed', ${sqlString(timestamp)}, ${sqlString(timestamp)}, ${sqlString(note)});`);
@@ -1055,16 +1179,18 @@ function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO(), 
 FROM daily_reviews
 WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
 ORDER BY date;`);
-  const ruleCandidates = extractRuleProblemCandidates(reviews);
+  const corrections = loadErrorThemeCorrections();
+  const correctionResult = extractCorrectionProblemCandidates(reviews, corrections);
+  const ruleCandidates = extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys);
   let embeddingMeta = null;
-  let candidates = ruleCandidates;
+  let candidates = mergeProblemCandidates(correctionResult.candidates, ruleCandidates);
   if (options.mode !== 'rules') {
     try {
-      embeddingMeta = extractEmbeddingProblemCandidates(reviews, timestamp);
-      candidates = mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates);
+      embeddingMeta = extractEmbeddingProblemCandidates(reviews, timestamp, correctionResult.handledSegmentKeys);
+      candidates = mergeProblemCandidates(correctionResult.candidates, mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates));
     } catch (error) {
       embeddingMeta = { error: error instanceof Error ? error.message : String(error), source: 'local-rule-batch', modelName: 'local-review-topic-v1', backend: 'rule-fallback', dimensions: 0, embeddedSentenceCount: 0 };
-      candidates = ruleCandidates;
+      candidates = mergeProblemCandidates(correctionResult.candidates, ruleCandidates);
     }
   }
   const rawCandidateCount = candidates.length;
@@ -1114,6 +1240,87 @@ VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.revi
     fallbackReason: embeddingMeta?.error || '',
     completedAt: timestamp,
   };
+}
+
+function currentErrorThemeJobSnapshot() {
+  return errorThemeBatchJob ? { ...errorThemeBatchJob } : null;
+}
+
+function refreshCurrentReportsAfterBatch(trigger = 'manual') {
+  try {
+    for (const kind of ['weekly', 'monthly']) {
+      const period = currentPeriod(kind);
+      generateLearningReport(kind, period.periodStart, period.periodEnd, trigger);
+    }
+  } catch (error) {
+    console.error('[reports] refresh after error theme batch failed:', error);
+  }
+}
+
+function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = todayISO(), mode = 'embedding', trigger = 'manual' } = {}) {
+  if (errorThemeBatchJob?.status === 'running' || errorThemeBatchJob?.status === 'queued') {
+    return { started: false, job: currentErrorThemeJobSnapshot() };
+  }
+  const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  errorThemeBatchJob = {
+    id: jobId,
+    status: 'queued',
+    periodStart,
+    periodEnd,
+    mode,
+    trigger,
+    startedAt: nowISO(),
+    completedAt: null,
+    result: null,
+    error: '',
+  };
+  setTimeout(() => {
+    if (!errorThemeBatchJob || errorThemeBatchJob.id !== jobId) return;
+    errorThemeBatchJob = { ...errorThemeBatchJob, status: 'running' };
+    try {
+      const result = runErrorThemeBatch(periodStart, periodEnd, { mode });
+      refreshCurrentReportsAfterBatch(trigger === 'nightly' ? 'auto' : 'manual');
+      errorThemeBatchJob = {
+        ...errorThemeBatchJob,
+        status: 'completed',
+        completedAt: nowISO(),
+        result,
+      };
+    } catch (error) {
+      errorThemeBatchJob = {
+        ...errorThemeBatchJob,
+        status: 'failed',
+        completedAt: nowISO(),
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }, 50).unref();
+  return { started: true, job: currentErrorThemeJobSnapshot() };
+}
+
+function nextChinaThreeAMDelay() {
+  const now = new Date();
+  const chinaNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const targetChina = new Date(Date.UTC(
+    chinaNow.getUTCFullYear(),
+    chinaNow.getUTCMonth(),
+    chinaNow.getUTCDate(),
+    3,
+    0,
+    0,
+    0,
+  ));
+  if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
+  const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
+  return Math.max(60 * 1000, targetUtcMs - now.getTime());
+}
+
+function scheduleNightlyErrorThemeBatch() {
+  const delay = nextChinaThreeAMDelay();
+  setTimeout(() => {
+    startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'embedding', trigger: 'nightly' });
+    scheduleNightlyErrorThemeBatch();
+  }, delay).unref();
 }
 
 function getErrorThemePeriodSummary(periodStart, periodEnd, limit = 6) {
@@ -1173,7 +1380,7 @@ LIMIT 12;`);
     averageConfidence: Number(theme.averageConfidence || 0),
     firstSeenAt: theme.firstSeenAt,
     lastSeenAt: theme.lastSeenAt,
-    examples: sqliteJson(`SELECT date, field, evidence, confidence FROM error_theme_occurrences
+    examples: sqliteJson(`SELECT id AS occurrenceId, date, field, evidence, confidence, source FROM error_theme_occurrences
 WHERE theme_id = ${sqlValue(theme.id)} AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
 ORDER BY date DESC, confidence DESC, id DESC
 LIMIT 3;`),
@@ -1538,6 +1745,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '4', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 5) {
+    createBackupFile('pre-error-corrections', 'automatic backup before error correction samples migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '5', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -1552,6 +1765,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
       ensureAutomaticReports();
     }, 6 * 60 * 60 * 1000).unref();
     reportTimerStarted = true;
+  }
+  if (!nightlyErrorThemeTimerStarted) {
+    scheduleNightlyErrorThemeBatch();
+    nightlyErrorThemeTimerStarted = true;
   }
 }
 
@@ -2458,6 +2675,12 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (req.url === '/api/error-themes/options' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, { themes: getErrorThemeOptions(), readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url?.startsWith('/api/error-themes/analysis') && req.method === 'GET') {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
@@ -2467,10 +2690,25 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (req.url === '/api/error-themes/batch/status' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, { job: currentErrorThemeJobSnapshot(), readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url === '/api/error-themes/batch/run' && req.method === 'POST') {
     const body = await readJsonBody(req);
-    const result = runErrorThemeBatch(body.from || '1900-01-01', body.to || todayISO(), { mode: body.mode === 'rules' ? 'rules' : 'embedding' });
-    sendJson(res, { ok: true, result, analysis: getErrorThemeAnalysis(body.from || '1900-01-01', body.to || todayISO()) });
+    const periodStart = body.from || '1900-01-01';
+    const periodEnd = body.to || todayISO();
+    const result = startErrorThemeBatchJob({ periodStart, periodEnd, mode: body.mode === 'rules' ? 'rules' : 'embedding', trigger: 'manual' });
+    sendJson(res, { ok: true, ...result });
+    return;
+  }
+
+  if (req.url === '/api/error-themes/corrections/save' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const result = saveErrorThemeCorrection(body);
+    sendJson(res, { ...result, analysis: getErrorThemeAnalysis(body.from || '1900-01-01', body.to || todayISO()) });
     return;
   }
 
