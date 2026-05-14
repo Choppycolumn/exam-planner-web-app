@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, FileText, Home, Languages, Settings } from 'lucide-react';
+import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, Settings } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -7,6 +7,7 @@ import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 import { preloadSecondaryRoutes } from '../router/preload';
 
 const navItems = [
+  { to: '/task-center', label: '任务中心', icon: Cpu },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },

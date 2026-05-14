@@ -4,6 +4,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
 
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
@@ -36,6 +37,7 @@ const mimeTypes = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
@@ -49,6 +51,7 @@ let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
 let nightlyErrorThemeTimerStarted = false;
 let errorThemeBatchJob = null;
+let nextNightlyErrorThemeAt = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
@@ -1312,6 +1315,7 @@ function nextChinaThreeAMDelay() {
   ));
   if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
   const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
+  nextNightlyErrorThemeAt = new Date(targetUtcMs).toISOString();
   return Math.max(60 * 1000, targetUtcMs - now.getTime());
 }
 
@@ -1405,6 +1409,50 @@ WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`)[0] || { occurrence
     },
     themes: enrichedThemes,
     timeline,
+  };
+}
+
+function getErrorThemeDetail(themeId, periodStart = '1900-01-01', periodEnd = todayISO()) {
+  ensureSqliteStore();
+  const id = Number(themeId || 0);
+  const from = periodStart || '1900-01-01';
+  const to = periodEnd || todayISO();
+  const theme = sqliteJson(`SELECT id, normalized_label AS normalizedLabel, label, occurrence_count AS occurrenceCount,
+review_day_count AS reviewDayCount, first_seen_at AS firstSeenAt, last_seen_at AS lastSeenAt
+FROM error_themes
+WHERE id = ${sqlValue(id)}
+LIMIT 1;`)[0] || null;
+  if (!theme) return null;
+  const occurrences = sqliteJson(`SELECT o.id AS occurrenceId, o.date, o.field, o.evidence, o.confidence, o.source, o.review_id AS reviewId,
+r.summary, r.wins, r.problems, r.tomorrow_plan AS tomorrowPlan, r.score
+FROM error_theme_occurrences o
+LEFT JOIN daily_reviews r ON r.id = o.review_id
+WHERE o.theme_id = ${sqlValue(id)} AND o.date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+ORDER BY o.date DESC, o.confidence DESC, o.id DESC;`);
+  const timeline = sqliteJson(`SELECT date, COUNT(*) AS count
+FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(id)} AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+GROUP BY date
+ORDER BY date;`).map((item) => ({ date: item.date, count: Number(item.count || 0) }));
+  const byField = sqliteJson(`SELECT field, COUNT(*) AS count
+FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(id)} AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+GROUP BY field
+ORDER BY count DESC, field;`).map((item) => ({ field: item.field, count: Number(item.count || 0) }));
+  const repeatedWeeks = sqliteJson(`SELECT strftime('%Y-W%W', date) AS week, COUNT(*) AS count, MIN(date) AS startDate, MAX(date) AS endDate
+FROM error_theme_occurrences
+WHERE theme_id = ${sqlValue(id)} AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+GROUP BY week
+HAVING count >= 3
+ORDER BY week DESC;`).map((item) => ({ ...item, count: Number(item.count || 0) }));
+  return {
+    theme,
+    periodStart: from,
+    periodEnd: to,
+    occurrences,
+    timeline,
+    byField,
+    repeatedWeeks,
   };
 }
 
@@ -1664,6 +1712,93 @@ LIMIT 1;`);
     lastWeeklyBackupAt: lastWeeklyBackupAt || null,
     dictionaryCount,
     dictionaryIndexedAt: dictionaryIndexedAt || null,
+  };
+}
+
+function nextWeeklyBackupAt() {
+  const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+  if (!lastWeeklyBackupAt) return nowISO();
+  const next = new Date(new Date(lastWeeklyBackupAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  return next.toISOString();
+}
+
+function getDiskStatus() {
+  const result = spawnSync('df', ['-k', dataDir], { encoding: 'utf8', timeout: 3000 });
+  if (result.status !== 0 || !result.stdout) return null;
+  const lines = result.stdout.trim().split('\n');
+  const row = lines[lines.length - 1]?.split(/\s+/);
+  if (!row || row.length < 6) return null;
+  const totalKb = Number(row[1] || 0);
+  const usedKb = Number(row[2] || 0);
+  const availableKb = Number(row[3] || 0);
+  return {
+    totalBytes: totalKb * 1024,
+    usedBytes: usedKb * 1024,
+    availableBytes: availableKb * 1024,
+    usedPercent: row[4] || '',
+    mount: row.slice(5).join(' '),
+  };
+}
+
+function getRuntimeStatus() {
+  const memory = process.memoryUsage();
+  return {
+    uptimeSeconds: Math.round(uptime()),
+    processUptimeSeconds: Math.round(process.uptime()),
+    cpuCount: cpus().length,
+    loadAverage: loadavg(),
+    memory: {
+      totalBytes: totalmem(),
+      freeBytes: freemem(),
+      processRssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      heapTotalBytes: memory.heapTotal,
+    },
+    disk: getDiskStatus(),
+    nodeVersion: process.version,
+  };
+}
+
+function getTaskCenterStatus() {
+  ensureSqliteStore();
+  const reports = listLearningReports();
+  const latestWeeklyReport = reports.find((report) => report.kind === 'weekly') || null;
+  const latestMonthlyReport = reports.find((report) => report.kind === 'monthly') || null;
+  const latestBatch = sqliteJson(`SELECT id, source, model_name AS modelName, period_start AS periodStart, period_end AS periodEnd,
+review_count AS reviewCount, occurrence_count AS occurrenceCount, theme_count AS themeCount, status, created_at AS createdAt, completed_at AS completedAt, note
+FROM error_theme_batches
+ORDER BY created_at DESC, id DESC
+LIMIT 1;`)[0] || null;
+  const corrections = sqliteJson(`SELECT COUNT(*) AS count, MAX(updated_at) AS lastUpdatedAt FROM error_theme_corrections;`)[0] || { count: 0, lastUpdatedAt: null };
+  const embeddingRows = Number(sqliteScalar('SELECT COUNT(*) FROM review_sentence_embeddings;') || 0);
+  const reviewRows = Number(sqliteScalar('SELECT COUNT(*) FROM daily_reviews;') || 0);
+  const studyRows = Number(sqliteScalar('SELECT COUNT(*) FROM study_time_records;') || 0);
+  return {
+    generatedAt: nowISO(),
+    backup: {
+      ...getBackupStatus(),
+      nextWeeklyBackupAt: nextWeeklyBackupAt(),
+    },
+    reports: {
+      count: reports.length,
+      latestWeeklyReport,
+      latestMonthlyReport,
+      lastReportCheckAt: sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_report_check_at' LIMIT 1;") || null,
+    },
+    errorThemes: {
+      job: currentErrorThemeJobSnapshot(),
+      latestBatch,
+      nextNightlyBatchAt: nextNightlyErrorThemeAt,
+      correctionCount: Number(corrections.count || 0),
+      lastCorrectionAt: corrections.lastUpdatedAt || null,
+    },
+    embedding: { ...getEmbeddingStatus(), embeddingRows },
+    data: {
+      reviews: reviewRows,
+      studyTimeRecords: studyRows,
+      revision: dataRevision,
+    },
+    runtime: getRuntimeStatus(),
   };
 }
 
@@ -2478,9 +2613,11 @@ function serveStatic(req, res) {
     res.end('Not found');
     return;
   }
+  const fileName = filePath.split(/[\\/]/).pop() || '';
+  const shouldRevalidate = filePath.endsWith('index.html') || fileName === 'service-worker.js' || fileName.endsWith('.webmanifest');
   res.writeHead(200, {
     'content-type': mimeTypes[extname(filePath)] || 'application/octet-stream',
-    'cache-control': filePath.endsWith('index.html') ? 'no-store' : 'public, max-age=31536000, immutable',
+    'cache-control': shouldRevalidate ? 'no-cache' : 'public, max-age=31536000, immutable',
   });
   createReadStream(filePath).pipe(res);
 }
@@ -2591,6 +2728,11 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/tasks/status' && req.method === 'GET') {
+    sendJson(res, { ...getTaskCenterStatus(), readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url === '/api/goals' && req.method === 'GET') {
     ensureSqliteStore();
     sendJson(res, getGoalsList(sessionRole));
@@ -2687,6 +2829,21 @@ ORDER BY project_id;`);
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || todayISO();
     sendJson(res, { ...getErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/error-themes/detail') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const themeId = requestUrl.searchParams.get('themeId');
+    const from = requestUrl.searchParams.get('from') || '1900-01-01';
+    const to = requestUrl.searchParams.get('to') || todayISO();
+    const detail = getErrorThemeDetail(themeId, from, to);
+    if (!detail) {
+      sendJson(res, { error: 'Not found' }, 404);
+      return;
+    }
+    sendJson(res, { ...detail, readOnly: sessionRole === 'read' });
     return;
   }
 
@@ -2858,6 +3015,12 @@ createServer(async (req, res) => {
         res.end();
       }
     }
+    return;
+  }
+
+  const requestPath = new URL(req.url || '/', 'http://localhost').pathname;
+  if (['/manifest.webmanifest', '/service-worker.js', '/app-icon.svg', '/favicon.svg', '/icons.svg'].includes(requestPath)) {
+    serveStatic(req, res);
     return;
   }
 

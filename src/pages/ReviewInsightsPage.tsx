@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCw, X } from 'lucide-react';
+import { Eye, RefreshCw, X } from 'lucide-react';
 import { serverApi, type EmbeddingStatus, type ErrorThemeAnalysis } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { ChartBox, ReviewTrendChart } from '../components/Charts';
@@ -51,6 +51,7 @@ export function ReviewInsightsPage() {
   const [page, setPage] = useState(1);
   const [problemRange, setProblemRange] = useState<ProblemRange>('30');
   const [batchLoading, setBatchLoading] = useState(false);
+  const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null);
   const [toast, setToast] = useState('');
   const trendStart = dateRangeEndingToday(30)[0] ?? todayISO();
   const problemStart = problemRange === 'all' ? undefined : dateRangeEndingToday(Number(problemRange))[0] ?? todayISO();
@@ -80,6 +81,11 @@ export function ReviewInsightsPage() {
       return status === 'queued' || status === 'running' ? 5000 : false;
     },
     placeholderData: { job: null },
+  });
+  const { data: selectedThemeDetail } = useQuery({
+    queryKey: queryKeys.errorThemeDetail(selectedThemeId ?? 0, problemStart, problemEnd),
+    queryFn: () => serverApi.getErrorThemeDetail(selectedThemeId || 0, problemStart, problemEnd),
+    enabled: Boolean(selectedThemeId),
   });
   const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
   const trend = getReviewTrend(trendReviews, 30);
@@ -112,6 +118,7 @@ export function ReviewInsightsPage() {
     if (analysis) queryClient.setQueryData(queryKeys.errorThemes(problemStart, problemEnd), analysis);
     await queryClient.invalidateQueries({ queryKey: queryKeys.reports });
     await queryClient.invalidateQueries({ queryKey: queryKeys.errorThemes(problemStart, problemEnd) });
+    if (selectedThemeId) await queryClient.invalidateQueries({ queryKey: queryKeys.errorThemeDetail(selectedThemeId, problemStart, problemEnd) });
   };
 
   const relabelExample = async (problemLabel: string, problemKey: string, example: ErrorThemeAnalysis['themes'][number]['examples'][number], targetThemeKey: string) => {
@@ -248,9 +255,14 @@ export function ReviewInsightsPage() {
                 <article key={problem.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <h3 className="font-semibold text-rose-800">{problem.label}</h3>
-                    <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">
-                      {problem.reviewDayCount} 天 / {problem.occurrenceCount} 条
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">
+                        {problem.reviewDayCount} 天 / {problem.occurrenceCount} 条
+                      </span>
+                      <button className="inline-flex items-center gap-1 rounded-md border border-rose-100 bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700 hover:bg-white" onClick={() => setSelectedThemeId(problem.id)}>
+                        <Eye size={12} />详情
+                      </button>
+                    </div>
                   </div>
                   <p className="mt-2 text-xs leading-5 text-rose-700">
                     首次：{problem.firstSeenAt}，最近：{problem.lastSeenAt}，平均置信度 {Math.round(problem.averageConfidence * 100)}%
@@ -284,6 +296,48 @@ export function ReviewInsightsPage() {
                 </article>
               ))}
             </div>
+
+            {selectedThemeDetail ? (
+              <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50/60 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-blue-900">{selectedThemeDetail.theme.label}</h3>
+                    <p className="mt-1 text-xs leading-5 text-blue-700">
+                      {selectedThemeDetail.periodStart} 至 {selectedThemeDetail.periodEnd}，共 {selectedThemeDetail.occurrences.length} 条证据。
+                      {selectedThemeDetail.repeatedWeeks.length ? ` 有 ${selectedThemeDetail.repeatedWeeks.length} 个周区间重复出现 3 次以上。` : ''}
+                    </p>
+                  </div>
+                  <button className="rounded-md border border-blue-100 bg-white/80 px-2 py-1 text-xs font-semibold text-blue-700" onClick={() => setSelectedThemeId(null)}>
+                    收起详情
+                  </button>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  {selectedThemeDetail.byField.map((item) => (
+                    <div key={item.field} className="rounded-lg border border-blue-100 bg-white/80 p-3">
+                      <p className="text-xs font-semibold text-blue-600">{item.field}</p>
+                      <p className="mt-1 text-lg font-semibold text-blue-950">{item.count} 条</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 max-h-[520px] space-y-3 overflow-auto pr-1">
+                  {selectedThemeDetail.occurrences.map((item) => (
+                    <article key={item.occurrenceId} className="rounded-lg border border-blue-100 bg-white p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-semibold text-slate-900">{item.date} · {item.field}</p>
+                        <span className="text-xs text-slate-400">{item.source} · {Math.round(Number(item.confidence || 0) * 100)}%</span>
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap leading-6 text-slate-700">{item.evidence}</p>
+                      <div className="mt-3 grid gap-2 text-xs leading-5 text-slate-500 md:grid-cols-2">
+                        <p><span className="font-semibold text-slate-700">当日总结：</span>{item.summary || '未填写'}</p>
+                        <p><span className="font-semibold text-slate-700">今日问题：</span>{item.problems || '未填写'}</p>
+                        <p><span className="font-semibold text-slate-700">做得好的地方：</span>{item.wins || '未填写'}</p>
+                        <p><span className="font-semibold text-slate-700">明日计划：</span>{item.tomorrowPlan || '未填写'}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4">
               <h3 className="text-sm font-semibold text-slate-900">周期内错误密度</h3>

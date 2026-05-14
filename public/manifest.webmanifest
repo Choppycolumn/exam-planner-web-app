@@ -1,0 +1,19 @@
+{
+  "name": "考研学习计划管理",
+  "short_name": "Exam Planner",
+  "description": "学习目标、复盘、用时、模考和错误主题管理工具",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fb",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["education", "productivity"]
+}

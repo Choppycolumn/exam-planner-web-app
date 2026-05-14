@@ -84,6 +84,54 @@ export interface BackupStatus {
   dictionaryIndexedAt: string | null;
 }
 
+export interface RuntimeStatus {
+  uptimeSeconds: number;
+  processUptimeSeconds: number;
+  cpuCount: number;
+  loadAverage: number[];
+  memory: {
+    totalBytes: number;
+    freeBytes: number;
+    processRssBytes: number;
+    heapUsedBytes: number;
+    heapTotalBytes: number;
+  };
+  disk: {
+    totalBytes: number;
+    usedBytes: number;
+    availableBytes: number;
+    usedPercent: string;
+    mount: string;
+  } | null;
+  nodeVersion: string;
+}
+
+export interface TaskCenterStatus {
+  generatedAt: string;
+  backup: BackupStatus & { nextWeeklyBackupAt: string | null };
+  reports: {
+    count: number;
+    latestWeeklyReport: LearningReport | null;
+    latestMonthlyReport: LearningReport | null;
+    lastReportCheckAt: string | null;
+  };
+  errorThemes: {
+    job: ErrorThemeBatchJob | null;
+    latestBatch: ErrorThemeAnalysis['latestBatch'];
+    nextNightlyBatchAt: string | null;
+    correctionCount: number;
+    lastCorrectionAt: string | null;
+  };
+  embedding: EmbeddingStatus;
+  data: {
+    reviews: number;
+    studyTimeRecords: number;
+    revision: number;
+  };
+  runtime: RuntimeStatus;
+  readOnly?: boolean;
+}
+
 export interface LearningReport {
   id?: number;
   kind: 'weekly' | 'monthly';
@@ -207,6 +255,38 @@ export interface ErrorThemeAnalysisTheme {
   examples: Array<{ occurrenceId: number; date: string; field: string; evidence: string; confidence: number; source: string }>;
 }
 
+export interface ErrorThemeDetail {
+  theme: {
+    id: number;
+    normalizedLabel: string;
+    label: string;
+    occurrenceCount: number;
+    reviewDayCount: number;
+    firstSeenAt: string | null;
+    lastSeenAt: string | null;
+  };
+  periodStart: string;
+  periodEnd: string;
+  occurrences: Array<{
+    occurrenceId: number;
+    date: string;
+    field: string;
+    evidence: string;
+    confidence: number;
+    source: string;
+    reviewId: number | null;
+    summary: string;
+    wins: string;
+    problems: string;
+    tomorrowPlan: string;
+    score: number | null;
+  }>;
+  timeline: Array<{ date: string; count: number }>;
+  byField: Array<{ field: string; count: number }>;
+  repeatedWeeks: Array<{ week: string; count: number; startDate: string; endDate: string }>;
+  readOnly?: boolean;
+}
+
 type ApiOptions = {
   method?: string;
   body?: unknown;
@@ -302,6 +382,7 @@ export const serverApi = {
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
+  getTaskCenterStatus: () => apiRequest<TaskCenterStatus>('/tasks/status'),
   getReports: () => apiRequest<{ reports: LearningReport[] }>('/reports'),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
     apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
@@ -313,6 +394,12 @@ export const serverApi = {
     return apiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`);
   },
   getEmbeddingStatus: () => apiRequest<EmbeddingStatus>('/error-themes/embedding/status'),
+  getErrorThemeDetail: (themeId: number, from?: string, to?: string) => {
+    const params = new URLSearchParams({ themeId: String(themeId) });
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    return apiRequest<ErrorThemeDetail>(`/error-themes/detail?${params.toString()}`);
+  },
   getErrorThemeOptions: () => apiRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('/error-themes/options'),
   getErrorThemeBatchStatus: () => apiRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('/error-themes/batch/status'),
   runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding') =>
