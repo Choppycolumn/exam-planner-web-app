@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect -- Date/project switches should reset the editable day grid from IndexedDB. */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Save, Trash2 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { ColorPicker } from '../components/ColorPicker';
@@ -21,10 +21,13 @@ const combineTime = (row?: StudyTimeRow) => Math.max(0, Number(row?.hours || 0) 
 
 export function StudyTimePage() {
   const [date, setDate] = useState(todayISO());
-  const { projects, activeProjects, recordsForDate } = useStudyTimeData(date);
+  const { projects, activeProjects, recordsForDate, readOnly } = useStudyTimeData(date);
   const [rows, setRows] = useState<Record<number, StudyTimeRow>>({});
   const [projectDraft, setProjectDraft] = useState<Partial<StudyProject>>({ name: '', color: '#2563eb' });
   const [toast, setToast] = useState('');
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState('');
 
   useEffect(() => {
     const next: Record<number, StudyTimeRow> = {};
@@ -34,23 +37,59 @@ export function StudyTimePage() {
       next[project.id] = { ...splitMinutes(found?.minutes), note: found?.note ?? '' };
     }
     setRows(next);
+    setIsDirty(false);
+    setSavedAt('');
   }, [activeProjects, recordsForDate]);
 
   const total = Object.values(rows).reduce((sum, row) => sum + combineTime(row), 0);
 
-  const saveRecords = async () => {
-    await studyRepository.saveDayRecords(
-      date,
-      activeProjects.filter((project) => project.id).map((project) => ({
-        projectId: project.id!,
-        projectNameSnapshot: project.name,
-        minutes: combineTime(rows[project.id!]),
-        note: rows[project.id!]?.note ?? '',
-      })),
-    );
-    setToast('学习时间已保存');
-    setTimeout(() => setToast(''), 1800);
+  const updateRow = (projectId: number, patch: Partial<StudyTimeRow>) => {
+    setRows((current) => ({ ...current, [projectId]: { ...current[projectId], ...patch } }));
+    setIsDirty(true);
   };
+
+  const saveRecords = useCallback(async (mode: 'auto' | 'manual' = 'manual') => {
+    if (readOnly || !activeProjects.length || isSaving) return;
+    setIsSaving(true);
+    try {
+      await studyRepository.saveDayRecords(
+        date,
+        activeProjects.filter((project) => project.id).map((project) => ({
+          projectId: project.id!,
+          projectNameSnapshot: project.name,
+          minutes: combineTime(rows[project.id!]),
+          note: rows[project.id!]?.note ?? '',
+        })),
+      );
+      setIsDirty(false);
+      setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setToast(mode === 'auto' ? '已自动保存' : '学习时间已保存');
+    } catch {
+      setToast('保存失败，请稍后重试');
+    } finally {
+      setIsSaving(false);
+      setTimeout(() => setToast(''), 1800);
+    }
+  }, [activeProjects, date, isSaving, readOnly, rows]);
+
+  useEffect(() => {
+    if (!isDirty || readOnly || !activeProjects.length) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      void saveRecords('auto');
+    }, 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeProjects.length, isDirty, readOnly, rows, saveRecords]);
+
+  useEffect(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void saveRecords('manual');
+      }
+    };
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  }, [saveRecords]);
 
   const saveProject = async () => {
     if (!projectDraft.name?.trim()) return alert('请填写项目名称');
@@ -68,6 +107,19 @@ export function StudyTimePage() {
           </div>
           {activeProjects.length ? (
             <div className="space-y-3">
+              <div className="sticky top-20 z-20 rounded-lg border border-blue-100 bg-white/95 p-3 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">当天合计：{minutesToHoursText(total)}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {isSaving ? '正在保存...' : isDirty ? '停止输入 2 秒后自动保存' : savedAt ? `已保存于 ${savedAt}` : '当前没有未保存修改'}
+                    </p>
+                  </div>
+                  <button className="btn btn-primary" disabled={readOnly || isSaving} onClick={() => void saveRecords('manual')}>
+                    <Save size={16} />{isSaving ? '保存中...' : '立即保存'}
+                  </button>
+                </div>
+              </div>
               {activeProjects.map((project) => (
                 <div key={project.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[160px_190px_1fr]">
                   <div className="flex items-center gap-2 font-medium"><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</div>
@@ -79,7 +131,8 @@ export function StudyTimePage() {
                         min={0}
                         placeholder="0"
                         value={rows[project.id!]?.hours ?? ''}
-                        onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], hours: e.target.value === '' ? '' : Number(e.target.value) } })}
+                        onChange={(e) => updateRow(project.id!, { hours: e.target.value === '' ? '' : Number(e.target.value) })}
+                        disabled={readOnly}
                       />
                       <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">时</span>
                     </label>
@@ -91,15 +144,16 @@ export function StudyTimePage() {
                         max={59}
                         placeholder="0"
                         value={rows[project.id!]?.minutes ?? ''}
-                        onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], minutes: e.target.value === '' ? '' : Math.min(59, Number(e.target.value)) } })}
+                        onChange={(e) => updateRow(project.id!, { minutes: e.target.value === '' ? '' : Math.min(59, Number(e.target.value)) })}
+                        disabled={readOnly}
                       />
                       <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">分</span>
                     </label>
                   </div>
-                  <input className="field" placeholder="备注" value={rows[project.id!]?.note ?? ''} onChange={(e) => setRows({ ...rows, [project.id!]: { ...rows[project.id!], note: e.target.value } })} />
+                  <input className="field" placeholder="备注" value={rows[project.id!]?.note ?? ''} onChange={(e) => updateRow(project.id!, { note: e.target.value })} disabled={readOnly} />
                 </div>
               ))}
-              <button className="btn btn-primary" onClick={saveRecords}><Save size={16} />保存当天记录</button>
+              <button className="btn btn-primary" disabled={readOnly || isSaving} onClick={() => void saveRecords('manual')}><Save size={16} />{isSaving ? '保存中...' : '保存当天记录'}</button>
             </div>
           ) : <EmptyState title="还没有启用的学习项目" description="先在右侧新增一个项目。" />}
         </div>
@@ -107,18 +161,18 @@ export function StudyTimePage() {
         <div className="card p-5">
           <h2 className="text-base font-semibold">学习项目管理</h2>
           <div className="mt-4 space-y-3">
-            <input className="field" placeholder="项目名称" value={projectDraft.name ?? ''} onChange={(e) => setProjectDraft({ ...projectDraft, name: e.target.value })} />
+            <input className="field" placeholder="项目名称" value={projectDraft.name ?? ''} onChange={(e) => setProjectDraft({ ...projectDraft, name: e.target.value })} disabled={readOnly} />
             <div>
               <span className="label">项目颜色</span>
               <ColorPicker value={projectDraft.color} onChange={(color) => setProjectDraft({ ...projectDraft, color })} />
             </div>
-            <button className="btn btn-primary w-full" onClick={saveProject}>保存项目</button>
+            <button className="btn btn-primary w-full" disabled={readOnly} onClick={saveProject}>保存项目</button>
           </div>
           <div className="mt-5 space-y-2">
             {projects.map((project) => (
               <div key={project.id} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${project.isActive ? 'border-slate-200' : 'border-slate-100 opacity-50'}`}>
                 <button className="flex items-center gap-2 text-left" onClick={() => setProjectDraft(project)}><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</button>
-                {project.isActive && <button title="删除项目" onClick={() => project.id && confirm('删除后历史记录会保留项目名称快照，确定删除吗？') && studyRepository.removeProject(project.id)}><Trash2 size={16} /></button>}
+                {project.isActive && !readOnly && <button title="删除项目" onClick={() => project.id && confirm('删除后历史记录会保留项目名称快照，确定删除吗？') && studyRepository.removeProject(project.id)}><Trash2 size={16} /></button>}
               </div>
             ))}
           </div>
