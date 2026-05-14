@@ -297,6 +297,21 @@ CREATE TABLE IF NOT EXISTS study_time_records (
   updated_at TEXT,
   UNIQUE(date, project_id)
 );
+CREATE TABLE IF NOT EXISTS study_daily_summaries (
+  date TEXT PRIMARY KEY,
+  total_minutes INTEGER NOT NULL DEFAULT 0,
+  record_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS study_project_daily_summaries (
+  date TEXT NOT NULL,
+  project_id INTEGER NOT NULL,
+  project_name_snapshot TEXT NOT NULL,
+  minutes INTEGER NOT NULL DEFAULT 0,
+  record_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(date, project_id, project_name_snapshot)
+);
 CREATE TABLE IF NOT EXISTS subjects (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -435,6 +450,9 @@ CREATE INDEX IF NOT EXISTS idx_study_time_records_date ON study_time_records(dat
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project ON study_time_records(project_id);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_project_date ON study_time_records(project_id, date);
 CREATE INDEX IF NOT EXISTS idx_study_time_records_date_project_name ON study_time_records(date, project_name_snapshot);
+CREATE INDEX IF NOT EXISTS idx_study_daily_summaries_date ON study_daily_summaries(date);
+CREATE INDEX IF NOT EXISTS idx_study_project_daily_summaries_date ON study_project_daily_summaries(date);
+CREATE INDEX IF NOT EXISTS idx_study_project_daily_summaries_name_date ON study_project_daily_summaries(project_name_snapshot, date);
 CREATE INDEX IF NOT EXISTS idx_goals_active_deadline ON goals(is_active, deadline);
 CREATE INDEX IF NOT EXISTS idx_study_projects_active_sort ON study_projects(is_active, sort_order);
 CREATE INDEX IF NOT EXISTS idx_subjects_active_sort ON subjects(is_active, sort_order);
@@ -472,6 +490,8 @@ function writeStateToTables(state) {
     'DELETE FROM daily_reviews;',
     'DELETE FROM study_projects;',
     'DELETE FROM study_time_records;',
+    'DELETE FROM study_daily_summaries;',
+    'DELETE FROM study_project_daily_summaries;',
     'DELETE FROM subjects;',
     'DELETE FROM mock_exam_records;',
     'DELETE FROM short_term_tasks;',
@@ -589,6 +609,7 @@ VALUES (1, ${sqlString(JSON.stringify(normalized))}, datetime('now'))
 ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;`);
   scripts.push('COMMIT;');
   runSqlite(scripts.filter(Boolean).join('\n'), { maxBuffer: 128 * 1024 * 1024 });
+  rebuildStudySummaries();
 }
 
 function readStateFromTables() {
@@ -1252,9 +1273,13 @@ function currentErrorThemeJobSnapshot() {
 function refreshCurrentReportsAfterBatch(trigger = 'manual') {
   try {
     for (const kind of ['weekly', 'monthly']) {
-      const period = currentPeriod(kind);
-      generateLearningReport(kind, period.periodStart, period.periodEnd, trigger);
+      for (const period of [previousPeriod(kind), currentPeriod(kind)]) {
+        generateLearningReport(kind, period.periodStart, period.periodEnd, trigger);
+      }
     }
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_report_precomputed_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   } catch (error) {
     console.error('[reports] refresh after error theme batch failed:', error);
   }
@@ -1886,6 +1911,13 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '5', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 6) {
+    createBackupFile('pre-study-summaries', 'automatic backup before materialized study summary migration');
+    rebuildStudySummaries();
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '6', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -1893,11 +1925,13 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   sqliteReady = true;
   ensureWeeklyBackup();
   ensureDictionaryIndex();
-  ensureAutomaticReports();
+  ensureStudySummariesReady();
+  if (!Number(sqliteScalar('SELECT COUNT(*) FROM learning_reports;') || 0)) {
+    ensureAutomaticReports();
+  }
   if (!reportTimerStarted) {
     setInterval(() => {
       ensureWeeklyBackup();
-      ensureAutomaticReports();
     }, 6 * 60 * 60 * 1000).unref();
     reportTimerStarted = true;
   }
@@ -2055,6 +2089,54 @@ VALUES ('data_updated_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
 }
 
+function rebuildStudySummaries() {
+  const timestamp = nowISO();
+  runSqlite(`BEGIN;
+DELETE FROM study_daily_summaries;
+DELETE FROM study_project_daily_summaries;
+INSERT INTO study_daily_summaries (date, total_minutes, record_count, updated_at)
+SELECT date, COALESCE(SUM(minutes), 0), COUNT(*), ${sqlString(timestamp)}
+FROM study_time_records
+GROUP BY date;
+INSERT INTO study_project_daily_summaries (date, project_id, project_name_snapshot, minutes, record_count, updated_at)
+SELECT date, project_id, project_name_snapshot, COALESCE(SUM(minutes), 0), COUNT(*), ${sqlString(timestamp)}
+FROM study_time_records
+GROUP BY date, project_id, project_name_snapshot;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('study_summaries_rebuilt_at', ${sqlString(timestamp)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+COMMIT;`);
+}
+
+function refreshStudySummariesForDate(date) {
+  const targetDate = date || todayISO();
+  const timestamp = nowISO();
+  runSqlite(`BEGIN;
+DELETE FROM study_daily_summaries WHERE date = ${sqlString(targetDate)};
+DELETE FROM study_project_daily_summaries WHERE date = ${sqlString(targetDate)};
+INSERT INTO study_daily_summaries (date, total_minutes, record_count, updated_at)
+SELECT date, COALESCE(SUM(minutes), 0), COUNT(*), ${sqlString(timestamp)}
+FROM study_time_records
+WHERE date = ${sqlString(targetDate)}
+GROUP BY date;
+INSERT INTO study_project_daily_summaries (date, project_id, project_name_snapshot, minutes, record_count, updated_at)
+SELECT date, project_id, project_name_snapshot, COALESCE(SUM(minutes), 0), COUNT(*), ${sqlString(timestamp)}
+FROM study_time_records
+WHERE date = ${sqlString(targetDate)}
+GROUP BY date, project_id, project_name_snapshot;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('study_summaries_rebuilt_at', ${sqlString(timestamp)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+COMMIT;`);
+}
+
+function ensureStudySummariesReady() {
+  const recordCount = Number(sqliteScalar('SELECT COUNT(*) FROM study_time_records;') || 0);
+  const summaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM study_daily_summaries;') || 0);
+  const rebuiltAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'study_summaries_rebuilt_at' LIMIT 1;");
+  if (recordCount && (!summaryCount || !rebuiltAt)) rebuildStudySummaries();
+}
+
 function saveGoalSql(payload) {
   const timestamp = nowISO();
   if (payload.isActive) {
@@ -2208,6 +2290,7 @@ updated_at = excluded.updated_at;`);
   }
   statements.push('COMMIT;');
   runSqlite(statements.join('\n'));
+  refreshStudySummariesForDate(date);
   tableChanged();
 }
 
@@ -2244,21 +2327,30 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 
 function getLastNDaysTotals(days, endDate = todayISO()) {
   const startDate = addDaysISO(endDate, -(days - 1));
-  const rows = sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
-FROM study_time_records
+  const rows = sqliteJson(`SELECT date, total_minutes AS minutes
+FROM study_daily_summaries
 WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
-GROUP BY date;`);
+ORDER BY date;`);
   const map = new Map(rows.map((row) => [row.date, Number(row.minutes || 0)]));
   return dateRange(startDate, endDate).map((date) => ({ date, minutes: map.get(date) || 0 }));
 }
 
 function getProjectTotals(startDate, endDate) {
   return sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS minutes
-FROM study_time_records
+FROM study_project_daily_summaries
 WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
 GROUP BY project_name_snapshot
 HAVING minutes > 0
 ORDER BY minutes DESC, name;`).map((row) => ({ name: row.name, minutes: Number(row.minutes || 0) }));
+}
+
+function getProjectDistributionForDate(date) {
+  return sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
+FROM study_project_daily_summaries
+WHERE date = ${sqlString(date)}
+GROUP BY project_name_snapshot
+HAVING value > 0
+ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
 }
 
 function getDashboardPayload(sessionRole) {
@@ -2271,16 +2363,9 @@ function getDashboardPayload(sessionRole) {
   const activeGoal = sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`).map((goal) => ({ ...goal, isActive: Boolean(goal.isActive) }))[0] || null;
-  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
-  const totalStudyMinutes = Number(sqliteScalar('SELECT COALESCE(SUM(minutes), 0) FROM study_time_records;') || 0);
+  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(today)};`) || 0);
+  const totalStudyMinutes = Number(sqliteScalar('SELECT COALESCE(SUM(total_minutes), 0) FROM study_daily_summaries;') || 0);
   const studyTargetMinutes = getStudyTargetMinutes();
-  const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
-FROM study_time_records
-WHERE date = ${sqlString(today)}
-GROUP BY project_name_snapshot
-HAVING value > 0
-ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
-  const trend = getLastNDaysTotals(7, today);
   const latestExam = sqliteJson(`SELECT id, date, subject_id AS subjectId, subject_name_snapshot AS subjectNameSnapshot, score, full_score AS fullScore,
 paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
@@ -2303,8 +2388,6 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     todayTotal,
     totalStudyMinutes,
     studyTargetMinutes,
-    distribution,
-    trend,
     latestExam,
     todayReview: reviews.find((review) => review.date === today) || null,
     yesterdayReview: reviews.find((review) => review.date === yesterday) || null,
@@ -2315,19 +2398,23 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
   return { ...payload, readOnly: sessionRole === 'read' };
 }
 
+function getDashboardChartsPayload() {
+  const today = todayISO();
+  return {
+    today,
+    distribution: getProjectDistributionForDate(today),
+    trend: getLastNDaysTotals(7, today),
+  };
+}
+
 function getStatisticsSummary() {
   const cacheDate = todayISO();
   if (statisticsSummaryCache?.revision === dataRevision && statisticsSummaryCache.date === cacheDate) {
     return statisticsSummaryCache.payload;
   }
   const today = cacheDate;
-  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date = ${sqlString(today)};`) || 0);
-  const distribution = sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
-FROM study_time_records
-WHERE date = ${sqlString(today)}
-GROUP BY project_name_snapshot
-HAVING value > 0
-ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
+  const todayTotal = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(today)};`) || 0);
+  const distribution = getProjectDistributionForDate(today);
   const last7 = getLastNDaysTotals(7, today);
   const last30 = getProjectTotals(addDaysISO(today, -29), today);
   const payload = { today, todayTotal, distribution, last7, last30 };
@@ -2758,6 +2845,12 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/dashboard/charts' && req.method === 'GET') {
+    ensureSqliteStore();
+    sendJson(res, getDashboardChartsPayload());
+    return;
+  }
+
   if (req.url === '/api/dashboard' && req.method === 'GET') {
     ensureSqliteStore();
     sendJson(res, getDashboardPayload(sessionRole));
@@ -2871,7 +2964,6 @@ ORDER BY project_id;`);
 
   if (req.url?.startsWith('/api/reports') && req.method === 'GET') {
     ensureSqliteStore();
-    ensureAutomaticReports();
     sendJson(res, { reports: listLearningReports() });
     return;
   }

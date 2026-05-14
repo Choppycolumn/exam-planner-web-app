@@ -20,14 +20,20 @@ export interface DashboardData {
   todayTotal: number;
   totalStudyMinutes: number;
   studyTargetMinutes: number;
-  distribution: Array<{ name: string; value: number }>;
-  trend: Array<{ date: string; minutes: number }>;
+  distribution?: Array<{ name: string; value: number }>;
+  trend?: Array<{ date: string; minutes: number }>;
   latestExam: MockExamRecord | null;
   todayReview: DailyReview | null;
   yesterdayReview: DailyReview | null;
   visibleTasks: ShortTermTask[];
   todayWaterRecord: WaterIntakeRecord | null;
   readOnly?: boolean;
+}
+
+export interface DashboardChartsData {
+  today: string;
+  distribution: Array<{ name: string; value: number }>;
+  trend: Array<{ date: string; minutes: number }>;
 }
 
 export interface StatisticsSummary {
@@ -343,6 +349,7 @@ function cachedDashboard() {
 export const serverApi = {
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
+  getDashboardCharts: () => apiRequest<DashboardChartsData>('/dashboard/charts'),
   getGoals: () => apiRequest<ReferenceList<Goal>>('/goals'),
   getProjects: () => apiRequest<ReferenceList<StudyProject>>('/projects'),
   getSubjects: () => apiRequest<ReferenceList<Subject>>('/subjects'),

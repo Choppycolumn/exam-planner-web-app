@@ -7,7 +7,6 @@ import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 import { preloadSecondaryRoutes } from '../router/preload';
 
 const navItems = [
-  { to: '/task-center', label: '任务中心', icon: Cpu },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
@@ -17,6 +16,7 @@ const navItems = [
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/settings', label: '设置', icon: Settings },
+  { to: '/task-center', label: '任务中心', icon: Cpu },
 ];
 
 export function Layout() {

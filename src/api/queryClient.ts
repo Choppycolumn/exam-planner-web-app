@@ -15,6 +15,7 @@ export const queryKeys = {
   all: ['server'] as const,
   state: ['server', 'state'] as const,
   dashboard: ['server', 'dashboard'] as const,
+  dashboardCharts: ['server', 'dashboard', 'charts'] as const,
   goals: ['server', 'goals'] as const,
   projects: ['server', 'projects'] as const,
   subjects: ['server', 'subjects'] as const,

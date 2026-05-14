@@ -26,12 +26,12 @@ export function preloadSecondaryRoutes() {
     routeLoaders.reviews,
     routeLoaders.statistics,
     routeLoaders.reports,
-    routeLoaders.taskCenter,
     routeLoaders.mockExams,
     routeLoaders.confusingWords,
     routeLoaders.reviewInsights,
     routeLoaders.settings,
     routeLoaders.goals,
+    routeLoaders.taskCenter,
     routeLoaders.migrateLocalData,
   ];
 
@@ -39,7 +39,7 @@ export function preloadSecondaryRoutes() {
     loaders.forEach((loader, index) => {
       window.setTimeout(() => {
         void loader().catch(() => undefined);
-      }, index * 180);
+      }, index * 220);
     });
   };
 

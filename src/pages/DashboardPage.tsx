@@ -1,6 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { BookOpen, CalendarCheck, ClipboardList, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { serverApi } from '../api/client';
+import { queryKeys } from '../api/queryClient';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
@@ -20,9 +23,15 @@ import { routeLoaders } from '../router/preload';
 const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
 export function DashboardPage() {
-  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, distribution, trend, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
+  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const [chartsReady, setChartsReady] = useState(false);
+  const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
+    queryKey: queryKeys.dashboardCharts,
+    queryFn: serverApi.getDashboardCharts,
+    enabled: chartsReady,
+    placeholderData: { today: todayISO(), distribution: [], trend: [] },
+  });
   const today = todayISO();
   const reviewScore = getReviewAverageScore(todayReview ?? undefined);
   const reviewTone = getReviewTone(reviewScore);
@@ -137,7 +146,7 @@ export function DashboardPage() {
 
       {chartsReady ? (
         <Suspense fallback={<div className="mt-6 grid gap-4 lg:grid-cols-2"><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div></div>}>
-          <LazyDashboardCharts distribution={distribution} trend={trend} />
+          <LazyDashboardCharts distribution={dashboardCharts.distribution} trend={dashboardCharts.trend} />
         </Suspense>
       ) : null}
 
