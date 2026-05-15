@@ -183,6 +183,7 @@ export interface ErrorThemeBatchResult {
   deduplicatedCount: number;
   themeCount: number;
   modelName: string;
+  modelProfile?: EmbeddingModelProfile;
   source: string;
   backend: string;
   dimensions: number;
@@ -191,6 +192,8 @@ export interface ErrorThemeBatchResult {
   completedAt: string;
 }
 
+export type EmbeddingModelProfile = 'small' | 'large';
+
 export interface ErrorThemeBatchJob {
   id: string;
   status: 'queued' | 'running' | 'completed' | 'failed';
@@ -198,6 +201,8 @@ export interface ErrorThemeBatchJob {
   periodEnd: string;
   mode: string;
   trigger: string;
+  modelProfile?: EmbeddingModelProfile;
+  modelName?: string;
   startedAt: string;
   completedAt: string | null;
   result: ErrorThemeBatchResult | null;
@@ -213,6 +218,11 @@ export interface EmbeddingStatus {
   available: boolean;
   backend: string;
   modelName: string;
+  modelProfile?: EmbeddingModelProfile;
+  smallModelName?: string;
+  largeModelName?: string;
+  nightlyModelProfile?: EmbeddingModelProfile;
+  manualModelProfile?: EmbeddingModelProfile;
   cacheDir: string;
   workerFile: string;
   python: string | null;
@@ -409,8 +419,8 @@ export const serverApi = {
   },
   getErrorThemeOptions: () => apiRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('/error-themes/options'),
   getErrorThemeBatchStatus: () => apiRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('/error-themes/batch/status'),
-  runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding') =>
-    apiRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode } }),
+  runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding', modelProfile: EmbeddingModelProfile = 'large') =>
+    apiRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode, modelProfile } }),
   saveErrorThemeCorrection: (body: {
     occurrenceId: number;
     sentence: string;

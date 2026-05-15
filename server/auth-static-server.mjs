@@ -3,7 +3,7 @@ import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, re
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
 
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
@@ -15,7 +15,8 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
-const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
+const smallEmbeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
+const largeEmbeddingModelName = process.env.LARGE_EMBEDDING_MODEL_NAME || 'intfloat/multilingual-e5-large';
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
@@ -923,12 +924,27 @@ function resolveEmbeddingPython() {
   return null;
 }
 
-function getEmbeddingStatus() {
+function normalizeEmbeddingModelProfile(profile) {
+  return profile === 'small' ? 'small' : 'large';
+}
+
+function embeddingModelNameForProfile(profile) {
+  return normalizeEmbeddingModelProfile(profile) === 'small' ? smallEmbeddingModelName : largeEmbeddingModelName;
+}
+
+function getEmbeddingStatus(profile = 'large') {
+  const modelProfile = normalizeEmbeddingModelProfile(profile);
+  const modelName = embeddingModelNameForProfile(modelProfile);
   const python = resolveEmbeddingPython();
   const baseStatus = {
     available: false,
     backend: 'unavailable',
-    modelName: embeddingModelName,
+    modelName,
+    modelProfile,
+    smallModelName: smallEmbeddingModelName,
+    largeModelName: largeEmbeddingModelName,
+    nightlyModelProfile: 'large',
+    manualModelProfile: 'large',
     cacheDir: embeddingCacheDir,
     workerFile: embeddingWorkerFile,
     python,
@@ -942,27 +958,75 @@ function getEmbeddingStatus() {
   return { ...baseStatus, available: true, backend: 'fastembed', error: '' };
 }
 
-function runEmbeddingWorker(texts) {
+function runEmbeddingWorker(texts, modelName = largeEmbeddingModelName) {
   const python = resolveEmbeddingPython();
   if (!python) throw new Error('Python executable not found');
   if (!existsSync(embeddingWorkerFile)) throw new Error('embedding_worker.py not found');
-  const result = spawnSync(python, [embeddingWorkerFile], {
-    input: JSON.stringify({ texts, modelName: embeddingModelName, cacheDir: embeddingCacheDir }),
-    encoding: 'utf8',
-    timeout: 45 * 60 * 1000,
-    maxBuffer: 96 * 1024 * 1024,
-    env: {
-      ...process.env,
-      HF_ENDPOINT: process.env.HF_ENDPOINT || 'https://hf-mirror.com',
-      EMBEDDING_MODEL_NAME: embeddingModelName,
-      EMBEDDING_CACHE_DIR: embeddingCacheDir,
-    },
+  const maxBuffer = 96 * 1024 * 1024;
+  return new Promise((resolveWorker, rejectWorker) => {
+    const command = process.platform === 'win32' ? python : 'nice';
+    const args = process.platform === 'win32' ? [embeddingWorkerFile] : ['-n', '10', python, embeddingWorkerFile];
+    const child = spawn(command, args, {
+      env: {
+        ...process.env,
+        HF_ENDPOINT: process.env.HF_ENDPOINT || 'https://hf-mirror.com',
+        EMBEDDING_MODEL_NAME: modelName,
+        EMBEDDING_CACHE_DIR: embeddingCacheDir,
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      fail(new Error('embedding worker timed out'));
+      child.kill('SIGKILL');
+    }, 45 * 60 * 1000);
+
+    function fail(error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      rejectWorker(error);
+    }
+
+    function appendStdout(chunk) {
+      stdout += chunk.toString('utf8');
+      if (stdout.length > maxBuffer) {
+        fail(new Error('embedding worker stdout exceeded limit'));
+        child.kill('SIGKILL');
+      }
+    }
+
+    function appendStderr(chunk) {
+      stderr += chunk.toString('utf8');
+      if (stderr.length > maxBuffer) {
+        fail(new Error('embedding worker stderr exceeded limit'));
+        child.kill('SIGKILL');
+      }
+    }
+
+    child.stdout.on('data', appendStdout);
+    child.stderr.on('data', appendStderr);
+    child.on('error', fail);
+    child.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code !== 0) {
+        rejectWorker(new Error(stderr || stdout || `embedding worker failed${signal ? `: ${signal}` : ''}`));
+        return;
+      }
+      try {
+        const payload = JSON.parse(stdout || '{}');
+        if (!payload.ok) throw new Error(payload.error || 'embedding worker unavailable');
+        resolveWorker(payload);
+      } catch (error) {
+        rejectWorker(error);
+      }
+    });
+    child.stdin.end(JSON.stringify({ texts, modelName, cacheDir: embeddingCacheDir }));
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'embedding worker failed');
-  const payload = JSON.parse(result.stdout || '{}');
-  if (!payload.ok) throw new Error(payload.error || 'embedding worker unavailable');
-  return payload;
 }
 
 function cosineSimilarity(a, b) {
@@ -1000,17 +1064,19 @@ function semanticThresholdForField(fieldKey, hasCue) {
   return hasCue ? 0.78 : 0.86;
 }
 
-function extractEmbeddingProblemCandidates(reviews, timestamp, skippedSegmentKeys = new Set()) {
+async function extractEmbeddingProblemCandidates(reviews, timestamp, skippedSegmentKeys = new Set(), modelProfile = 'large') {
+  const selectedProfile = normalizeEmbeddingModelProfile(modelProfile);
+  const requestedModelName = embeddingModelNameForProfile(selectedProfile);
   const segments = extractReviewProblemSegments(reviews);
   if (!segments.length) {
-    return { candidates: [], modelName: embeddingModelName, source: 'local-embedding-batch', backend: 'fastembed', dimensions: 0, embeddedSentenceCount: 0 };
+    return { candidates: [], modelName: requestedModelName, modelProfile: selectedProfile, source: 'local-embedding-batch', backend: 'fastembed', dimensions: 0, embeddedSentenceCount: 0 };
   }
   const seedTexts = reviewProblemThemes.map(themeSeedText);
-  const workerResult = runEmbeddingWorker([...segments.map((item) => item.sentence), ...seedTexts]);
+  const workerResult = await runEmbeddingWorker([...segments.map((item) => item.sentence), ...seedTexts], requestedModelName);
   const vectors = workerResult.embeddings || [];
   const segmentVectors = vectors.slice(0, segments.length);
   const seedVectors = vectors.slice(segments.length);
-  const modelName = workerResult.modelName || embeddingModelName;
+  const modelName = workerResult.modelName || requestedModelName;
   const backend = workerResult.backend || 'fastembed';
   const dimensions = Number(workerResult.dimensions || segmentVectors[0]?.length || 0);
   storeSentenceEmbeddings(segments, segmentVectors, backend, modelName, dimensions, timestamp);
@@ -1050,7 +1116,7 @@ function extractEmbeddingProblemCandidates(reviews, timestamp, skippedSegmentKey
       source: 'local-embedding-batch',
     });
   });
-  return { candidates, modelName, source: 'local-embedding-batch', backend, dimensions, embeddedSentenceCount: segments.length };
+  return { candidates, modelName, modelProfile: selectedProfile, source: 'local-embedding-batch', backend, dimensions, embeddedSentenceCount: segments.length };
 }
 
 function mergeProblemCandidates(primary, secondary) {
@@ -1195,43 +1261,58 @@ WHERE id = ${sqlValue(occurrenceId)};`);
   };
 }
 
-function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp, source, modelName, note }) {
+function insertErrorThemeBatch({ periodStart, periodEnd, reviewCount, occurrenceCount, themeCount, timestamp, completedAt = timestamp, source, modelName, note, status = 'completed' }) {
   runSqlite(`INSERT INTO error_theme_batches (source, model_name, period_start, period_end, review_count, occurrence_count, theme_count, status, created_at, completed_at, note)
-VALUES (${sqlString(source)}, ${sqlString(modelName)}, ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, 'completed', ${sqlString(timestamp)}, ${sqlString(timestamp)}, ${sqlString(note)});`);
+VALUES (${sqlString(source)}, ${sqlString(modelName)}, ${sqlString(periodStart)}, ${sqlString(periodEnd)}, ${sqlValue(reviewCount)}, ${sqlValue(occurrenceCount)}, ${sqlValue(themeCount)}, ${sqlString(status)}, ${sqlString(timestamp)}, ${sqlValue(completedAt)}, ${sqlString(note)});`);
   return Number(sqliteScalar(`SELECT id FROM error_theme_batches WHERE created_at = ${sqlString(timestamp)} ORDER BY id DESC LIMIT 1;`) || 0);
 }
 
-function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO(), options = {}) {
+function recordFailedErrorThemeBatch({ periodStart, periodEnd, modelName, note }) {
+  const timestamp = nowISO();
+  const reviewCount = Number(sqliteScalar(`SELECT COUNT(*) FROM daily_reviews WHERE date BETWEEN ${sqlString(periodStart)} AND ${sqlString(periodEnd)};`) || 0);
+  return insertErrorThemeBatch({
+    periodStart,
+    periodEnd,
+    reviewCount,
+    occurrenceCount: 0,
+    themeCount: 0,
+    timestamp,
+    completedAt: timestamp,
+    source: 'local-embedding-batch',
+    modelName,
+    note,
+    status: 'failed',
+  });
+}
+
+async function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayISO(), options = {}) {
   ensureSqliteStore();
   const timestamp = nowISO();
   const from = periodStart || '1900-01-01';
   const to = periodEnd || todayISO();
+  const modelProfile = normalizeEmbeddingModelProfile(options.modelProfile);
   const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan
 FROM daily_reviews
 WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
 ORDER BY date;`);
   const corrections = loadErrorThemeCorrections();
   const correctionResult = extractCorrectionProblemCandidates(reviews, corrections);
-  const ruleCandidates = extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys);
   let embeddingMeta = null;
-  let candidates = mergeProblemCandidates(correctionResult.candidates, ruleCandidates);
-  if (options.mode !== 'rules') {
-    try {
-      embeddingMeta = extractEmbeddingProblemCandidates(reviews, timestamp, correctionResult.handledSegmentKeys);
-      candidates = mergeProblemCandidates(correctionResult.candidates, mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates));
-    } catch (error) {
-      embeddingMeta = { error: error instanceof Error ? error.message : String(error), source: 'local-rule-batch', modelName: 'local-review-topic-v1', backend: 'rule-fallback', dimensions: 0, embeddedSentenceCount: 0 };
-      candidates = mergeProblemCandidates(correctionResult.candidates, ruleCandidates);
-    }
+  let candidates = correctionResult.candidates;
+  if (options.mode === 'rules') {
+    candidates = mergeProblemCandidates(correctionResult.candidates, extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys));
+  } else {
+    embeddingMeta = await extractEmbeddingProblemCandidates(reviews, timestamp, correctionResult.handledSegmentKeys, modelProfile);
+    const ruleCandidates = extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys);
+    candidates = mergeProblemCandidates(correctionResult.candidates, mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates));
   }
   const rawCandidateCount = candidates.length;
   candidates = dedupeProblemCandidates(candidates);
   clearGeneratedErrorThemeOccurrences(from, to);
   const batchSource = embeddingMeta && !embeddingMeta.error ? 'local-embedding-batch' : 'local-rule-batch';
   const modelName = embeddingMeta && !embeddingMeta.error ? embeddingMeta.modelName : 'local-review-topic-v1';
-  const note = embeddingMeta?.error
-    ? `embedding unavailable, fell back to rules: ${embeddingMeta.error}`
-    : `manual local batch classification; backend=${embeddingMeta?.backend || 'rules'}; dimensions=${embeddingMeta?.dimensions || 0}`;
+  const triggerLabel = options.trigger || 'manual';
+  const note = `${triggerLabel} local batch classification; profile=${modelProfile}; backend=${embeddingMeta?.backend || 'rules'}; dimensions=${embeddingMeta?.dimensions || 0}`;
   const themeKeys = new Set(candidates.map((item) => item.themeId));
   const batchId = insertErrorThemeBatch({
     periodStart: from,
@@ -1264,6 +1345,7 @@ VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.revi
     deduplicatedCount: Math.max(0, rawCandidateCount - candidates.length),
     themeCount: themeKeys.size,
     modelName,
+    modelProfile,
     source: batchSource,
     backend: embeddingMeta?.backend || 'rules',
     dimensions: embeddingMeta?.dimensions || 0,
@@ -1292,10 +1374,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   }
 }
 
-function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = todayISO(), mode = 'embedding', trigger = 'manual' } = {}) {
+function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = todayISO(), mode = 'embedding', trigger = 'manual', modelProfile = 'large' } = {}) {
   if (errorThemeBatchJob?.status === 'running' || errorThemeBatchJob?.status === 'queued') {
     return { started: false, job: currentErrorThemeJobSnapshot() };
   }
+  const selectedProfile = normalizeEmbeddingModelProfile(modelProfile);
+  const selectedModelName = embeddingModelNameForProfile(selectedProfile);
   const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   errorThemeBatchJob = {
     id: jobId,
@@ -1304,16 +1388,18 @@ function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = today
     periodEnd,
     mode,
     trigger,
+    modelProfile: selectedProfile,
+    modelName: selectedModelName,
     startedAt: nowISO(),
     completedAt: null,
     result: null,
     error: '',
   };
-  setTimeout(() => {
+  setTimeout(async () => {
     if (!errorThemeBatchJob || errorThemeBatchJob.id !== jobId) return;
     errorThemeBatchJob = { ...errorThemeBatchJob, status: 'running' };
     try {
-      const result = runErrorThemeBatch(periodStart, periodEnd, { mode });
+      const result = await runErrorThemeBatch(periodStart, periodEnd, { mode, modelProfile: selectedProfile, trigger });
       refreshCurrentReportsAfterBatch(trigger === 'nightly' ? 'auto' : 'manual');
       errorThemeBatchJob = {
         ...errorThemeBatchJob,
@@ -1322,11 +1408,22 @@ function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = today
         result,
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      try {
+        recordFailedErrorThemeBatch({
+          periodStart,
+          periodEnd,
+          modelName: selectedModelName,
+          note: `${trigger} embedding failed; no rule fallback was written; profile=${selectedProfile}; error=${errorMessage}`,
+        });
+      } catch (recordError) {
+        console.error('[error-themes] failed to persist failed batch:', recordError);
+      }
       errorThemeBatchJob = {
         ...errorThemeBatchJob,
         status: 'failed',
         completedAt: nowISO(),
-        error: error instanceof Error ? error.message : String(error),
+        error: errorMessage,
       };
     }
   }, 50).unref();
@@ -1354,7 +1451,7 @@ function nextChinaThreeAMDelay() {
 function scheduleNightlyErrorThemeBatch() {
   const delay = nextChinaThreeAMDelay();
   setTimeout(() => {
-    startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'embedding', trigger: 'nightly' });
+    startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'embedding', trigger: 'nightly', modelProfile: 'large' });
     scheduleNightlyErrorThemeBatch();
   }, delay).unref();
 }
@@ -2957,7 +3054,13 @@ ORDER BY project_id;`);
     const body = await readJsonBody(req);
     const periodStart = body.from || '1900-01-01';
     const periodEnd = body.to || todayISO();
-    const result = startErrorThemeBatchJob({ periodStart, periodEnd, mode: body.mode === 'rules' ? 'rules' : 'embedding', trigger: 'manual' });
+    const result = startErrorThemeBatchJob({
+      periodStart,
+      periodEnd,
+      mode: body.mode === 'rules' ? 'rules' : 'embedding',
+      trigger: 'manual',
+      modelProfile: body.modelProfile === 'small' ? 'small' : 'large',
+    });
     sendJson(res, { ok: true, ...result });
     return;
   }

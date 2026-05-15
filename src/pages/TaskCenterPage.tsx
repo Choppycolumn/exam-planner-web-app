@@ -180,9 +180,9 @@ export function TaskCenterPage() {
           <button
             className="btn btn-primary"
             disabled={status?.readOnly || Boolean(status?.errorThemes.job && ['queued', 'running'].includes(status.errorThemes.job.status)) || busyAction === 'embedding'}
-            onClick={() => void runAction('embedding', () => serverApi.runErrorThemeBatch(undefined, undefined, 'embedding'), '本地模型批处理已进入后台')}
+            onClick={() => void runAction('embedding', () => serverApi.runErrorThemeBatch(undefined, undefined, 'embedding', 'large'), '本地大模型批处理已进入后台')}
           >
-            <Sparkles size={16} />启动整理
+            <Sparkles size={16} />启动大模型整理
           </button>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -204,8 +204,10 @@ export function TaskCenterPage() {
           </div>
         </div>
         <p className="mt-3 text-xs leading-5 text-slate-500">
-          当前模型：{status?.embedding.modelName ?? '--'}；最近批处理：
-          {status?.errorThemes.latestBatch ? `${formatDateTime(status.errorThemes.latestBatch.completedAt)}，${status.errorThemes.latestBatch.occurrenceCount} 条证据` : '暂无'}。
+          大模型：{status?.embedding.largeModelName ?? status?.embedding.modelName ?? '--'}；最近批处理：
+          {status?.errorThemes.latestBatch
+            ? `${formatDateTime(status.errorThemes.latestBatch.completedAt)}，${status.errorThemes.latestBatch.status}，${status.errorThemes.latestBatch.occurrenceCount} 条证据`
+            : '暂无'}。
         </p>
       </section>
 
