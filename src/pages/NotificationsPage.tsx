@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarCheck, CloudSun, Mail, Newspaper, RefreshCw, TrendingUp } from 'lucide-react';
+import { CalendarCheck, CloudSun, Mail, RefreshCw, TrendingUp } from 'lucide-react';
 import { Page } from '../components/Page';
 import { EmptyState } from '../components/EmptyState';
 import { Toast } from '../components/Toast';
@@ -18,7 +18,6 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
   const weather = brief.payload.weather;
   const learning = brief.payload.learning;
   const markets = brief.payload.markets ?? [];
-  const news = brief.payload.news ?? [];
 
   return (
     <section className="card p-5">
@@ -33,7 +32,7 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
         </div>
       </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p className="flex items-center gap-2 text-sm font-semibold text-slate-900"><CloudSun size={16} />天气</p>
           {weather?.ok ? (
@@ -53,12 +52,6 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
           <p className="mt-1 text-sm text-slate-600">近 7 天累计：{minutesToHoursText(learning?.last7Minutes ?? 0)}</p>
           {learning?.activeGoal ? <p className="mt-1 text-sm text-slate-600">{learning.activeGoal.name} 剩余 {learning.activeGoal.daysLeft} 天</p> : null}
           {learning?.yesterdayReview?.problems ? <p className="mt-3 line-clamp-3 text-sm text-slate-500">昨日问题：{learning.yesterdayReview.problems}</p> : null}
-        </div>
-
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <p className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Newspaper size={16} />关注话题</p>
-          <p className="mt-3 text-2xl font-semibold text-slate-950">{news.length}</p>
-          <p className="mt-1 text-sm text-slate-500">个主题已抓取，失败的主题会保留错误信息，方便调整关键词。</p>
         </div>
       </div>
 
@@ -94,28 +87,6 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
               </div>
             )) : <EmptyState title="今天没有到期任务" description="短期目标会在这里变成晨间提醒。" />}
           </div>
-        </div>
-      </div>
-
-      <div className="mt-5">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><Newspaper size={16} />新闻话题</h3>
-        <div className="mt-3 grid gap-4 lg:grid-cols-2">
-          {news.length ? news.map((topic) => (
-            <article key={topic.topic} className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="font-semibold text-slate-900">{topic.topic}</h4>
-                {!topic.ok ? <span className="text-xs text-rose-600">抓取失败</span> : null}
-              </div>
-              <div className="mt-3 space-y-3">
-                {topic.articles.length ? topic.articles.map((article) => (
-                  <a key={`${topic.topic}-${article.url || article.title}`} className="block rounded-lg bg-slate-50 p-3 text-sm transition hover:bg-blue-50" href={article.url} target="_blank" rel="noreferrer">
-                    <p className="font-medium leading-6 text-slate-800">{article.title}</p>
-                    <p className="mt-1 text-xs text-slate-500">{article.source || '未知来源'}</p>
-                  </a>
-                )) : <p className="text-sm text-slate-500">{topic.error || '暂无结果'}</p>}
-              </div>
-            </article>
-          )) : <EmptyState title="暂无新闻主题" description="去设置页添加你关心的话题。" />}
         </div>
       </div>
     </section>
@@ -173,7 +144,7 @@ export function NotificationsPage() {
   };
 
   return (
-    <Page title="通知中心" subtitle="每天早上聚合天气、关注话题、指数涨跌和学习提醒，也可以配置邮件推送。">
+    <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，也可以配置邮件推送。">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-primary" disabled={readOnly || loading} onClick={() => void generate(false)}>
@@ -206,7 +177,7 @@ export function NotificationsPage() {
           <BriefDetail brief={selected} />
         </div>
       ) : (
-        <EmptyState title="还没有晨间简报" description="点击生成今日简报后，这里会显示天气、新闻、指数和学习提醒。" />
+        <EmptyState title="还没有晨间简报" description="点击生成今日简报后，这里会显示天气、指数和学习提醒。" />
       )}
       {toast ? <Toast message={toast} /> : null}
     </Page>

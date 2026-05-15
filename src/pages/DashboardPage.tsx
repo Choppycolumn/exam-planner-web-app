@@ -102,8 +102,8 @@ export function DashboardPage() {
             </h2>
             <p className="mt-2 text-sm leading-6 text-slate-600">
               {todayBrief?.payload.weather?.ok
-                ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；关注话题 ${todayBrief.payload.news?.length ?? 0} 个，指数 ${todayBrief.payload.markets?.length ?? 0} 项。`
-                : '点击进入通知中心，生成天气、新闻话题、指数涨跌和学习提醒。'}
+                ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；指数 ${todayBrief.payload.markets?.length ?? 0} 项。`
+                : '点击进入通知中心，生成天气、指数涨跌和学习提醒。'}
             </p>
           </div>
           <span className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700">

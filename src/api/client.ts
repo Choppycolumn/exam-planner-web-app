@@ -43,7 +43,6 @@ export interface DailyBriefSettings {
   cityName: string;
   latitude: number;
   longitude: number;
-  newsTopicsText: string;
   marketSymbolsText: string;
   nextDailyBriefAt?: string | null;
   email: {
@@ -85,7 +84,6 @@ export interface DailyBrief {
       error?: string;
     };
     markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number | null; changePercent?: number; currency?: string; error?: string }>;
-    news?: Array<{ topic: string; ok: boolean; articles: Array<{ title: string; url: string; source?: string; seenAt?: string }>; error?: string }>;
     learning?: {
       activeGoal: { name: string; deadline: string; daysLeft: number } | null;
       yesterday: string;

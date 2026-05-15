@@ -27,7 +27,6 @@ const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
-const dailyBriefNewsCooldownKey = 'daily_brief_news_cooldown_until';
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
@@ -1486,7 +1485,6 @@ function defaultDailyBriefSettings() {
     cityName: '北京',
     latitude: 39.9042,
     longitude: 116.4074,
-    newsTopicsText: '综合热榜\n财经热榜\n科技热榜\n考研教育',
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
     email: {
       enabled: false,
@@ -1515,7 +1513,6 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
     cityName: String(input.cityName || defaults.cityName).trim() || defaults.cityName,
     latitude: Number.isFinite(Number(input.latitude)) ? Number(input.latitude) : defaults.latitude,
     longitude: Number.isFinite(Number(input.longitude)) ? Number(input.longitude) : defaults.longitude,
-    newsTopicsText: String(input.newsTopicsText ?? defaults.newsTopicsText),
     marketSymbolsText: String(input.marketSymbolsText ?? defaults.marketSymbolsText),
     email: {
       enabled: Boolean(emailInput.enabled),
@@ -1602,14 +1599,6 @@ function fetchJsonWithCurl(url, timeoutSeconds = 9) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
   return JSON.parse(result.stdout);
-}
-
-async function fetchJsonRobust(url, timeoutMs = 9000) {
-  try {
-    return await fetchJsonWithTimeout(url, timeoutMs);
-  } catch {
-    return fetchJsonWithCurl(url, Math.max(3, Math.ceil(timeoutMs / 1000)));
-  }
 }
 
 async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
@@ -2015,185 +2004,6 @@ async function getStooqMarket(symbolItem) {
   }
 }
 
-async function getBriefNews(topic) {
-  const query = encodeURIComponent(`${topic} sourceCountry:CH OR sourceCountry:US`);
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query}&mode=ArtList&maxrecords=5&format=json&sort=HybridRel&timespan=24h`;
-  try {
-    const data = await fetchJsonWithTimeout(url);
-    const articles = Array.isArray(data.articles) ? data.articles : [];
-    return {
-      topic,
-      ok: true,
-      articles: articles.slice(0, 5).map((article) => ({
-        title: article.title || '未命名新闻',
-        url: article.url || '',
-        source: article.domain || article.sourceCountry || '',
-        seenAt: article.seendate || '',
-      })),
-    };
-  } catch (error) {
-    return { topic, ok: false, articles: [], error: error instanceof Error ? error.message : String(error) };
-  }
-}
-
-function gdeltTopicQuery(topic) {
-  const text = String(topic || '').trim();
-  if (!text) return '';
-  return /[\s:]/.test(text) ? `"${text.replace(/"/g, '')}"` : text;
-}
-
-const newsTopicAliases = {
-  考研: ['考研', '研究生考试', '硕士研究生', '研究生招生', '复试', '调剂', '国家线'],
-  考研教育: ['考研', '研究生考试', '硕士研究生', '研究生招生', '复试', '调剂', '国家线', '教育部', '招生考试'],
-  教育: ['教育', '教育部', '高校', '大学', '研究生', '招生考试'],
-  人工智能: ['人工智能', '大模型', '生成式AI', '机器学习', '深度学习', 'OpenAI', 'ChatGPT', 'LLM'],
-  半导体: ['半导体', '芯片', '晶圆', '光刻机', '先进制程', '台积电', '英伟达', 'NVIDIA'],
-  宏观经济: ['宏观经济', '央行', '通胀', 'CPI', 'PPI', 'GDP', '利率', '财政', '货币政策'],
-};
-
-function topicKeywords(topic) {
-  const text = String(topic || '').trim();
-  return Array.from(new Set([text, ...(newsTopicAliases[text] || [])].filter(Boolean)));
-}
-
-function keywordMatchesText(text, keyword) {
-  const source = String(text || '').toLowerCase();
-  const value = String(keyword || '').trim().toLowerCase();
-  if (!value) return false;
-  if (/^[a-z0-9.+-]+$/i.test(value)) {
-    return new RegExp(`(^|[^a-z0-9])${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(source);
-  }
-  return source.includes(value);
-}
-
-function gdeltQueryForTopics(topics) {
-  const terms = new Set();
-  for (const topic of topics) {
-    topicKeywords(topic).forEach((keyword) => terms.add(gdeltTopicQuery(keyword)));
-  }
-  return `(${Array.from(terms).filter(Boolean).join(' OR ')})`;
-}
-
-function normalizeNewsArticle(article) {
-  return {
-    title: article.title || '未命名新闻',
-    url: article.url || '',
-    source: article.source || article.domain || article.sourceCountry || '',
-    seenAt: article.seendate || '',
-  };
-}
-
-function articleMatchesTopic(article, topic) {
-  const haystack = `${article.title || ''} ${article.url || ''} ${article.domain || ''}`;
-  return topicKeywords(topic).some((keyword) => keywordMatchesText(haystack, keyword));
-}
-
-function hotCategoryForTopic(topic) {
-  const text = String(topic || '').trim().toLowerCase();
-  if (/(财经|金融|股市|市场|经济热榜)/.test(text)) return { source: 'baidu-finance', strict: false };
-  if (/(科技热榜|技术热榜|hacker|开发|编程)/.test(text)) return { source: 'hacker-news', strict: false };
-  if (/(综合|实时|热榜|百度|头条|全网)/.test(text)) return { source: 'baidu-realtime', strict: false };
-  if (/(科技|技术|人工智能|ai|半导体|芯片|宏观经济|教育|考研)/.test(text)) {
-    return { source: /(宏观经济|财经|金融|股市)/.test(text) ? 'baidu-finance' : 'baidu-realtime', strict: true };
-  }
-  return { source: 'baidu-realtime', strict: true };
-}
-
-function baiduHotItemsFromResponse(data, sourceName) {
-  const items = [];
-  const visit = (value) => {
-    if (!value || typeof value !== 'object') return;
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (value.word && value.url) {
-      items.push({
-        title: String(value.word),
-        url: String(value.url),
-        source: sourceName,
-        seenAt: '',
-        hotScore: value.hotScore || value.score || value.rawUrl || '',
-      });
-    }
-    Object.values(value).forEach(visit);
-  };
-  visit(data);
-  const seen = new Set();
-  return items.filter((item) => {
-    const key = item.url || item.title;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-async function getBaiduHotItems(tab, sourceName) {
-  const data = await fetchJsonRobust(`https://top.baidu.com/api/board?platform=wise&tab=${encodeURIComponent(tab)}`, 12000);
-  return baiduHotItemsFromResponse(data, sourceName);
-}
-
-async function getHackerNewsItems() {
-  const ids = await fetchJsonRobust('https://hacker-news.firebaseio.com/v0/topstories.json', 12000);
-  const topIds = Array.isArray(ids) ? ids.slice(0, 12) : [];
-  const items = await Promise.all(topIds.map(async (id) => {
-    try {
-      const item = await fetchJsonRobust(`https://hacker-news.firebaseio.com/v0/item/${id}.json`, 9000);
-      if (!item?.title) return null;
-      return {
-        title: item.title,
-        url: item.url || `https://news.ycombinator.com/item?id=${id}`,
-        source: 'Hacker News',
-        seenAt: '',
-        hotScore: item.score || '',
-      };
-    } catch {
-      return null;
-    }
-  }));
-  return items.filter(Boolean);
-}
-
-async function getHotListForTopic(topic, cache) {
-  const category = hotCategoryForTopic(topic);
-  const cacheKey = category.source;
-  if (!cache.has(cacheKey)) {
-    if (category.source === 'baidu-finance') cache.set(cacheKey, await getBaiduHotItems('finance', '百度财经热榜'));
-    else if (category.source === 'hacker-news') cache.set(cacheKey, await getHackerNewsItems());
-    else cache.set(cacheKey, await getBaiduHotItems('realtime', '百度实时热榜'));
-  }
-  const allItems = cache.get(cacheKey) || [];
-  const matched = category.strict ? allItems.filter((item) => articleMatchesTopic({ title: item.title, url: item.url, domain: item.source }, topic)) : allItems;
-  return matched.slice(0, 5);
-}
-
-async function getBriefNewsBatch(topics) {
-  const normalizedTopics = topics.map((topic) => String(topic || '').trim()).filter(Boolean);
-  if (!normalizedTopics.length) return [];
-  const cooldownUntil = sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(dailyBriefNewsCooldownKey)} LIMIT 1;`);
-  if (cooldownUntil && new Date(cooldownUntil).getTime() > Date.now()) {
-    return normalizedTopics.map((topic) => ({ topic, ok: false, articles: [], error: `news source cooling down until ${cooldownUntil}` }));
-  }
-  const hotListCache = new Map();
-  try {
-    runSqlite(`DELETE FROM app_metadata WHERE key = ${sqlString(dailyBriefNewsCooldownKey)};`);
-    return await Promise.all(normalizedTopics.map(async (topic) => ({
-      topic,
-      ok: true,
-      articles: (await getHotListForTopic(topic, hotListCache)).map(normalizeNewsArticle),
-    })));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('429')) {
-      const cooldown = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-      runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES (${sqlString(dailyBriefNewsCooldownKey)}, ${sqlString(cooldown)}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
-    }
-    return normalizedTopics.map((topic) => ({ topic, ok: false, articles: [], error: message }));
-  }
-}
-
 function getDailyBriefLearningSummary(date) {
   const yesterday = addDaysISO(date, -1);
   const activeGoal = sqliteJson(`SELECT name, deadline FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`)[0] || null;
@@ -2272,24 +2082,11 @@ FROM daily_briefs ORDER BY date DESC, id DESC LIMIT ${Math.max(1, Math.min(100, 
 async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendEmail = false } = {}) {
   const settings = getDailyBriefSettings({ includeSecret: true });
   const generatedAt = nowISO();
-  const topics = splitLines(settings.newsTopicsText).slice(0, 8);
   const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
-  const [weather, markets, newsResult] = await Promise.all([
+  const [weather, markets] = await Promise.all([
     getBriefWeather(settings),
     Promise.all(marketSymbols.map(getBriefMarket)),
-    getBriefNewsBatch(topics),
   ]);
-  let news = newsResult;
-  if (news.every((topic) => !topic.ok || !topic.articles?.length)) {
-    const previous = getLatestDailyBriefSummary();
-    const previousNews = previous?.payload?.news;
-    if (Array.isArray(previousNews) && previousNews.some((topic) => topic.articles?.length)) {
-      news = topics.map((topic) => {
-        const matched = previousNews.find((item) => item.topic === topic);
-        return matched?.articles?.length ? { ...matched, reusedFromPrevious: true } : newsResult.find((item) => item.topic === topic) || { topic, ok: false, articles: [], error: 'news source unavailable' };
-      });
-    }
-  }
   const payload = {
     date,
     title: dailyBriefTitle(date),
@@ -2297,7 +2094,6 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     trigger,
     weather,
     markets,
-    news,
     learning: getDailyBriefLearningSummary(date),
   };
 
@@ -2385,11 +2181,9 @@ function encodeMailHeader(value) {
 function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
-  const news = payload.news || [];
   const learning = payload.learning || {};
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
-  const newsBlocks = news.map((topic) => `<h3>${escapeHtml(topic.topic)}</h3><ul>${(topic.articles || []).map((article) => `<li><a href="${escapeHtml(article.url)}">${escapeHtml(article.title)}</a> <span style="color:#64748b">${escapeHtml(article.source)}</span></li>`).join('') || '<li>暂无结果</li>'}</ul>`).join('');
   return `<!doctype html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;line-height:1.6">
   <h1>${escapeHtml(payload.title)}</h1>
@@ -2402,8 +2196,6 @@ function dailyBriefHtml(payload) {
   ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
   <h2>指数与资产</h2>
   <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>名称</th><th>代码</th><th>最新</th><th>涨跌</th></tr></thead><tbody>${marketRows || '<tr><td colspan="4">暂无配置</td></tr>'}</tbody></table>
-  <h2>关注话题</h2>
-  ${newsBlocks || '<p>暂无关注话题。</p>'}
 </body></html>`;
 }
 

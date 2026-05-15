@@ -36,7 +36,6 @@ function defaultBriefSettings(): DailyBriefSettings {
     cityName: '北京',
     latitude: 39.9042,
     longitude: 116.4074,
-    newsTopicsText: '考研\n人工智能\n半导体\n宏观经济',
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
     email: {
       enabled: false,
@@ -273,7 +272,7 @@ export function SettingsPage() {
       </div>
       <div className="mt-5 card p-5">
         <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、关注话题、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
+        <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
             <input
@@ -305,11 +304,6 @@ export function SettingsPage() {
           </label>
         </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <label>
-            <span className="label">新闻栏目/话题（每行一个）</span>
-            <textarea className="field min-h-32" value={briefSettings.newsTopicsText} onChange={(event) => setBriefSettings({ ...briefSettings, newsTopicsText: event.target.value })} />
-            <p className="mt-1 text-xs leading-5 text-slate-500">可以直接添加。推荐栏目：综合热榜、财经热榜、科技热榜、考研教育；自定义话题会在热榜中严格匹配，没命中时不会用无关新闻凑数。</p>
-          </label>
           <label>
             <span className="label">指数/资产（名称|代码，每行一个）</span>
             <textarea className="field min-h-32" value={briefSettings.marketSymbolsText} onChange={(event) => setBriefSettings({ ...briefSettings, marketSymbolsText: event.target.value })} />
