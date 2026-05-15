@@ -192,7 +192,7 @@ export interface ErrorThemeBatchResult {
   completedAt: string;
 }
 
-export type EmbeddingModelProfile = 'small' | 'large';
+export type EmbeddingModelProfile = 'small' | 'large' | 'rules';
 
 export interface ErrorThemeBatchJob {
   id: string;
@@ -419,7 +419,7 @@ export const serverApi = {
   },
   getErrorThemeOptions: () => apiRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('/error-themes/options'),
   getErrorThemeBatchStatus: () => apiRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('/error-themes/batch/status'),
-  runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'embedding', modelProfile: EmbeddingModelProfile = 'large') =>
+  runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'rules', modelProfile: EmbeddingModelProfile = 'rules') =>
     apiRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode, modelProfile } }),
   saveErrorThemeCorrection: (body: {
     occurrenceId: number;

@@ -943,8 +943,8 @@ function getEmbeddingStatus(profile = 'large') {
     modelProfile,
     smallModelName: smallEmbeddingModelName,
     largeModelName: largeEmbeddingModelName,
-    nightlyModelProfile: 'large',
-    manualModelProfile: 'large',
+    nightlyModelProfile: 'rules',
+    manualModelProfile: 'rules',
     cacheDir: embeddingCacheDir,
     workerFile: embeddingWorkerFile,
     python,
@@ -1312,7 +1312,9 @@ ORDER BY date;`);
   const batchSource = embeddingMeta && !embeddingMeta.error ? 'local-embedding-batch' : 'local-rule-batch';
   const modelName = embeddingMeta && !embeddingMeta.error ? embeddingMeta.modelName : 'local-review-topic-v1';
   const triggerLabel = options.trigger || 'manual';
-  const note = `${triggerLabel} local batch classification; profile=${modelProfile}; backend=${embeddingMeta?.backend || 'rules'}; dimensions=${embeddingMeta?.dimensions || 0}`;
+  const note = options.mode === 'rules'
+    ? `${triggerLabel} rule batch classification; embedding model skipped`
+    : `${triggerLabel} local batch classification; profile=${modelProfile}; backend=${embeddingMeta?.backend || 'rules'}; dimensions=${embeddingMeta?.dimensions || 0}`;
   const themeKeys = new Set(candidates.map((item) => item.themeId));
   const batchId = insertErrorThemeBatch({
     periodStart: from,
@@ -1345,7 +1347,7 @@ VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.revi
     deduplicatedCount: Math.max(0, rawCandidateCount - candidates.length),
     themeCount: themeKeys.size,
     modelName,
-    modelProfile,
+    modelProfile: options.mode === 'rules' ? 'rules' : modelProfile,
     source: batchSource,
     backend: embeddingMeta?.backend || 'rules',
     dimensions: embeddingMeta?.dimensions || 0,
@@ -1374,7 +1376,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   }
 }
 
-function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = todayISO(), mode = 'embedding', trigger = 'manual', modelProfile = 'large' } = {}) {
+function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = todayISO(), mode = 'rules', trigger = 'manual', modelProfile = 'large' } = {}) {
   if (errorThemeBatchJob?.status === 'running' || errorThemeBatchJob?.status === 'queued') {
     return { started: false, job: currentErrorThemeJobSnapshot() };
   }
@@ -1388,8 +1390,8 @@ function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = today
     periodEnd,
     mode,
     trigger,
-    modelProfile: selectedProfile,
-    modelName: selectedModelName,
+    modelProfile: mode === 'rules' ? 'rules' : selectedProfile,
+    modelName: mode === 'rules' ? 'local-review-topic-v1' : selectedModelName,
     startedAt: nowISO(),
     completedAt: null,
     result: null,
@@ -1413,8 +1415,10 @@ function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = today
         recordFailedErrorThemeBatch({
           periodStart,
           periodEnd,
-          modelName: selectedModelName,
-          note: `${trigger} embedding failed; no rule fallback was written; profile=${selectedProfile}; error=${errorMessage}`,
+          modelName: mode === 'rules' ? 'local-review-topic-v1' : selectedModelName,
+          note: mode === 'rules'
+            ? `${trigger} rule batch failed; error=${errorMessage}`
+            : `${trigger} embedding failed; no rule fallback was written; profile=${selectedProfile}; error=${errorMessage}`,
         });
       } catch (recordError) {
         console.error('[error-themes] failed to persist failed batch:', recordError);
@@ -1451,7 +1455,7 @@ function nextChinaThreeAMDelay() {
 function scheduleNightlyErrorThemeBatch() {
   const delay = nextChinaThreeAMDelay();
   setTimeout(() => {
-    startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'embedding', trigger: 'nightly', modelProfile: 'large' });
+    startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'rules', trigger: 'nightly' });
     scheduleNightlyErrorThemeBatch();
   }, delay).unref();
 }
@@ -3057,7 +3061,7 @@ ORDER BY project_id;`);
     const result = startErrorThemeBatchJob({
       periodStart,
       periodEnd,
-      mode: body.mode === 'rules' ? 'rules' : 'embedding',
+      mode: body.mode === 'embedding' ? 'embedding' : 'rules',
       trigger: 'manual',
       modelProfile: body.modelProfile === 'small' ? 'small' : 'large',
     });

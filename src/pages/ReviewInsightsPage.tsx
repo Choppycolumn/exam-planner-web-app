@@ -42,8 +42,8 @@ const emptyEmbeddingStatus: EmbeddingStatus = {
   modelProfile: 'large',
   smallModelName: 'BAAI/bge-small-zh-v1.5',
   largeModelName: 'intfloat/multilingual-e5-large',
-  nightlyModelProfile: 'large',
-  manualModelProfile: 'large',
+  nightlyModelProfile: 'rules',
+  manualModelProfile: 'rules',
   cacheDir: '',
   workerFile: '',
   python: null,
@@ -108,7 +108,7 @@ export function ReviewInsightsPage() {
     if (readOnly) return;
     setBatchLoading(true);
     try {
-      const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd, 'embedding', 'large');
+      const result = await serverApi.runErrorThemeBatch(problemStart, problemEnd, 'rules');
       await queryClient.invalidateQueries({ queryKey: queryKeys.errorThemeBatchStatus });
       setToast(result.started ? '后台批处理已开始，完成后会自动刷新报告' : '已有批处理正在运行');
     } catch {
@@ -185,7 +185,7 @@ export function ReviewInsightsPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">错误主题库分析</h2>
-            <p className="mt-1 text-sm text-slate-500">本地大模型会把复盘句子转成语义向量，再写入错误主题库；失败时仅保留失败记录，等待你手动决策。</p>
+            <p className="mt-1 text-sm text-slate-500">规则分类会优先识别你反复出现的拖延、执行、英语阅读、数学错题等问题，并写入错误主题库。</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -203,18 +203,18 @@ export function ReviewInsightsPage() {
             </div>
             <button className="btn btn-primary" disabled={readOnly || batchLoading || Boolean(activeJob)} onClick={() => void runBatch()}>
               <RefreshCw size={16} className={batchLoading || activeJob ? 'animate-spin' : ''} />
-              {activeJob ? '后台批处理中' : '手动开始本地大模型批处理'}
+              {activeJob ? '后台批处理中' : '手动开始规则整理'}
             </button>
           </div>
         </div>
 
         <div className={`mt-4 rounded-lg border p-4 ${embeddingStatus.available ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-semibold">本地大模型：{embeddingStatus.available ? '可用' : '未就绪，批处理会标记失败'}</p>
+            <p className="text-sm font-semibold">当前策略：规则分类</p>
             <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold">{embeddingStatus.embeddingRows} 条向量已落库</span>
           </div>
           <p className="mt-2 text-xs leading-5">
-            大模型：{embeddingStatus.largeModelName || embeddingStatus.modelName}，后端：{embeddingStatus.backend}
+            备用模型：{embeddingStatus.smallModelName || embeddingStatus.modelName}，后端：{embeddingStatus.backend}
             {embeddingStatus.error ? `，状态：${embeddingStatus.error}` : ''}
           </p>
         </div>
@@ -361,7 +361,7 @@ export function ReviewInsightsPage() {
             </div>
           </>
         ) : (
-          <EmptyState title="错误主题库暂无数据" description="点击“手动开始本地模型批处理”后，系统会把历史复盘里的共性错误写入主题库。" />
+          <EmptyState title="错误主题库暂无数据" description="点击“手动开始规则整理”后，系统会把历史复盘里的共性错误写入主题库。" />
         )}
       </section>
 

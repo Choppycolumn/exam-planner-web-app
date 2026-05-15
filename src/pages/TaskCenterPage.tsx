@@ -72,7 +72,7 @@ export function TaskCenterPage() {
   };
 
   return (
-    <Page title="后台任务中心" subtitle="查看备份、报告、本地模型整理和服务器资源状态。">
+    <Page title="后台任务中心" subtitle="查看备份、报告、规则整理和服务器资源状态。">
       <div className="grid gap-4 lg:grid-cols-4">
         <div className="card p-5">
           <div className="flex items-center justify-between gap-3">
@@ -174,15 +174,15 @@ export function TaskCenterPage() {
       <section className="mt-5 card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">本地模型与错误主题库</h2>
-            <p className="mt-1 text-sm text-slate-500">夜间 3 点自动整理，也可以手动启动大模型批处理。</p>
+            <h2 className="text-base font-semibold text-slate-900">规则分类与错误主题库</h2>
+            <p className="mt-1 text-sm text-slate-500">夜间 3 点自动按规则整理，也可以手动刷新错误主题库。</p>
           </div>
           <button
             className="btn btn-primary"
-            disabled={status?.readOnly || Boolean(status?.errorThemes.job && ['queued', 'running'].includes(status.errorThemes.job.status)) || busyAction === 'embedding'}
-            onClick={() => void runAction('embedding', () => serverApi.runErrorThemeBatch(undefined, undefined, 'embedding', 'large'), '本地大模型批处理已进入后台')}
+            disabled={status?.readOnly || Boolean(status?.errorThemes.job && ['queued', 'running'].includes(status.errorThemes.job.status)) || busyAction === 'rules'}
+            onClick={() => void runAction('rules', () => serverApi.runErrorThemeBatch(undefined, undefined, 'rules'), '规则整理已进入后台')}
           >
-            <Sparkles size={16} />启动大模型整理
+            <Sparkles size={16} />启动规则整理
           </button>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -204,7 +204,7 @@ export function TaskCenterPage() {
           </div>
         </div>
         <p className="mt-3 text-xs leading-5 text-slate-500">
-          大模型：{status?.embedding.largeModelName ?? status?.embedding.modelName ?? '--'}；最近批处理：
+          当前策略：规则分类；备用模型：{status?.embedding.smallModelName ?? status?.embedding.modelName ?? '--'}；最近批处理：
           {status?.errorThemes.latestBatch
             ? `${formatDateTime(status.errorThemes.latestBatch.completedAt)}，${status.errorThemes.latestBatch.status}，${status.errorThemes.latestBatch.occurrenceCount} 条证据`
             : '暂无'}。
