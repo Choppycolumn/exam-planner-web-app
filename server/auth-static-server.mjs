@@ -1486,7 +1486,7 @@ function defaultDailyBriefSettings() {
     cityName: '北京',
     latitude: 39.9042,
     longitude: 116.4074,
-    newsTopicsText: '考研\n人工智能\n半导体\n宏观经济',
+    newsTopicsText: '综合热榜\n财经热榜\n科技热榜\n考研教育',
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
     email: {
       enabled: false,
@@ -1602,6 +1602,14 @@ function fetchJsonWithCurl(url, timeoutSeconds = 9) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
   return JSON.parse(result.stdout);
+}
+
+async function fetchJsonRobust(url, timeoutMs = 9000) {
+  try {
+    return await fetchJsonWithTimeout(url, timeoutMs);
+  } catch {
+    return fetchJsonWithCurl(url, Math.max(3, Math.ceil(timeoutMs / 1000)));
+  }
 }
 
 async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
@@ -2034,18 +2042,129 @@ function gdeltTopicQuery(topic) {
   return /[\s:]/.test(text) ? `"${text.replace(/"/g, '')}"` : text;
 }
 
+const newsTopicAliases = {
+  考研: ['考研', '研究生考试', '硕士研究生', '研究生招生', '复试', '调剂', '国家线'],
+  考研教育: ['考研', '研究生考试', '硕士研究生', '研究生招生', '复试', '调剂', '国家线', '教育部', '招生考试'],
+  教育: ['教育', '教育部', '高校', '大学', '研究生', '招生考试'],
+  人工智能: ['人工智能', '大模型', '生成式AI', '机器学习', '深度学习', 'OpenAI', 'ChatGPT', 'LLM'],
+  半导体: ['半导体', '芯片', '晶圆', '光刻机', '先进制程', '台积电', '英伟达', 'NVIDIA'],
+  宏观经济: ['宏观经济', '央行', '通胀', 'CPI', 'PPI', 'GDP', '利率', '财政', '货币政策'],
+};
+
+function topicKeywords(topic) {
+  const text = String(topic || '').trim();
+  return Array.from(new Set([text, ...(newsTopicAliases[text] || [])].filter(Boolean)));
+}
+
+function keywordMatchesText(text, keyword) {
+  const source = String(text || '').toLowerCase();
+  const value = String(keyword || '').trim().toLowerCase();
+  if (!value) return false;
+  if (/^[a-z0-9.+-]+$/i.test(value)) {
+    return new RegExp(`(^|[^a-z0-9])${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`, 'i').test(source);
+  }
+  return source.includes(value);
+}
+
+function gdeltQueryForTopics(topics) {
+  const terms = new Set();
+  for (const topic of topics) {
+    topicKeywords(topic).forEach((keyword) => terms.add(gdeltTopicQuery(keyword)));
+  }
+  return `(${Array.from(terms).filter(Boolean).join(' OR ')})`;
+}
+
 function normalizeNewsArticle(article) {
   return {
     title: article.title || '未命名新闻',
     url: article.url || '',
-    source: article.domain || article.sourceCountry || '',
+    source: article.source || article.domain || article.sourceCountry || '',
     seenAt: article.seendate || '',
   };
 }
 
 function articleMatchesTopic(article, topic) {
-  const haystack = `${article.title || ''} ${article.url || ''} ${article.domain || ''}`.toLowerCase();
-  return haystack.includes(String(topic || '').trim().toLowerCase());
+  const haystack = `${article.title || ''} ${article.url || ''} ${article.domain || ''}`;
+  return topicKeywords(topic).some((keyword) => keywordMatchesText(haystack, keyword));
+}
+
+function hotCategoryForTopic(topic) {
+  const text = String(topic || '').trim().toLowerCase();
+  if (/(财经|金融|股市|市场|经济热榜)/.test(text)) return { source: 'baidu-finance', strict: false };
+  if (/(科技热榜|技术热榜|hacker|开发|编程)/.test(text)) return { source: 'hacker-news', strict: false };
+  if (/(综合|实时|热榜|百度|头条|全网)/.test(text)) return { source: 'baidu-realtime', strict: false };
+  if (/(科技|技术|人工智能|ai|半导体|芯片|宏观经济|教育|考研)/.test(text)) {
+    return { source: /(宏观经济|财经|金融|股市)/.test(text) ? 'baidu-finance' : 'baidu-realtime', strict: true };
+  }
+  return { source: 'baidu-realtime', strict: true };
+}
+
+function baiduHotItemsFromResponse(data, sourceName) {
+  const items = [];
+  const visit = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value.word && value.url) {
+      items.push({
+        title: String(value.word),
+        url: String(value.url),
+        source: sourceName,
+        seenAt: '',
+        hotScore: value.hotScore || value.score || value.rawUrl || '',
+      });
+    }
+    Object.values(value).forEach(visit);
+  };
+  visit(data);
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = item.url || item.title;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function getBaiduHotItems(tab, sourceName) {
+  const data = await fetchJsonRobust(`https://top.baidu.com/api/board?platform=wise&tab=${encodeURIComponent(tab)}`, 12000);
+  return baiduHotItemsFromResponse(data, sourceName);
+}
+
+async function getHackerNewsItems() {
+  const ids = await fetchJsonRobust('https://hacker-news.firebaseio.com/v0/topstories.json', 12000);
+  const topIds = Array.isArray(ids) ? ids.slice(0, 12) : [];
+  const items = await Promise.all(topIds.map(async (id) => {
+    try {
+      const item = await fetchJsonRobust(`https://hacker-news.firebaseio.com/v0/item/${id}.json`, 9000);
+      if (!item?.title) return null;
+      return {
+        title: item.title,
+        url: item.url || `https://news.ycombinator.com/item?id=${id}`,
+        source: 'Hacker News',
+        seenAt: '',
+        hotScore: item.score || '',
+      };
+    } catch {
+      return null;
+    }
+  }));
+  return items.filter(Boolean);
+}
+
+async function getHotListForTopic(topic, cache) {
+  const category = hotCategoryForTopic(topic);
+  const cacheKey = category.source;
+  if (!cache.has(cacheKey)) {
+    if (category.source === 'baidu-finance') cache.set(cacheKey, await getBaiduHotItems('finance', '百度财经热榜'));
+    else if (category.source === 'hacker-news') cache.set(cacheKey, await getHackerNewsItems());
+    else cache.set(cacheKey, await getBaiduHotItems('realtime', '百度实时热榜'));
+  }
+  const allItems = cache.get(cacheKey) || [];
+  const matched = category.strict ? allItems.filter((item) => articleMatchesTopic({ title: item.title, url: item.url, domain: item.source }, topic)) : allItems;
+  return matched.slice(0, 5);
 }
 
 async function getBriefNewsBatch(topics) {
@@ -2055,27 +2174,14 @@ async function getBriefNewsBatch(topics) {
   if (cooldownUntil && new Date(cooldownUntil).getTime() > Date.now()) {
     return normalizedTopics.map((topic) => ({ topic, ok: false, articles: [], error: `news source cooling down until ${cooldownUntil}` }));
   }
-  const queryText = `(${normalizedTopics.map(gdeltTopicQuery).filter(Boolean).join(' OR ')})`;
-  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(queryText)}&mode=ArtList&maxrecords=50&format=json&sort=HybridRel&timespan=24h`;
+  const hotListCache = new Map();
   try {
-    const data = await fetchJsonWithTimeout(url, 12000);
-    const rawArticles = Array.isArray(data.articles) ? data.articles : [];
     runSqlite(`DELETE FROM app_metadata WHERE key = ${sqlString(dailyBriefNewsCooldownKey)};`);
-    const usedUrls = new Set();
-    return normalizedTopics.map((topic) => {
-      let matches = rawArticles.filter((article) => articleMatchesTopic(article, topic));
-      if (!matches.length) {
-        matches = rawArticles.filter((article) => !usedUrls.has(article.url)).slice(0, 3);
-      }
-      const articles = [];
-      for (const article of matches) {
-        if (!article.url || usedUrls.has(article.url)) continue;
-        usedUrls.add(article.url);
-        articles.push(normalizeNewsArticle(article));
-        if (articles.length >= 5) break;
-      }
-      return { topic, ok: true, articles };
-    });
+    return await Promise.all(normalizedTopics.map(async (topic) => ({
+      topic,
+      ok: true,
+      articles: (await getHotListForTopic(topic, hotListCache)).map(normalizeNewsArticle),
+    })));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('429')) {

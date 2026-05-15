@@ -306,12 +306,14 @@ export function SettingsPage() {
         </div>
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <label>
-            <span className="label">关注新闻话题（每行一个）</span>
+            <span className="label">新闻栏目/话题（每行一个）</span>
             <textarea className="field min-h-32" value={briefSettings.newsTopicsText} onChange={(event) => setBriefSettings({ ...briefSettings, newsTopicsText: event.target.value })} />
+            <p className="mt-1 text-xs leading-5 text-slate-500">可以直接添加。推荐栏目：综合热榜、财经热榜、科技热榜、考研教育；自定义话题会在热榜中严格匹配，没命中时不会用无关新闻凑数。</p>
           </label>
           <label>
             <span className="label">指数/资产（名称|代码，每行一个）</span>
             <textarea className="field min-h-32" value={briefSettings.marketSymbolsText} onChange={(event) => setBriefSettings({ ...briefSettings, marketSymbolsText: event.target.value })} />
+            <p className="mt-1 text-xs leading-5 text-slate-500">直接在这里加一行即可，例如“纳斯达克|^IXIC”“BNB|BNB-USD”“苹果|AAPL”。支持常见美股、A 股、部分指数和主流加密资产。</p>
           </label>
         </div>
         <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
