@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { BookOpen, CalendarCheck, ClipboardList, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
+import { Bell, BookOpen, CalendarCheck, ClipboardList, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryKeys } from '../api/queryClient';
@@ -23,7 +23,7 @@ import { routeLoaders } from '../router/preload';
 const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
 export function DashboardPage() {
-  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, readOnly } = useDashboardData();
+  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, todayBrief, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const [chartsReady, setChartsReady] = useState(false);
   const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
@@ -92,6 +92,25 @@ export function DashboardPage() {
         />
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
+
+      <Link className="mt-6 block rounded-xl border border-blue-100 bg-blue-50/70 p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/notifications">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="flex items-center gap-2 text-sm font-semibold text-blue-700"><Bell size={16} />今日晨间简报</p>
+            <h2 className="mt-1 text-lg font-semibold text-slate-950">
+              {todayBrief ? todayBrief.title : '还没有生成今日简报'}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {todayBrief?.payload.weather?.ok
+                ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；关注话题 ${todayBrief.payload.news?.length ?? 0} 个，指数 ${todayBrief.payload.markets?.length ?? 0} 项。`
+                : '点击进入通知中心，生成天气、新闻话题、指数涨跌和学习提醒。'}
+            </p>
+          </div>
+          <span className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700">
+            {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
+          </span>
+        </div>
+      </Link>
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (
         <div className="mt-6 card border-blue-100 bg-blue-50/70 p-5">

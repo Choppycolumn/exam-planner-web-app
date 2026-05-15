@@ -1,4 +1,4 @@
-import { Cloud, Download, Hourglass, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
+import { Bell, Cloud, Download, Hourglass, Mail, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
@@ -6,7 +6,7 @@ import { DB_SCHEMA_VERSION } from '../db/schema';
 import { Toast } from '../components/Toast';
 import { GoalsManager } from '../components/GoalsManager';
 import { useEffect, useState } from 'react';
-import { notifyDataChanged, serverApi, type BackupStatus } from '../api/client';
+import { notifyDataChanged, serverApi, type BackupStatus, type DailyBriefSettings } from '../api/client';
 import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
 import { buildExport, loadGroups, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordGroup } from '../features/confusing-words/types';
@@ -29,6 +29,29 @@ const backupKindLabel: Record<string, string> = {
   restore: '恢复记录',
 };
 
+function defaultBriefSettings(): DailyBriefSettings {
+  return {
+    enabled: true,
+    generateTime: '07:00',
+    cityName: '北京',
+    latitude: 39.9042,
+    longitude: 116.4074,
+    newsTopicsText: '考研\n人工智能\n半导体\n宏观经济',
+    marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
+    email: {
+      enabled: false,
+      host: '',
+      port: 465,
+      secureMode: 'ssl',
+      username: '',
+      password: '',
+      from: '',
+      to: '',
+      subjectPrefix: 'Exam Planner 今日简报',
+    },
+  };
+}
+
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
   const [toast, setToast] = useState('');
@@ -37,6 +60,8 @@ export function SettingsPage() {
   const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [briefSettings, setBriefSettings] = useState<DailyBriefSettings>(() => defaultBriefSettings());
+  const [briefLoading, setBriefLoading] = useState(false);
 
   const refreshBackupStatus = async () => {
     try {
@@ -49,12 +74,13 @@ export function SettingsPage() {
   useEffect(() => {
     let mounted = true;
     const timeoutId = window.setTimeout(() => {
-      Promise.allSettled([serverApi.getBackupStatus(), serverApi.getStudyTarget()])
-        .then(([backupResult, targetResult]) => {
+      Promise.allSettled([serverApi.getBackupStatus(), serverApi.getStudyTarget(), serverApi.getBriefSettings()])
+        .then(([backupResult, targetResult, briefResult]) => {
           if (!mounted) return;
           if (backupResult.status === 'fulfilled') setBackupStatus(backupResult.value);
           else setBackupStatus(null);
           if (targetResult.status === 'fulfilled') setStudyTargetHours(targetResult.value.targetHours ? String(targetResult.value.targetHours) : '');
+          if (briefResult.status === 'fulfilled') setBriefSettings(briefResult.value.settings);
         })
     }, 0);
     return () => {
@@ -86,6 +112,35 @@ export function SettingsPage() {
       setToast('保存失败，请稍后重试');
     }
     setTimeout(() => setToast(''), 1800);
+  };
+
+  const saveBriefSettings = async () => {
+    setBriefLoading(true);
+    try {
+      const result = await serverApi.saveBriefSettings(briefSettings);
+      setBriefSettings(result.settings);
+      notifyDataChanged();
+      setToast('晨间简报设置已保存');
+    } catch {
+      setToast('晨间简报设置保存失败，请检查填写内容');
+    } finally {
+      setBriefLoading(false);
+      setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const generateBriefNow = async () => {
+    setBriefLoading(true);
+    try {
+      await serverApi.generateBrief(false);
+      notifyDataChanged();
+      setToast('今日简报已生成，可到通知中心查看');
+    } catch {
+      setToast('简报生成失败，请稍后重试');
+    } finally {
+      setBriefLoading(false);
+      setTimeout(() => setToast(''), 2200);
+    }
   };
 
   const exportConfusingWords = () => {
@@ -214,6 +269,74 @@ export function SettingsPage() {
           <div className="flex items-end">
             <button className="btn btn-primary" disabled={readOnly} onClick={() => void saveStudyTarget()}>保存目标时长</button>
           </div>
+        </div>
+      </div>
+      <div className="mt-5 card p-5">
+        <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
+        <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、关注话题、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+            <input
+              type="checkbox"
+              checked={briefSettings.enabled}
+              onChange={(event) => setBriefSettings({ ...briefSettings, enabled: event.target.checked })}
+            />
+            自动生成简报
+          </label>
+          <label>
+            <span className="label">生成时间</span>
+            <input className="field" type="time" value={briefSettings.generateTime} onChange={(event) => setBriefSettings({ ...briefSettings, generateTime: event.target.value })} />
+          </label>
+          <label>
+            <span className="label">城市名称</span>
+            <input className="field" value={briefSettings.cityName} onChange={(event) => setBriefSettings({ ...briefSettings, cityName: event.target.value })} />
+          </label>
+          <label>
+            <span className="label">下一次自动生成</span>
+            <input className="field" readOnly value={briefSettings.nextDailyBriefAt ? new Date(briefSettings.nextDailyBriefAt).toLocaleString() : '保存后计算'} />
+          </label>
+          <label>
+            <span className="label">纬度</span>
+            <input className="field" type="number" step="0.0001" value={briefSettings.latitude} onChange={(event) => setBriefSettings({ ...briefSettings, latitude: Number(event.target.value) })} />
+          </label>
+          <label>
+            <span className="label">经度</span>
+            <input className="field" type="number" step="0.0001" value={briefSettings.longitude} onChange={(event) => setBriefSettings({ ...briefSettings, longitude: Number(event.target.value) })} />
+          </label>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <label>
+            <span className="label">关注新闻话题（每行一个）</span>
+            <textarea className="field min-h-32" value={briefSettings.newsTopicsText} onChange={(event) => setBriefSettings({ ...briefSettings, newsTopicsText: event.target.value })} />
+          </label>
+          <label>
+            <span className="label">指数/资产（名称|代码，每行一个）</span>
+            <textarea className="field min-h-32" value={briefSettings.marketSymbolsText} onChange={(event) => setBriefSettings({ ...briefSettings, marketSymbolsText: event.target.value })} />
+          </label>
+        </div>
+        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <input
+              type="checkbox"
+              checked={briefSettings.email.enabled}
+              onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, enabled: event.target.checked } })}
+            />
+            <Mail size={16} />启用邮件推送
+          </label>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <label><span className="label">SMTP Host</span><input className="field" placeholder="smtp.example.com" value={briefSettings.email.host} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, host: event.target.value } })} /></label>
+            <label><span className="label">端口</span><input className="field" type="number" value={briefSettings.email.port} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, port: Number(event.target.value) } })} /></label>
+            <label><span className="label">加密方式</span><select className="field" value={briefSettings.email.secureMode} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, secureMode: event.target.value as DailyBriefSettings['email']['secureMode'] } })}><option value="ssl">SSL</option><option value="starttls">STARTTLS</option><option value="none">无</option></select></label>
+            <label><span className="label">账号</span><input className="field" value={briefSettings.email.username} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, username: event.target.value } })} /></label>
+            <label><span className="label">密码 / 授权码</span><input className="field" type="password" placeholder={briefSettings.email.hasPassword ? '已保存，留空则不修改' : ''} value={briefSettings.email.password} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, password: event.target.value } })} /></label>
+            <label><span className="label">邮件标题前缀</span><input className="field" value={briefSettings.email.subjectPrefix} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, subjectPrefix: event.target.value } })} /></label>
+            <label><span className="label">发件人</span><input className="field" placeholder="me@example.com" value={briefSettings.email.from} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, from: event.target.value } })} /></label>
+            <label className="md:col-span-2"><span className="label">收件人（多个用逗号分隔）</span><input className="field" placeholder="me@example.com" value={briefSettings.email.to} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, to: event.target.value } })} /></label>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <button className="btn btn-primary" disabled={readOnly || briefLoading} onClick={() => void saveBriefSettings()}><Bell size={16} />保存简报设置</button>
+          <button className="btn btn-soft" disabled={readOnly || briefLoading} onClick={() => void generateBriefNow()}><Cloud size={16} />立即生成今日简报</button>
         </div>
       </div>
       <div className="mt-5 card p-5">

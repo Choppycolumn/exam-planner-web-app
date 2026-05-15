@@ -27,6 +27,7 @@ export interface DashboardData {
   yesterdayReview: DailyReview | null;
   visibleTasks: ShortTermTask[];
   todayWaterRecord: WaterIntakeRecord | null;
+  todayBrief: DailyBrief | null;
   readOnly?: boolean;
 }
 
@@ -34,6 +35,68 @@ export interface DashboardChartsData {
   today: string;
   distribution: Array<{ name: string; value: number }>;
   trend: Array<{ date: string; minutes: number }>;
+}
+
+export interface DailyBriefSettings {
+  enabled: boolean;
+  generateTime: string;
+  cityName: string;
+  latitude: number;
+  longitude: number;
+  newsTopicsText: string;
+  marketSymbolsText: string;
+  nextDailyBriefAt?: string | null;
+  email: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secureMode: 'ssl' | 'starttls' | 'none';
+    username: string;
+    password: string;
+    from: string;
+    to: string;
+    subjectPrefix: string;
+    hasPassword?: boolean;
+  };
+}
+
+export interface DailyBrief {
+  id: number;
+  date: string;
+  title: string;
+  status: string;
+  emailedAt: string | null;
+  emailError: string;
+  generatedAt: string;
+  updatedAt: string;
+  payload: {
+    date: string;
+    title: string;
+    generatedAt: string;
+    trigger: string;
+    weather?: {
+      ok: boolean;
+      cityName?: string;
+      condition?: string;
+      temperature?: number;
+      minTemperature?: number;
+      maxTemperature?: number;
+      precipitationProbability?: number;
+      error?: string;
+    };
+    markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number; changePercent?: number; currency?: string; error?: string }>;
+    news?: Array<{ topic: string; ok: boolean; articles: Array<{ title: string; url: string; source?: string; seenAt?: string }>; error?: string }>;
+    learning?: {
+      activeGoal: { name: string; deadline: string; daysLeft: number } | null;
+      yesterday: string;
+      yesterdayMinutes: number;
+      last7Minutes: number;
+      yesterdayReview: DailyReview | null;
+      todayTasks: ShortTermTask[];
+      latestExam: { date: string; subjectName: string; score: number; fullScore: number; paperName: string } | null;
+      topErrorThemes: Array<{ id: string; label: string; count: number; dates: string[]; examples: Array<{ date: string; field: string; text: string }> }>;
+    };
+  };
 }
 
 export interface StatisticsSummary {
@@ -120,6 +183,11 @@ export interface TaskCenterStatus {
     latestWeeklyReport: LearningReport | null;
     latestMonthlyReport: LearningReport | null;
     lastReportCheckAt: string | null;
+  };
+  dailyBrief: {
+    latest: DailyBrief | null;
+    nextDailyBriefAt: string | null;
+    emailEnabled: boolean;
   };
   errorThemes: {
     job: ErrorThemeBatchJob | null;
@@ -365,6 +433,12 @@ export const serverApi = {
   getSubjects: () => apiRequest<ReferenceList<Subject>>('/subjects'),
   getStudyTarget: () => apiRequest<StudyTargetSetting>('/settings/study-target'),
   saveStudyTarget: (targetHours: number) => apiRequest<StudyTargetSetting>('/settings/study-target', { method: 'POST', body: { targetHours } }),
+  getBriefSettings: () => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings'),
+  saveBriefSettings: (settings: DailyBriefSettings) => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings', { method: 'POST', body: settings }),
+  getBriefs: (limit = 30) => apiRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>(`/briefs?limit=${limit}`),
+  getTodayBrief: () => apiRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('/briefs/today'),
+  generateBrief: (sendEmail = false) => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/generate', { method: 'POST', body: { sendEmail } }),
+  sendLatestBrief: () => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/send-latest', { method: 'POST' }),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);

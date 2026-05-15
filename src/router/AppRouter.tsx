@@ -12,6 +12,7 @@ const ReviewsPage = lazy(() => routeLoaders.reviews().then((module) => ({ defaul
 const ReviewInsightsPage = lazy(() => routeLoaders.reviewInsights().then((module) => ({ default: module.ReviewInsightsPage })));
 const StatisticsPage = lazy(() => routeLoaders.statistics().then((module) => ({ default: module.StatisticsPage })));
 const ReportsPage = lazy(() => routeLoaders.reports().then((module) => ({ default: module.ReportsPage })));
+const NotificationsPage = lazy(() => routeLoaders.notifications().then((module) => ({ default: module.NotificationsPage })));
 const TaskCenterPage = lazy(() => routeLoaders.taskCenter().then((module) => ({ default: module.TaskCenterPage })));
 const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ default: module.MockExamsPage })));
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
@@ -42,6 +43,7 @@ export const router = createBrowserRouter([
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'statistics', element: lazyElement(<StatisticsPage />) },
       { path: 'reports', element: lazyElement(<ReportsPage />) },
+      { path: 'notifications', element: lazyElement(<NotificationsPage />) },
       { path: 'task-center', element: lazyElement(<TaskCenterPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
       { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },

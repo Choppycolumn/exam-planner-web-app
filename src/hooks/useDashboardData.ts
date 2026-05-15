@@ -16,6 +16,7 @@ const emptyDashboard: DashboardData = {
   yesterdayReview: null,
   visibleTasks: [],
   todayWaterRecord: null,
+  todayBrief: null,
   readOnly: false,
 };
 

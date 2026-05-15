@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Activity, BarChart3, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, Settings } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, Settings } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -13,6 +13,7 @@ const navItems = [
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
   { to: '/statistics', label: '数据统计', icon: BarChart3 },
   { to: '/reports', label: '学习报告', icon: FileText },
+  { to: '/notifications', label: '通知中心', icon: Bell },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/settings', label: '设置', icon: Settings },

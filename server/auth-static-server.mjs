@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
+import { connect as netConnect } from 'node:net';
+import { connect as tlsConnect } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
@@ -24,6 +26,7 @@ const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex'
 const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
+const dailyBriefSettingsKey = 'daily_brief_settings_json';
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
@@ -51,8 +54,11 @@ let sqliteReady = false;
 let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
 let nightlyErrorThemeTimerStarted = false;
+let dailyBriefTimerStarted = false;
+let dailyBriefTimer = null;
 let errorThemeBatchJob = null;
 let nextNightlyErrorThemeAt = null;
+let nextDailyBriefAt = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
@@ -385,6 +391,17 @@ CREATE TABLE IF NOT EXISTS learning_reports (
   updated_at TEXT NOT NULL,
   UNIQUE(kind, period_start, period_end)
 );
+CREATE TABLE IF NOT EXISTS daily_briefs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'completed',
+  emailed_at TEXT,
+  email_error TEXT NOT NULL DEFAULT '',
+  generated_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS error_theme_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source TEXT NOT NULL DEFAULT 'local-model-batch',
@@ -471,6 +488,7 @@ CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_visible ON short_term_tasks(is_completed, urgency, due_date);
 CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
@@ -1460,6 +1478,674 @@ function scheduleNightlyErrorThemeBatch() {
   }, delay).unref();
 }
 
+function defaultDailyBriefSettings() {
+  return {
+    enabled: true,
+    generateTime: '07:00',
+    cityName: '北京',
+    latitude: 39.9042,
+    longitude: 116.4074,
+    newsTopicsText: '考研\n人工智能\n半导体\n宏观经济',
+    marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
+    email: {
+      enabled: false,
+      host: '',
+      port: 465,
+      secureMode: 'ssl',
+      username: '',
+      password: '',
+      from: '',
+      to: '',
+      subjectPrefix: 'Exam Planner 今日简报',
+    },
+  };
+}
+
+function normalizeDailyBriefSettings(input = {}, previous = null) {
+  const defaults = defaultDailyBriefSettings();
+  const previousEmail = previous?.email || {};
+  const emailInput = input.email || {};
+  const requestedPassword = typeof emailInput.password === 'string' ? emailInput.password : '';
+  const preservedPassword = requestedPassword.trim() ? requestedPassword : previousEmail.password || '';
+  const secureMode = ['ssl', 'starttls', 'none'].includes(emailInput.secureMode) ? emailInput.secureMode : defaults.email.secureMode;
+  return {
+    enabled: input.enabled !== false,
+    generateTime: /^\d{2}:\d{2}$/.test(input.generateTime || '') ? input.generateTime : defaults.generateTime,
+    cityName: String(input.cityName || defaults.cityName).trim() || defaults.cityName,
+    latitude: Number.isFinite(Number(input.latitude)) ? Number(input.latitude) : defaults.latitude,
+    longitude: Number.isFinite(Number(input.longitude)) ? Number(input.longitude) : defaults.longitude,
+    newsTopicsText: String(input.newsTopicsText ?? defaults.newsTopicsText),
+    marketSymbolsText: String(input.marketSymbolsText ?? defaults.marketSymbolsText),
+    email: {
+      enabled: Boolean(emailInput.enabled),
+      host: String(emailInput.host || previousEmail.host || '').trim(),
+      port: Math.max(1, Math.min(65535, Number(emailInput.port || previousEmail.port || defaults.email.port))),
+      secureMode,
+      username: String(emailInput.username || previousEmail.username || '').trim(),
+      password: preservedPassword,
+      from: String(emailInput.from || previousEmail.from || '').trim(),
+      to: String(emailInput.to || previousEmail.to || '').trim(),
+      subjectPrefix: String(emailInput.subjectPrefix || previousEmail.subjectPrefix || defaults.email.subjectPrefix).trim() || defaults.email.subjectPrefix,
+    },
+  };
+}
+
+function publicDailyBriefSettings(settings) {
+  return {
+    ...settings,
+    email: {
+      ...settings.email,
+      password: '',
+      hasPassword: Boolean(settings.email.password),
+    },
+    nextDailyBriefAt,
+  };
+}
+
+function getDailyBriefSettings({ includeSecret = false } = {}) {
+  let parsed = {};
+  try {
+    const raw = sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(dailyBriefSettingsKey)} LIMIT 1;`);
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    parsed = {};
+  }
+  const settings = normalizeDailyBriefSettings(parsed);
+  return includeSecret ? settings : publicDailyBriefSettings(settings);
+}
+
+function saveDailyBriefSettings(input = {}) {
+  const previous = getDailyBriefSettings({ includeSecret: true });
+  const settings = normalizeDailyBriefSettings(input, previous);
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES (${sqlString(dailyBriefSettingsKey)}, ${sqlString(JSON.stringify(settings))}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  scheduleDailyBrief();
+  return publicDailyBriefSettings(settings);
+}
+
+function splitLines(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseMarketSymbols(value) {
+  return splitLines(value).map((line) => {
+    const [name, symbol] = line.includes('|') ? line.split('|').map((item) => item.trim()) : [line.trim(), line.trim()];
+    return { name: name || symbol, symbol: symbol || name };
+  }).filter((item) => item.symbol);
+}
+
+async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'user-agent': 'exam-planner-brief/1.0' },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function fetchJsonWithCurl(url, timeoutSeconds = 9) {
+  const result = spawnSync('curl', ['-fsSL', '--max-time', String(timeoutSeconds), url], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
+  return JSON.parse(result.stdout);
+}
+
+async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'user-agent': 'exam-planner-brief/1.0', ...headers },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function weatherCodeText(code) {
+  const labels = {
+    0: '晴',
+    1: '基本晴朗',
+    2: '局部多云',
+    3: '多云',
+    45: '雾',
+    48: '雾凇',
+    51: '小毛毛雨',
+    53: '毛毛雨',
+    55: '较强毛毛雨',
+    61: '小雨',
+    63: '中雨',
+    65: '大雨',
+    71: '小雪',
+    73: '中雪',
+    75: '大雪',
+    80: '阵雨',
+    81: '较强阵雨',
+    82: '强阵雨',
+    95: '雷暴',
+  };
+  return labels[Number(code)] || '天气数据已获取';
+}
+
+async function getBriefWeather(settings) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(settings.latitude)}&longitude=${encodeURIComponent(settings.longitude)}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FShanghai&forecast_days=1`;
+  try {
+    const data = await fetchJsonWithTimeout(url);
+    const current = data.current || {};
+    const daily = data.daily || {};
+    return {
+      ok: true,
+      cityName: settings.cityName,
+      temperature: Number(current.temperature_2m ?? 0),
+      humidity: Number(current.relative_humidity_2m ?? 0),
+      windSpeed: Number(current.wind_speed_10m ?? 0),
+      precipitation: Number(current.precipitation ?? 0),
+      weatherCode: Number(current.weather_code ?? 0),
+      condition: weatherCodeText(current.weather_code),
+      maxTemperature: Number(daily.temperature_2m_max?.[0] ?? current.temperature_2m ?? 0),
+      minTemperature: Number(daily.temperature_2m_min?.[0] ?? current.temperature_2m ?? 0),
+      precipitationProbability: Number(daily.precipitation_probability_max?.[0] ?? 0),
+    };
+  } catch (error) {
+    return { ok: false, cityName: settings.cityName, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function getBriefMarket(symbolItem) {
+  const fromWscn = await getWscnMarket(symbolItem);
+  if (fromWscn) return fromWscn;
+  const fromEastMoney = await getEastMoneyMarket(symbolItem);
+  if (fromEastMoney) return fromEastMoney;
+  const fromSina = await getSinaMarket(symbolItem);
+  if (fromSina) return fromSina;
+  const fromStooq = await getStooqMarket(symbolItem);
+  if (fromStooq) return fromStooq;
+
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbolItem.symbol)}?range=5d&interval=1d`;
+  try {
+    const data = await fetchJsonWithTimeout(url);
+    const result = data.chart?.result?.[0];
+    if (!result) throw new Error('empty market response');
+    const meta = result.meta || {};
+    const closes = (result.indicators?.quote?.[0]?.close || []).filter((value) => typeof value === 'number');
+    const current = Number(meta.regularMarketPrice ?? closes.at(-1) ?? 0);
+    const previous = Number(meta.chartPreviousClose ?? closes.at(-2) ?? current);
+    const change = Number((current - previous).toFixed(2));
+    const changePercent = previous ? Number(((change / previous) * 100).toFixed(2)) : 0;
+    return {
+      ok: true,
+      name: symbolItem.name,
+      symbol: symbolItem.symbol,
+      price: current,
+      change,
+      changePercent,
+      currency: meta.currency || '',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      name: symbolItem.name,
+      symbol: symbolItem.symbol,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function getWscnMarket(symbolItem) {
+  const value = String(symbolItem.symbol || '').toUpperCase();
+  if (!/^\d{6}\.(SS|SZ)$/.test(value)) return null;
+  try {
+    const url = `https://api-ddc-wscn.awtmt.com/market/real?fields=prod_name,last_px,px_change,px_change_rate&prod_code=${encodeURIComponent(value)}`;
+    const data = await fetchJsonWithTimeout(url, 9000);
+    const item = data.data?.snapshot?.[value];
+    if (!Array.isArray(item)) throw new Error('empty wscn market response');
+    const current = Number(item[1] || 0);
+    const change = Number(item[2] || 0);
+    const changePercent = Number(item[3] || 0);
+    if (!Number.isFinite(current) || !current) throw new Error('empty wscn market price');
+    return {
+      ok: true,
+      name: symbolItem.name || item[0] || symbolItem.symbol,
+      symbol: symbolItem.symbol,
+      price: Number(current.toFixed(2)),
+      change: Number(change.toFixed(2)),
+      changePercent: Number(changePercent.toFixed(2)),
+      currency: 'CNY',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function eastMoneySecId(symbol) {
+  const value = String(symbol || '').toUpperCase();
+  if (/^\d{6}\.SS$/.test(value)) return `1.${value.slice(0, 6)}`;
+  if (/^\d{6}\.SZ$/.test(value)) return `0.${value.slice(0, 6)}`;
+  return '';
+}
+
+async function getEastMoneyMarket(symbolItem) {
+  const secId = eastMoneySecId(symbolItem.symbol);
+  if (!secId) return null;
+  try {
+    const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secId)}&fields=f43,f57,f58,f169,f170`;
+    let data;
+    try {
+      data = await fetchJsonWithTimeout(url, 9000);
+    } catch {
+      data = fetchJsonWithCurl(url, 9);
+    }
+    const quote = data.data || {};
+    const current = Number(quote.f43 || 0) / 100;
+    const change = Number(quote.f169 || 0) / 100;
+    const changePercent = Number(quote.f170 || 0) / 100;
+    if (!Number.isFinite(current) || !current) throw new Error('empty eastmoney market response');
+    return {
+      ok: true,
+      name: symbolItem.name || quote.f58 || symbolItem.symbol,
+      symbol: symbolItem.symbol,
+      price: Number(current.toFixed(2)),
+      change: Number(change.toFixed(2)),
+      changePercent: Number(changePercent.toFixed(2)),
+      currency: 'CNY',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sinaMarketCode(symbol) {
+  const value = String(symbol || '').toUpperCase();
+  if (/^\d{6}\.SS$/.test(value)) return `sh${value.slice(0, 6)}`;
+  if (/^\d{6}\.SZ$/.test(value)) return `sz${value.slice(0, 6)}`;
+  return '';
+}
+
+async function getSinaMarket(symbolItem) {
+  const code = sinaMarketCode(symbolItem.symbol);
+  if (!code) return null;
+  try {
+    const text = await fetchTextWithTimeout(`https://hq.sinajs.cn/list=${code}`, 9000, { referer: 'https://finance.sina.com.cn' });
+    const match = text.match(/="([^"]*)"/);
+    const fields = match?.[1]?.split(',') || [];
+    const previous = Number(fields[2] || 0);
+    const current = Number(fields[3] || 0);
+    if (!Number.isFinite(current) || !current) throw new Error('empty sina market response');
+    const change = Number((current - previous).toFixed(2));
+    const changePercent = previous ? Number(((change / previous) * 100).toFixed(2)) : 0;
+    return {
+      ok: true,
+      name: symbolItem.name,
+      symbol: symbolItem.symbol,
+      price: Number(current.toFixed(2)),
+      change,
+      changePercent,
+      currency: 'CNY',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function stooqMarketSymbol(symbol) {
+  const map = {
+    '^GSPC': '^spx',
+    '^IXIC': '^ndq',
+    'BTC-USD': 'btcusd',
+  };
+  return map[String(symbol || '').toUpperCase()] || '';
+}
+
+async function getStooqMarket(symbolItem) {
+  const symbol = stooqMarketSymbol(symbolItem.symbol);
+  if (!symbol) return null;
+  try {
+    const text = await fetchTextWithTimeout(`https://stooq.com/q/l/?s=${encodeURIComponent(symbol)}&f=sd2t2ohlcv&h&e=csv`, 9000);
+    const lines = text.trim().split(/\r?\n/);
+    const fields = lines[1]?.split(',') || [];
+    const open = Number(fields[3] || 0);
+    const current = Number(fields[6] || 0);
+    if (!Number.isFinite(current) || !current) throw new Error('empty stooq market response');
+    const change = Number((current - open).toFixed(2));
+    const changePercent = open ? Number(((change / open) * 100).toFixed(2)) : 0;
+    return {
+      ok: true,
+      name: symbolItem.name,
+      symbol: symbolItem.symbol,
+      price: Number(current.toFixed(2)),
+      change,
+      changePercent,
+      currency: symbolItem.symbol === 'BTC-USD' ? 'USD' : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getBriefNews(topic) {
+  const query = encodeURIComponent(`${topic} sourceCountry:CH OR sourceCountry:US`);
+  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${query}&mode=ArtList&maxrecords=5&format=json&sort=HybridRel&timespan=24h`;
+  try {
+    const data = await fetchJsonWithTimeout(url);
+    const articles = Array.isArray(data.articles) ? data.articles : [];
+    return {
+      topic,
+      ok: true,
+      articles: articles.slice(0, 5).map((article) => ({
+        title: article.title || '未命名新闻',
+        url: article.url || '',
+        source: article.domain || article.sourceCountry || '',
+        seenAt: article.seendate || '',
+      })),
+    };
+  } catch (error) {
+    return { topic, ok: false, articles: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function getDailyBriefLearningSummary(date) {
+  const yesterday = addDaysISO(date, -1);
+  const activeGoal = sqliteJson(`SELECT name, deadline FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`)[0] || null;
+  const yesterdayReview = sqliteJson(`SELECT date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score
+FROM daily_reviews WHERE date = ${sqlString(yesterday)} LIMIT 1;`).map(normalizeReview)[0] || null;
+  const todayTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted
+FROM short_term_tasks
+WHERE due_date <= ${sqlString(date)} AND is_completed = 0
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+LIMIT 8;`).map((task) => ({ ...task, isCompleted: Boolean(task.isCompleted) }));
+  const latestExam = sqliteJson(`SELECT date, subject_name_snapshot AS subjectName, score, full_score AS fullScore, paper_name AS paperName
+FROM mock_exam_records ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
+  const yesterdayMinutes = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(yesterday)};`) || 0);
+  const last7Minutes = Number(sqliteScalar(`SELECT COALESCE(SUM(total_minutes), 0) FROM study_daily_summaries WHERE date BETWEEN ${sqlString(addDaysISO(date, -6))} AND ${sqlString(date)};`) || 0);
+  return {
+    activeGoal: activeGoal ? {
+      name: activeGoal.name,
+      deadline: activeGoal.deadline,
+      daysLeft: Math.max(0, Math.ceil((parseDateString(activeGoal.deadline).getTime() - parseDateString(date).getTime()) / (24 * 60 * 60 * 1000))),
+    } : null,
+    yesterday,
+    yesterdayMinutes,
+    last7Minutes,
+    yesterdayReview,
+    todayTasks,
+    latestExam,
+    topErrorThemes: getErrorThemePeriodSummary(addDaysISO(date, -6), date, 5),
+  };
+}
+
+function dailyBriefTitle(date) {
+  return `${date} 晨间简报`;
+}
+
+function dailyBriefRowToObject(row) {
+  if (!row) return null;
+  let payload = {};
+  try {
+    payload = row.payloadJson ? JSON.parse(row.payloadJson) : {};
+  } catch {
+    payload = {};
+  }
+  return {
+    id: Number(row.id),
+    date: row.date,
+    title: row.title,
+    status: row.status,
+    emailedAt: row.emailedAt || null,
+    emailError: row.emailError || '',
+    generatedAt: row.generatedAt,
+    updatedAt: row.updatedAt,
+    payload,
+  };
+}
+
+function getDailyBriefByDate(date = todayISO()) {
+  const row = sqliteJson(`SELECT id, date, title, payload_json AS payloadJson, status, emailed_at AS emailedAt,
+email_error AS emailError, generated_at AS generatedAt, updated_at AS updatedAt
+FROM daily_briefs WHERE date = ${sqlString(date)} LIMIT 1;`)[0];
+  return dailyBriefRowToObject(row);
+}
+
+function getLatestDailyBriefSummary() {
+  const row = sqliteJson(`SELECT id, date, title, payload_json AS payloadJson, status, emailed_at AS emailedAt,
+email_error AS emailError, generated_at AS generatedAt, updated_at AS updatedAt
+FROM daily_briefs ORDER BY date DESC, id DESC LIMIT 1;`)[0];
+  return dailyBriefRowToObject(row);
+}
+
+function listDailyBriefs(limit = 30) {
+  return sqliteJson(`SELECT id, date, title, payload_json AS payloadJson, status, emailed_at AS emailedAt,
+email_error AS emailError, generated_at AS generatedAt, updated_at AS updatedAt
+FROM daily_briefs ORDER BY date DESC, id DESC LIMIT ${Math.max(1, Math.min(100, Number(limit) || 30))};`).map(dailyBriefRowToObject);
+}
+
+async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendEmail = false } = {}) {
+  const settings = getDailyBriefSettings({ includeSecret: true });
+  const generatedAt = nowISO();
+  const topics = splitLines(settings.newsTopicsText).slice(0, 8);
+  const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
+  const [weather, markets, news] = await Promise.all([
+    getBriefWeather(settings),
+    Promise.all(marketSymbols.map(getBriefMarket)),
+    Promise.all(topics.map(getBriefNews)),
+  ]);
+  const payload = {
+    date,
+    title: dailyBriefTitle(date),
+    generatedAt,
+    trigger,
+    weather,
+    markets,
+    news,
+    learning: getDailyBriefLearningSummary(date),
+  };
+
+  let emailedAt = null;
+  let emailError = '';
+  if (sendEmail || (trigger === 'auto' && settings.email.enabled)) {
+    if (!settings.email.enabled) {
+      emailError = '邮件推送未启用';
+    } else {
+      try {
+        await sendDailyBriefEmail(payload, settings.email);
+        emailedAt = nowISO();
+      } catch (error) {
+        emailError = error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+
+  runSqlite(`INSERT INTO daily_briefs (date, title, payload_json, status, emailed_at, email_error, generated_at, updated_at)
+VALUES (${sqlString(date)}, ${sqlString(payload.title)}, ${sqlString(JSON.stringify(payload))}, 'completed', ${sqlValue(emailedAt)}, ${sqlString(emailError)}, ${sqlString(generatedAt)}, ${sqlString(nowISO())})
+ON CONFLICT(date) DO UPDATE SET
+  title = excluded.title,
+  payload_json = excluded.payload_json,
+  status = excluded.status,
+  emailed_at = COALESCE(excluded.emailed_at, daily_briefs.emailed_at),
+  email_error = excluded.email_error,
+  generated_at = excluded.generated_at,
+  updated_at = excluded.updated_at;`);
+  tableChanged();
+  return getDailyBriefByDate(date);
+}
+
+function nextChinaWallClockDelay(timeText = '07:00') {
+  const [hourRaw, minuteRaw] = String(timeText).split(':').map(Number);
+  const hour = Math.max(0, Math.min(23, Number.isFinite(hourRaw) ? hourRaw : 7));
+  const minute = Math.max(0, Math.min(59, Number.isFinite(minuteRaw) ? minuteRaw : 0));
+  const now = new Date();
+  const chinaNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const targetChina = new Date(Date.UTC(
+    chinaNow.getUTCFullYear(),
+    chinaNow.getUTCMonth(),
+    chinaNow.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0,
+  ));
+  if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
+  const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
+  nextDailyBriefAt = new Date(targetUtcMs).toISOString();
+  return Math.max(60 * 1000, targetUtcMs - now.getTime());
+}
+
+function scheduleDailyBrief() {
+  const settings = getDailyBriefSettings({ includeSecret: true });
+  if (dailyBriefTimer) clearTimeout(dailyBriefTimer);
+  const delay = nextChinaWallClockDelay(settings.generateTime);
+  dailyBriefTimer = setTimeout(async () => {
+    try {
+      if (getDailyBriefSettings({ includeSecret: true }).enabled) {
+        await generateDailyBrief({ date: todayISO(), trigger: 'auto', sendEmail: true });
+      }
+    } catch (error) {
+      console.error('[daily-brief] automatic brief failed:', error);
+    } finally {
+      scheduleDailyBrief();
+    }
+  }, delay);
+  dailyBriefTimer.unref?.();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function encodeMailHeader(value) {
+  return `=?UTF-8?B?${Buffer.from(String(value), 'utf8').toString('base64')}?=`;
+}
+
+function dailyBriefHtml(payload) {
+  const weather = payload.weather || {};
+  const markets = payload.markets || [];
+  const news = payload.news || [];
+  const learning = payload.learning || {};
+  const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueDate)})</span></li>`).join('');
+  const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
+  const newsBlocks = news.map((topic) => `<h3>${escapeHtml(topic.topic)}</h3><ul>${(topic.articles || []).map((article) => `<li><a href="${escapeHtml(article.url)}">${escapeHtml(article.title)}</a> <span style="color:#64748b">${escapeHtml(article.source)}</span></li>`).join('') || '<li>暂无结果</li>'}</ul>`).join('');
+  return `<!doctype html>
+<html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;line-height:1.6">
+  <h1>${escapeHtml(payload.title)}</h1>
+  <p style="color:#64748b">生成时间：${escapeHtml(new Date(payload.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p>
+  <h2>天气</h2>
+  <p>${escapeHtml(weather.cityName || '')}：${weather.ok ? `${escapeHtml(weather.condition)}，${escapeHtml(weather.temperature)}℃，${escapeHtml(weather.minTemperature)}-${escapeHtml(weather.maxTemperature)}℃，降水概率 ${escapeHtml(weather.precipitationProbability)}%` : `获取失败：${escapeHtml(weather.error || '')}`}</p>
+  <h2>学习提醒</h2>
+  <p>昨日学习：${Math.round(Number(learning.yesterdayMinutes || 0) / 60 * 10) / 10} 小时；近 7 天累计：${Math.round(Number(learning.last7Minutes || 0) / 60 * 10) / 10} 小时。</p>
+  ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
+  ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
+  <h2>指数与资产</h2>
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>名称</th><th>代码</th><th>最新</th><th>涨跌</th></tr></thead><tbody>${marketRows || '<tr><td colspan="4">暂无配置</td></tr>'}</tbody></table>
+  <h2>关注话题</h2>
+  ${newsBlocks || '<p>暂无关注话题。</p>'}
+</body></html>`;
+}
+
+function smtpReadResponse(socket, state) {
+  return new Promise((resolve, reject) => {
+    const onData = (chunk) => {
+      state.buffer += chunk.toString('utf8');
+      const lines = state.buffer.split(/\r?\n/);
+      const lastComplete = state.buffer.endsWith('\n') ? lines : lines.slice(0, -1);
+      const doneLine = lastComplete.find((line) => /^\d{3} /.test(line));
+      if (!doneLine) return;
+      socket.off('data', onData);
+      socket.off('error', onError);
+      state.buffer = '';
+      const code = Number(doneLine.slice(0, 3));
+      if (code >= 400) reject(new Error(`SMTP ${doneLine}`));
+      else resolve({ code, text: lastComplete.join('\n') });
+    };
+    const onError = (error) => {
+      socket.off('data', onData);
+      reject(error);
+    };
+    socket.on('data', onData);
+    socket.once('error', onError);
+  });
+}
+
+async function smtpSendLine(socket, state, line) {
+  socket.write(`${line}\r\n`);
+  return smtpReadResponse(socket, state);
+}
+
+async function sendDailyBriefEmail(payload, emailSettings) {
+  const recipients = String(emailSettings.to || '').split(/[;,]/).map((item) => item.trim()).filter(Boolean);
+  if (!emailSettings.host || !emailSettings.from || !recipients.length) {
+    throw new Error('SMTP host/from/to 未完整配置');
+  }
+  let socket = await new Promise((resolve, reject) => {
+    const connector = emailSettings.secureMode === 'ssl'
+      ? tlsConnect({ host: emailSettings.host, port: emailSettings.port, servername: emailSettings.host }, () => resolve(connector))
+      : netConnect({ host: emailSettings.host, port: emailSettings.port }, () => resolve(connector));
+    connector.setTimeout(15000, () => reject(new Error('SMTP connection timeout')));
+    connector.once('error', reject);
+  });
+  const state = { buffer: '' };
+  try {
+    await smtpReadResponse(socket, state);
+    await smtpSendLine(socket, state, `EHLO ${emailSettings.host}`);
+    if (emailSettings.secureMode === 'starttls') {
+      await smtpSendLine(socket, state, 'STARTTLS');
+      socket = tlsConnect({ socket, servername: emailSettings.host });
+      await new Promise((resolve, reject) => {
+        socket.once('secureConnect', resolve);
+        socket.once('error', reject);
+      });
+      state.buffer = '';
+      await smtpSendLine(socket, state, `EHLO ${emailSettings.host}`);
+    }
+    if (emailSettings.username) {
+      await smtpSendLine(socket, state, 'AUTH LOGIN');
+      await smtpSendLine(socket, state, Buffer.from(emailSettings.username, 'utf8').toString('base64'));
+      await smtpSendLine(socket, state, Buffer.from(emailSettings.password || '', 'utf8').toString('base64'));
+    }
+    await smtpSendLine(socket, state, `MAIL FROM:<${emailSettings.from}>`);
+    for (const recipient of recipients) {
+      await smtpSendLine(socket, state, `RCPT TO:<${recipient}>`);
+    }
+    await smtpSendLine(socket, state, 'DATA');
+    const subject = `${emailSettings.subjectPrefix || 'Exam Planner 今日简报'} - ${payload.date}`;
+    const html = dailyBriefHtml(payload);
+    const message = [
+      `From: ${emailSettings.from}`,
+      `To: ${recipients.join(', ')}`,
+      `Subject: ${encodeMailHeader(subject)}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=utf-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      html,
+    ].join('\r\n').replace(/\r\n\./g, '\r\n..');
+    socket.write(`${message}\r\n.\r\n`);
+    await smtpReadResponse(socket, state);
+    await smtpSendLine(socket, state, 'QUIT').catch(() => undefined);
+  } finally {
+    socket.end();
+  }
+}
+
 function getErrorThemePeriodSummary(periodStart, periodEnd, limit = 6) {
   const themes = sqliteJson(`SELECT t.id, t.normalized_label AS normalizedLabel, t.label, COUNT(o.id) AS count, COUNT(DISTINCT o.date) AS days
 FROM error_themes t
@@ -1918,6 +2604,11 @@ LIMIT 1;`)[0] || null;
       latestMonthlyReport,
       lastReportCheckAt: sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_report_check_at' LIMIT 1;") || null,
     },
+    dailyBrief: {
+      latest: getLatestDailyBriefSummary(),
+      nextDailyBriefAt,
+      emailEnabled: Boolean(getDailyBriefSettings({ includeSecret: true }).email.enabled),
+    },
     errorThemes: {
       job: currentErrorThemeJobSnapshot(),
       latestBatch,
@@ -2026,6 +2717,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '6', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 7) {
+    createBackupFile('pre-daily-briefs', 'automatic backup before daily brief migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '7', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -2046,6 +2743,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   if (!nightlyErrorThemeTimerStarted) {
     scheduleNightlyErrorThemeBatch();
     nightlyErrorThemeTimerStarted = true;
+  }
+  if (!dailyBriefTimerStarted) {
+    scheduleDailyBrief();
+    dailyBriefTimerStarted = true;
   }
 }
 
@@ -2489,6 +3190,7 @@ ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_da
   const waterRecord = sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
+  const todayBrief = getDailyBriefByDate(today) || getLatestDailyBriefSummary();
 
   const payload = {
     activeGoal,
@@ -2501,6 +3203,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     yesterdayReview: reviews.find((review) => review.date === yesterday) || null,
     visibleTasks,
     todayWaterRecord: waterRecord,
+    todayBrief,
   };
   dashboardPayloadCache = { revision: dataRevision, date: today, payload };
   return { ...payload, readOnly: sessionRole === 'read' };
@@ -2928,6 +3631,23 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url?.startsWith('/api/briefs') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    if (requestUrl.pathname === '/api/briefs/settings') {
+      sendJson(res, { settings: getDailyBriefSettings(), readOnly: sessionRole === 'read' });
+      return;
+    }
+    if (requestUrl.pathname === '/api/briefs/today') {
+      sendJson(res, { brief: getDailyBriefByDate(todayISO()), latest: getLatestDailyBriefSummary(), readOnly: sessionRole === 'read' });
+      return;
+    }
+    if (requestUrl.pathname === '/api/briefs') {
+      sendJson(res, { briefs: listDailyBriefs(queryLimit(requestUrl.searchParams, 30, 100) ?? 30), readOnly: sessionRole === 'read' });
+      return;
+    }
+  }
+
   if (req.url === '/api/goals' && req.method === 'GET') {
     ensureSqliteStore();
     sendJson(res, getGoalsList(sessionRole));
@@ -3089,6 +3809,41 @@ ORDER BY project_id;`);
     const period = body.period === 'previous' ? previousPeriod(kind) : currentPeriod(kind);
     const report = generateLearningReport(kind, body.periodStart || period.periodStart, body.periodEnd || period.periodEnd, 'manual');
     sendJson(res, { ok: true, report });
+    return;
+  }
+
+  if (req.url === '/api/briefs/settings' && req.method === 'POST') {
+    ensureSqliteStore();
+    const body = await readJsonBody(req);
+    sendJson(res, { settings: saveDailyBriefSettings(body), readOnly: false });
+    return;
+  }
+
+  if (req.url === '/api/briefs/generate' && req.method === 'POST') {
+    ensureSqliteStore();
+    const body = await readJsonBody(req);
+    const brief = await generateDailyBrief({
+      date: body.date || todayISO(),
+      trigger: 'manual',
+      sendEmail: Boolean(body.sendEmail),
+    });
+    sendJson(res, { ok: true, brief });
+    return;
+  }
+
+  if (req.url === '/api/briefs/send-latest' && req.method === 'POST') {
+    ensureSqliteStore();
+    const settings = getDailyBriefSettings({ includeSecret: true });
+    const latest = getLatestDailyBriefSummary();
+    if (!latest) {
+      sendJson(res, { error: 'No daily brief to send' }, 404);
+      return;
+    }
+    await sendDailyBriefEmail(latest.payload, settings.email);
+    const timestamp = nowISO();
+    runSqlite(`UPDATE daily_briefs SET emailed_at = ${sqlString(timestamp)}, email_error = '', updated_at = ${sqlString(timestamp)} WHERE id = ${sqlValue(latest.id)};`);
+    tableChanged();
+    sendJson(res, { ok: true, brief: getDailyBriefByDate(latest.date) });
     return;
   }
 
