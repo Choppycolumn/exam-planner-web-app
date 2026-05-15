@@ -27,6 +27,7 @@ const cookieName = 'exam_planner_session';
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
+const dailyBriefNewsCooldownKey = 'daily_brief_news_cooldown_until';
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
@@ -1668,8 +1669,12 @@ async function getBriefWeather(settings) {
 }
 
 async function getBriefMarket(symbolItem) {
+  const fromCrypto = await getCryptoMarket(symbolItem);
+  if (fromCrypto) return fromCrypto;
   const fromWscn = await getWscnMarket(symbolItem);
   if (fromWscn) return fromWscn;
+  const fromTradingView = await getTradingViewMarket(symbolItem);
+  if (fromTradingView) return fromTradingView;
   const fromEastMoney = await getEastMoneyMarket(symbolItem);
   if (fromEastMoney) return fromEastMoney;
   const fromSina = await getSinaMarket(symbolItem);
@@ -1707,13 +1712,107 @@ async function getBriefMarket(symbolItem) {
   }
 }
 
+const cryptoIdMap = {
+  BTC: 'bitcoin',
+  BITCOIN: 'bitcoin',
+  ETH: 'ethereum',
+  ETHER: 'ethereum',
+  BNB: 'binancecoin',
+  SOL: 'solana',
+  XRP: 'ripple',
+  DOGE: 'dogecoin',
+  ADA: 'cardano',
+  AVAX: 'avalanche-2',
+  TON: 'the-open-network',
+  LINK: 'chainlink',
+  DOT: 'polkadot',
+  TRX: 'tron',
+  LTC: 'litecoin',
+  BCH: 'bitcoin-cash',
+};
+
+function cryptoSymbolKey(symbol) {
+  const value = String(symbol || '').toUpperCase().trim();
+  return value
+    .replace(/[-_/]?(USD|USDT|USDC|CNY|CNH)$/i, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+async function getCryptoMarket(symbolItem) {
+  const key = cryptoSymbolKey(symbolItem.symbol);
+  const id = cryptoIdMap[key];
+  if (!id) return null;
+  const fromCryptoCompare = await getCryptoCompareMarket(symbolItem, key);
+  if (fromCryptoCompare) return fromCryptoCompare;
+  try {
+    const data = await fetchJsonWithTimeout(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(id)}&vs_currencies=usd&include_24hr_change=true`, 9000);
+    const quote = data[id] || {};
+    const price = Number(quote.usd || 0);
+    const changePercent = Number(quote.usd_24h_change || 0);
+    if (!Number.isFinite(price) || !price) throw new Error('empty coingecko response');
+    return {
+      ok: true,
+      name: symbolItem.name || key,
+      symbol: symbolItem.symbol,
+      price: Number(price.toFixed(price >= 100 ? 2 : 4)),
+      change: null,
+      changePercent: Number(changePercent.toFixed(2)),
+      currency: 'USD',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function getCryptoCompareMarket(symbolItem, key) {
+  try {
+    const data = await fetchJsonWithTimeout(`https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(key)}&tsyms=USD`, 9000);
+    const quote = data.RAW?.[key]?.USD;
+    if (!quote) throw new Error('empty cryptocompare response');
+    const price = Number(quote.PRICE || 0);
+    const changePercent = Number(quote.CHANGEPCT24HOUR ?? quote.CHANGEPCTDAY ?? 0);
+    const change = Number(quote.CHANGE24HOUR ?? quote.CHANGEDAY ?? 0);
+    if (!Number.isFinite(price) || !price) throw new Error('empty cryptocompare price');
+    return {
+      ok: true,
+      name: symbolItem.name || key,
+      symbol: symbolItem.symbol,
+      price: Number(price.toFixed(price >= 100 ? 2 : 4)),
+      change: Number(change.toFixed(price >= 100 ? 2 : 4)),
+      changePercent: Number(changePercent.toFixed(2)),
+      currency: 'USD',
+    };
+  } catch {
+    try {
+      const data = fetchJsonWithCurl(`https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(key)}&tsyms=USD`, 9);
+      const quote = data.RAW?.[key]?.USD;
+      const price = Number(quote?.PRICE || 0);
+      if (!Number.isFinite(price) || !price) return null;
+      const changePercent = Number(quote.CHANGEPCT24HOUR ?? quote.CHANGEPCTDAY ?? 0);
+      const change = Number(quote.CHANGE24HOUR ?? quote.CHANGEDAY ?? 0);
+      return {
+        ok: true,
+        name: symbolItem.name || key,
+        symbol: symbolItem.symbol,
+        price: Number(price.toFixed(price >= 100 ? 2 : 4)),
+        change: Number(change.toFixed(price >= 100 ? 2 : 4)),
+        changePercent: Number(changePercent.toFixed(2)),
+        currency: 'USD',
+      };
+    } catch {
+      return null;
+    }
+  }
+}
+
 async function getWscnMarket(symbolItem) {
   const value = String(symbolItem.symbol || '').toUpperCase();
-  if (!/^\d{6}\.(SS|SZ)$/.test(value)) return null;
+  if (!/^\d{6}\.(SS|SH|SZ)$/.test(value)) return null;
   try {
-    const url = `https://api-ddc-wscn.awtmt.com/market/real?fields=prod_name,last_px,px_change,px_change_rate&prod_code=${encodeURIComponent(value)}`;
+    const normalized = value.replace(/\.SH$/, '.SS');
+    const url = `https://api-ddc-wscn.awtmt.com/market/real?fields=prod_name,last_px,px_change,px_change_rate&prod_code=${encodeURIComponent(normalized)}`;
     const data = await fetchJsonWithTimeout(url, 9000);
-    const item = data.data?.snapshot?.[value];
+    const item = data.data?.snapshot?.[normalized];
     if (!Array.isArray(item)) throw new Error('empty wscn market response');
     const current = Number(item[1] || 0);
     const change = Number(item[2] || 0);
@@ -1733,9 +1832,60 @@ async function getWscnMarket(symbolItem) {
   }
 }
 
+function tradingViewTicker(symbol) {
+  const value = String(symbol || '').toUpperCase().trim();
+  const map = {
+    '^VN30': 'HOSE:VN30',
+    VN30: 'HOSE:VN30',
+    'VN30.VN': 'HOSE:VN30',
+    '^VNI': 'HOSE:VNINDEX',
+    VNINDEX: 'HOSE:VNINDEX',
+  };
+  if (map[value]) return map[value];
+  if (/^[A-Z]+:[A-Z0-9._-]+$/.test(value)) return value;
+  return '';
+}
+
+async function getTradingViewMarket(symbolItem) {
+  const ticker = tradingViewTicker(symbolItem.symbol);
+  if (!ticker) return null;
+  try {
+    const response = await fetch('https://scanner.tradingview.com/vietnam/scan', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'user-agent': 'exam-planner-brief/1.0',
+      },
+      body: JSON.stringify({
+        symbols: { tickers: [ticker], query: { types: [] } },
+        columns: ['name', 'close', 'change', 'change_abs'],
+      }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const row = data.data?.[0]?.d;
+    if (!Array.isArray(row)) throw new Error('empty tradingview response');
+    const price = Number(row[1] || 0);
+    const changePercent = Number(row[2] || 0);
+    const change = Number(row[3] || 0);
+    if (!Number.isFinite(price) || !price) throw new Error('empty tradingview price');
+    return {
+      ok: true,
+      name: symbolItem.name || row[0] || symbolItem.symbol,
+      symbol: symbolItem.symbol,
+      price: Number(price.toFixed(2)),
+      change: Number(change.toFixed(2)),
+      changePercent: Number(changePercent.toFixed(2)),
+      currency: 'VND',
+    };
+  } catch {
+    return null;
+  }
+}
+
 function eastMoneySecId(symbol) {
   const value = String(symbol || '').toUpperCase();
-  if (/^\d{6}\.SS$/.test(value)) return `1.${value.slice(0, 6)}`;
+  if (/^\d{6}\.(SS|SH)$/.test(value)) return `1.${value.slice(0, 6)}`;
   if (/^\d{6}\.SZ$/.test(value)) return `0.${value.slice(0, 6)}`;
   return '';
 }
@@ -1791,7 +1941,9 @@ async function getSinaMarket(symbolItem) {
     const changePercent = previous ? Number(((change / previous) * 100).toFixed(2)) : 0;
     return {
       ok: true,
-      name: symbolItem.name,
+      name: ['^VN30', 'VN30', 'VN30.VN'].includes(String(symbolItem.symbol || '').toUpperCase().trim())
+        ? `${symbolItem.name} (VNM ETF proxy)`
+        : symbolItem.name,
       symbol: symbolItem.symbol,
       price: Number(current.toFixed(2)),
       change,
@@ -1807,9 +1959,24 @@ function stooqMarketSymbol(symbol) {
   const map = {
     '^GSPC': '^spx',
     '^IXIC': '^ndq',
+    '^DJI': '^dji',
+    '^N225': '^nkx',
+    '^NIKKEI': '^nkx',
+    '^HSI': '^hsi',
+    '^VN30': 'vnm.us',
+    VN30: 'vnm.us',
+    'VN30.VN': 'vnm.us',
     'BTC-USD': 'btcusd',
+    BTC: 'btcusd',
+    ETH: 'ethusd',
+    'ETH-USD': 'ethusd',
   };
-  return map[String(symbol || '').toUpperCase()] || '';
+  const value = String(symbol || '').toUpperCase().trim();
+  if (map[value]) return map[value];
+  if (/^[A-Z]{1,5}$/.test(value)) return `${value.toLowerCase()}.us`;
+  if (/^[A-Z]{1,5}\.US$/.test(value)) return value.toLowerCase();
+  if (/^\d{4,5}\.HK$/.test(value)) return value.toLowerCase();
+  return '';
 }
 
 async function getStooqMarket(symbolItem) {
@@ -1826,12 +1993,14 @@ async function getStooqMarket(symbolItem) {
     const changePercent = open ? Number(((change / open) * 100).toFixed(2)) : 0;
     return {
       ok: true,
-      name: symbolItem.name,
+      name: ['^VN30', 'VN30', 'VN30.VN'].includes(String(symbolItem.symbol || '').toUpperCase().trim())
+        ? `${symbolItem.name} (VNM ETF proxy)`
+        : symbolItem.name,
       symbol: symbolItem.symbol,
       price: Number(current.toFixed(2)),
       change,
       changePercent,
-      currency: symbolItem.symbol === 'BTC-USD' ? 'USD' : '',
+      currency: symbol === 'vnm.us' || symbolItem.symbol === 'BTC-USD' ? 'USD' : '',
     };
   } catch {
     return null;
@@ -1856,6 +2025,66 @@ async function getBriefNews(topic) {
     };
   } catch (error) {
     return { topic, ok: false, articles: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function gdeltTopicQuery(topic) {
+  const text = String(topic || '').trim();
+  if (!text) return '';
+  return /[\s:]/.test(text) ? `"${text.replace(/"/g, '')}"` : text;
+}
+
+function normalizeNewsArticle(article) {
+  return {
+    title: article.title || '未命名新闻',
+    url: article.url || '',
+    source: article.domain || article.sourceCountry || '',
+    seenAt: article.seendate || '',
+  };
+}
+
+function articleMatchesTopic(article, topic) {
+  const haystack = `${article.title || ''} ${article.url || ''} ${article.domain || ''}`.toLowerCase();
+  return haystack.includes(String(topic || '').trim().toLowerCase());
+}
+
+async function getBriefNewsBatch(topics) {
+  const normalizedTopics = topics.map((topic) => String(topic || '').trim()).filter(Boolean);
+  if (!normalizedTopics.length) return [];
+  const cooldownUntil = sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(dailyBriefNewsCooldownKey)} LIMIT 1;`);
+  if (cooldownUntil && new Date(cooldownUntil).getTime() > Date.now()) {
+    return normalizedTopics.map((topic) => ({ topic, ok: false, articles: [], error: `news source cooling down until ${cooldownUntil}` }));
+  }
+  const queryText = `(${normalizedTopics.map(gdeltTopicQuery).filter(Boolean).join(' OR ')})`;
+  const url = `https://api.gdeltproject.org/api/v2/doc/doc?query=${encodeURIComponent(queryText)}&mode=ArtList&maxrecords=50&format=json&sort=HybridRel&timespan=24h`;
+  try {
+    const data = await fetchJsonWithTimeout(url, 12000);
+    const rawArticles = Array.isArray(data.articles) ? data.articles : [];
+    runSqlite(`DELETE FROM app_metadata WHERE key = ${sqlString(dailyBriefNewsCooldownKey)};`);
+    const usedUrls = new Set();
+    return normalizedTopics.map((topic) => {
+      let matches = rawArticles.filter((article) => articleMatchesTopic(article, topic));
+      if (!matches.length) {
+        matches = rawArticles.filter((article) => !usedUrls.has(article.url)).slice(0, 3);
+      }
+      const articles = [];
+      for (const article of matches) {
+        if (!article.url || usedUrls.has(article.url)) continue;
+        usedUrls.add(article.url);
+        articles.push(normalizeNewsArticle(article));
+        if (articles.length >= 5) break;
+      }
+      return { topic, ok: true, articles };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('429')) {
+      const cooldown = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES (${sqlString(dailyBriefNewsCooldownKey)}, ${sqlString(cooldown)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    }
+    return normalizedTopics.map((topic) => ({ topic, ok: false, articles: [], error: message }));
   }
 }
 
@@ -1939,11 +2168,22 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
   const generatedAt = nowISO();
   const topics = splitLines(settings.newsTopicsText).slice(0, 8);
   const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
-  const [weather, markets, news] = await Promise.all([
+  const [weather, markets, newsResult] = await Promise.all([
     getBriefWeather(settings),
     Promise.all(marketSymbols.map(getBriefMarket)),
-    Promise.all(topics.map(getBriefNews)),
+    getBriefNewsBatch(topics),
   ]);
+  let news = newsResult;
+  if (news.every((topic) => !topic.ok || !topic.articles?.length)) {
+    const previous = getLatestDailyBriefSummary();
+    const previousNews = previous?.payload?.news;
+    if (Array.isArray(previousNews) && previousNews.some((topic) => topic.articles?.length)) {
+      news = topics.map((topic) => {
+        const matched = previousNews.find((item) => item.topic === topic);
+        return matched?.articles?.length ? { ...matched, reusedFromPrevious: true } : newsResult.find((item) => item.topic === topic) || { topic, ok: false, articles: [], error: 'news source unavailable' };
+      });
+    }
+  }
   const payload = {
     date,
     title: dailyBriefTitle(date),

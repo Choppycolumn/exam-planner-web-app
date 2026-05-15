@@ -84,7 +84,7 @@ export interface DailyBrief {
       precipitationProbability?: number;
       error?: string;
     };
-    markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number; changePercent?: number; currency?: string; error?: string }>;
+    markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number | null; changePercent?: number; currency?: string; error?: string }>;
     news?: Array<{ topic: string; ok: boolean; articles: Array<{ title: string; url: string; source?: string; seenAt?: string }>; error?: string }>;
     learning?: {
       activeGoal: { name: string; deadline: string; daysLeft: number } | null;
