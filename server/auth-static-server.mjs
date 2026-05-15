@@ -15,7 +15,7 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
-const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'intfloat/multilingual-e5-large';
+const embeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
 const port = Number(process.env.PORT || 8080);
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
@@ -61,14 +61,21 @@ function nowISO() {
   return new Date().toISOString();
 }
 
+function localDateISO(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateISO();
 }
 
 function addYearISO() {
   const date = new Date();
   date.setFullYear(date.getFullYear() + 1);
-  return date.toISOString().slice(0, 10);
+  return localDateISO(date);
 }
 
 function parseDateString(value) {
@@ -845,7 +852,7 @@ function extractReviewProblemSegments(reviews) {
 function hasProblemCue(segment, fieldKey) {
   if (fieldKey === 'problems') return true;
   const text = String(segment || '');
-  const negativeCue = /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡住|卡了|低下|不高|较差|太差|难|困|熬夜|分心|浮躁|静不下心|抖音|微信|小红书|视频号|刷视频|刷手机|效率低|效率低下|效率不高)/;
+  const negativeCue = /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡住|卡了|低下|不高|较差|太差|难|困|熬夜|分心|走神|注意力|不集中|不太集中|集中不了|浮躁|静不下心|没啥状态|状态不好|状态差|抖音|微信|小红书|视频号|刷视频|刷手机|效率低|效率低下|效率不高)/;
   if (fieldKey === 'tomorrowPlan') {
     return negativeCue.test(text) || /(卸载|关闭|限制).*(抖音|微信|小红书|视频号|手机)/.test(text);
   }
