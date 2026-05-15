@@ -22,10 +22,36 @@ import { routeLoaders } from '../router/preload';
 
 const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
+function getTimeGreeting(date = new Date()) {
+  const hour = date.getHours();
+  if (hour < 5) return '夜深了';
+  if (hour < 11) return '早上好';
+  if (hour < 14) return '中午好';
+  if (hour < 18) return '下午好';
+  if (hour < 22) return '晚上好';
+  return '夜深了';
+}
+
+function marketToneClass(value?: number | null) {
+  if (typeof value !== 'number') return 'text-slate-500';
+  return value >= 0 ? 'text-emerald-600' : 'text-rose-600';
+}
+
+function formatMarketChange(value?: number | null) {
+  return typeof value === 'number' ? `${value}%` : '--';
+}
+
+function formatMarketPrice(value?: number, currency?: string) {
+  if (typeof value !== 'number') return '--';
+  return `${value}${currency ? ` ${currency}` : ''}`;
+}
+
 export function DashboardPage() {
   const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, todayBrief, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const [chartsReady, setChartsReady] = useState(false);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [briefAcknowledged, setBriefAcknowledged] = useState(false);
   const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
     queryKey: queryKeys.dashboardCharts,
     queryFn: serverApi.getDashboardCharts,
@@ -33,9 +59,14 @@ export function DashboardPage() {
     placeholderData: { today: todayISO(), distribution: [], trend: [] },
   });
   const today = todayISO();
+  const greeting = getTimeGreeting(currentTime);
   const reviewScore = getReviewAverageScore(todayReview ?? undefined);
   const reviewTone = getReviewTone(reviewScore);
   const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
+  const briefAckKey = todayBrief ? `examPlanner.dashboardBriefAck.${todayBrief.id}.${todayBrief.generatedAt}` : '';
+  const briefMarkets = todayBrief?.payload.markets ?? [];
+  const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
+  const showBriefCard = !todayBrief || !briefAcknowledged;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
   const dailyRequiredMinutes = goalDaysLeft ? Math.ceil(remainingStudyMinutes / goalDaysLeft) : 0;
@@ -58,8 +89,23 @@ export function DashboardPage() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setCurrentTime(new Date()), 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    setBriefAcknowledged(Boolean(briefAckKey && localStorage.getItem(briefAckKey)));
+  }, [briefAckKey]);
+
+  const acknowledgeBrief = () => {
+    if (!briefAckKey) return;
+    localStorage.setItem(briefAckKey, new Date().toISOString());
+    setBriefAcknowledged(true);
+  };
+
   return (
-    <Page title="早上好，今天继续稳稳推进" subtitle="第一眼看目标、看今天、看趋势。">
+    <Page title={`${greeting}，今天继续稳稳推进`} subtitle="第一眼看目标、看今天、看趋势。">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <MetricCard
           label="当前长期目标"
@@ -93,24 +139,51 @@ export function DashboardPage() {
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
 
-      <Link className="mt-6 block rounded-xl border border-blue-100 bg-blue-50/70 p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/notifications">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="flex items-center gap-2 text-sm font-semibold text-blue-700"><Bell size={16} />今日晨间简报</p>
-            <h2 className="mt-1 text-lg font-semibold text-slate-950">
-              {todayBrief ? todayBrief.title : '还没有生成今日简报'}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-slate-600">
-              {todayBrief?.payload.weather?.ok
-                ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；指数 ${todayBrief.payload.markets?.length ?? 0} 项。`
-                : '点击进入通知中心，生成天气、指数涨跌和学习提醒。'}
-            </p>
+      {showBriefCard ? (
+        <section className="mt-6 rounded-xl border border-blue-100 bg-blue-50/70 p-5 transition hover:-translate-y-0.5 hover:shadow-lg">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold text-blue-700"><Bell size={16} />今日晨间简报</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                {todayBrief ? todayBrief.title : '还没有生成今日简报'}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                {todayBrief?.payload.weather?.ok
+                  ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；指数 ${briefMarkets.length} 项。`
+                  : '点击进入通知中心，生成天气、指数涨跌和学习提醒。'}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/notifications">
+                {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
+              </Link>
+              {todayBrief ? (
+                <button className="rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white" onClick={acknowledgeBrief}>
+                  我已知晓
+                </button>
+              ) : null}
+            </div>
           </div>
-          <span className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700">
-            {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
-          </span>
-        </div>
-      </Link>
+          {todayBrief && briefMarkets.length ? (
+            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              {successfulMarkets.length ? successfulMarkets.map((item) => (
+                <div key={`${item.name}-${item.symbol}`} className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-800">{item.name}</p>
+                      <p className="mt-0.5 text-xs text-slate-500">{item.symbol}</p>
+                    </div>
+                    <p className={`text-sm font-semibold ${marketToneClass(item.changePercent)}`}>{formatMarketChange(item.changePercent)}</p>
+                  </div>
+                  <p className="mt-2 text-sm text-slate-600">{formatMarketPrice(item.price, item.currency)}</p>
+                </div>
+              )) : (
+                <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-slate-500">指数暂时获取失败，可进入通知中心查看详情。</div>
+              )}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {yesterdayReview?.tomorrowPlan?.trim() ? (
         <div className="mt-6 card border-blue-100 bg-blue-50/70 p-5">
