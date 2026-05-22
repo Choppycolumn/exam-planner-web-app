@@ -707,12 +707,12 @@ const reviewProblemThemes = [
   {
     id: 'english-reading',
     label: '英语阅读问题',
-    keywords: ['英语阅读', '阅读理解', '真题阅读', '长难句', '读不懂', '正确率', '准确率', '阅读错', '阅读速度', '英语真题'],
+    keywords: ['英语阅读', '阅读理解', '真题阅读', '长难句', '英语读不懂', '阅读读不懂', '阅读正确率', '英语正确率', '阅读准确率', '阅读错', '阅读速度', '英语真题', '英语一阅读'],
   },
   {
     id: 'professional-course',
     label: '专业课推进偏慢',
-    keywords: ['专业课', '进度慢', '进度较慢', '进度有点慢', '听课', '章节', '课程', '信号与系统', '背诵慢'],
+    keywords: ['专业课', '专业课进度慢', '专业课进度较慢', '专业课没看', '专业课没学', '专业课听课', '信号与系统', '通信原理', '数据结构', '操作系统', '计算机网络', '计算机组成', '计组', '408'],
   },
   {
     id: 'math-errors',
@@ -720,14 +720,29 @@ const reviewProblemThemes = [
     keywords: ['数学错', '高数错', '线代错', '线性代数错', '概率错', '错题', '错太多', '做错', '算错', '计算错误', '计算失误', '公式', '概念', '题错', '不会做', '不会算'],
   },
   {
+    id: 'method-review',
+    label: '复习方法 / 错题闭环',
+    keywords: ['复习不到位', '没有复习', '没复习', '二刷', '回顾少', '整理少', '错题整理', '错题没整理', '笔记没整理', '知识点不熟', '框架不清', '方法不对', '只听课不练题', '只看不练'],
+  },
+  {
+    id: 'memory-recall',
+    label: '记忆背诵 / 回忆不足',
+    keywords: ['背不下来', '背不完', '没背', '没记住', '记不住', '忘得快', '回忆不出来', '默写错', '单词忘', '单词没背', '背诵慢'],
+  },
+  {
     id: 'planning',
     label: '计划执行 / 时间安排',
-    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '没看', '没学', '没做', '没复习', '没开始', '没推进', '没碰', '赶不上', '效率', '效率低', '效率低下', '效率不高', '执行', '任务', '拖到'],
+    keywords: ['计划', '安排', '时间不够', '没完成', '未完成', '没看', '没学', '没做', '没复习', '没开始', '没推进', '没碰', '没刷', '没练', '没整理', '赶不上', '效率低', '效率低下', '效率不高', '执行', '任务', '拖到', '来不及'],
   },
   {
     id: 'energy',
     label: '作息精力状态',
-    keywords: ['困', '睡眠', '熬夜', '起晚', '疲惫', '累', '状态差', '精力', '头疼', '生病', '晚睡'],
+    keywords: ['困', '睡眠', '熬夜', '起晚', '疲惫', '累', '状态差', '精力', '头疼', '生病', '晚睡', '犯困', '没精神'],
+  },
+  {
+    id: 'emotion-pressure',
+    label: '情绪压力 / 心态波动',
+    keywords: ['焦虑', '压力大', '烦躁', '心态崩', '崩溃', '沮丧', '自责', '急躁', '慌', '怕来不及', '心态不好'],
   },
   {
     id: 'exam-assignment',
@@ -763,8 +778,11 @@ function textIncludesKeyword(text, keywords) {
 function matchedProblemExample(review, theme) {
   for (const field of reviewProblemFields) {
     const text = review[field.key] || '';
-    if (text && textIncludesKeyword(text, theme.keywords)) {
-      return { date: review.date, field: field.label, text: compactText(text, 80) };
+    for (const sentence of splitReviewSentences(text)) {
+      const matched = classifyReviewSegment(sentence, field.key);
+      if (matched?.theme.id === theme.id) {
+        return { date: review.date, field: field.label, text: compactText(sentence, 80) };
+      }
     }
   }
   return null;
@@ -830,6 +848,11 @@ function classifyReviewSegment(segment, fieldKey) {
   const candidates = [];
   for (const theme of reviewProblemThemes) {
     if (theme.id === 'math-errors' && !isMathErrorSegment(normalizedSegment)) continue;
+    if (theme.id === 'english-reading' && !isEnglishReadingSegment(normalizedSegment)) continue;
+    if (theme.id === 'professional-course' && !isProfessionalCourseSegment(normalizedSegment)) continue;
+    if (theme.id === 'method-review' && !isLearningMethodSegment(normalizedSegment)) continue;
+    if (theme.id === 'memory-recall' && !isMemoryRecallSegment(normalizedSegment)) continue;
+    if (theme.id === 'planning' && !isPlanningSegment(normalizedSegment)) continue;
     const matches = keywordMatches(segment, theme.keywords)
       .filter((keyword) => !looksLikeResolvedStatement(segment, keyword));
     if (!matches.length) continue;
@@ -871,7 +894,7 @@ function extractReviewProblemSegments(reviews) {
 function hasProblemCue(segment, fieldKey) {
   if (fieldKey === 'problems') return true;
   const text = String(segment || '');
-  const negativeCue = /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡住|卡了|低下|不高|较差|太差|难|困|熬夜|分心|走神|注意力|不集中|不太集中|集中不了|浮躁|静不下心|没啥状态|状态不好|状态差|抖音|微信|小红书|视频号|刷视频|刷手机|效率低|效率低下|效率不高)/;
+  const negativeCue = /(问题|错误|错|慢|拖|没|未|不足|不会|不懂|卡住|卡了|低下|不高|较差|太差|难|困|熬夜|分心|走神|不集中|不太集中|集中不了|浮躁|静不下心|没啥状态|状态不好|状态差|抖音|微信|小红书|视频号|刷视频|刷手机|效率低|效率低下|效率不高)/;
   if (fieldKey === 'tomorrowPlan') {
     return negativeCue.test(text) || /(卸载|关闭|限制).*(抖音|微信|小红书|视频号|手机)/.test(text);
   }
@@ -880,9 +903,19 @@ function hasProblemCue(segment, fieldKey) {
 
 function isStudyNotDoneSegment(segment) {
   const text = String(segment || '');
-  const subjectPattern = /(高数|高等数学|线代|线性代数|概率|数学|英语阅读|阅读|专业课|政治|单词|真题|错题|课程)/;
-  const notDonePattern = /(没看|没学|没做|没复习|没开始|没推进|没碰|没刷|没练|未看|未学|未做|未复习|未开始|未推进)/;
+  const subjectPattern = /(高数|高等数学|线代|线性代数|概率|数学|英语阅读|阅读|专业课|政治|单词|真题|错题|课程|章节|知识点|笔记|背诵)/;
+  const notDonePattern = /(没看|没学|没做|没复习|没开始|没推进|没碰|没刷|没练|没背|没记|没整理|未看|未学|未做|未复习|未开始|未推进|未整理)/;
   return (subjectPattern.test(text) && notDonePattern.test(text)) || /(又没看|还是没看|还没看|没怎么看|没来得及看)/.test(text);
+}
+
+function isEnglishReadingSegment(segment) {
+  const text = String(segment || '');
+  return /(英语|英一|英语一|阅读理解|真题阅读|长难句)/.test(text) && /(阅读|长难句|读不懂|正确率|准确率|错|速度|真题)/.test(text);
+}
+
+function isProfessionalCourseSegment(segment) {
+  const text = String(segment || '');
+  return /(专业课|信号与系统|通信原理|数据结构|操作系统|计算机网络|计算机组成|计组|408)/.test(text);
 }
 
 function isMathErrorSegment(segment) {
@@ -892,10 +925,27 @@ function isMathErrorSegment(segment) {
   return /(计算错误|计算失误|错题|错太多|题错|算错)/.test(text) || (mathSubjectPattern.test(text) && mathErrorPattern.test(text));
 }
 
+function isLearningMethodSegment(segment) {
+  const text = String(segment || '');
+  if (isMathErrorSegment(text)) return false;
+  return /(复习|回顾|整理|错题|笔记|知识点|框架|方法|二刷|闭环|只听课|只看不练|只听不练)/.test(text)
+    && /(不到位|不熟|不清|不对|少|没|未|忘|漏|断|弱|低|慢)/.test(text);
+}
+
+function isMemoryRecallSegment(segment) {
+  const text = String(segment || '');
+  return /(背|记|忘|回忆|默写|单词|词汇)/.test(text) && /(不下来|不完|不住|忘|慢|错|少|没|未)/.test(text);
+}
+
+function isPlanningSegment(segment) {
+  const text = String(segment || '');
+  return isStudyNotDoneSegment(text) || /(计划|安排|时间|没完成|未完成|赶不上|来不及|效率低|效率低下|效率不高|执行|任务|拖到|拖延)/.test(text);
+}
+
 function isClearlyPositiveSegment(segment, fieldKey) {
   if (fieldKey === 'problems') return false;
   const text = String(segment || '');
-  const positiveCue = /(有进步|明显进步|做得不错|比较顺利|完成了|已完成|保持|稳定|掌握|按计划|效率提高|状态不错)/;
+  const positiveCue = /(有进步|明显进步|做得不错|比较顺利|完成了|已完成|保持|稳定|掌握|按计划|效率提高|状态不错|注意力还好|专注度还好|效率还行|状态还行|状态可以|还算顺利)/;
   return positiveCue.test(text) && !hasProblemCue(text, fieldKey);
 }
 
@@ -2192,12 +2242,38 @@ function encodeMailHeader(value) {
   return `=?UTF-8?B?${Buffer.from(String(value), 'utf8').toString('base64')}?=`;
 }
 
+function dailyBriefStudyPushHtml(learning = {}) {
+  const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
+  const themes = Array.isArray(learning.topErrorThemes) ? learning.topErrorThemes : [];
+  const yesterdayMinutes = Number(learning.yesterdayMinutes || 0);
+  const items = [];
+  if (learning.activeGoal?.daysLeft != null) {
+    items.push(`距离「${learning.activeGoal.name}」还有 ${learning.activeGoal.daysLeft} 天，今天至少完成一个能推进长期目标的硬任务。`);
+  }
+  if (learning.yesterdayReview?.tomorrowPlan) {
+    items.push(`优先执行昨日写给今天的计划：${compactText(learning.yesterdayReview.tomorrowPlan, 90)}`);
+  }
+  if (tasks.length) {
+    items.push(`今天有 ${tasks.length} 个待推进短期目标，先从最紧急的一项开始，不要等到晚上再补。`);
+  }
+  if (yesterdayMinutes < 180) {
+    items.push('昨日学习时长偏少，今天先用一个 30 分钟启动块把状态拉起来。');
+  } else {
+    items.push(`昨日已学习 ${minutesText(yesterdayMinutes)}，今天的重点是延续节奏，而不是重新找感觉。`);
+  }
+  if (themes[0]) {
+    items.push(`近期高频问题是「${themes[0].label}」，今天学习时专门留意这个坑，结束后在复盘里写清楚是否改善。`);
+  }
+  return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
 function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
   const learning = payload.learning || {};
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
+  const studyPush = dailyBriefStudyPushHtml(learning);
   return `<!doctype html>
 <html><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;line-height:1.6">
   <h1>${escapeHtml(payload.title)}</h1>
@@ -2206,6 +2282,8 @@ function dailyBriefHtml(payload) {
   <p>${escapeHtml(weather.cityName || '')}：${weather.ok ? `${escapeHtml(weather.condition)}，${escapeHtml(weather.temperature)}℃，${escapeHtml(weather.minTemperature)}-${escapeHtml(weather.maxTemperature)}℃，降水概率 ${escapeHtml(weather.precipitationProbability)}%` : `获取失败：${escapeHtml(weather.error || '')}`}</p>
   <h2>学习提醒</h2>
   <p>昨日学习：${Math.round(Number(learning.yesterdayMinutes || 0) / 60 * 10) / 10} 小时；近 7 天累计：${Math.round(Number(learning.last7Minutes || 0) / 60 * 10) / 10} 小时。</p>
+  <h2>今日学习督促</h2>
+  ${studyPush}
   ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
   ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
   <h2>指数与资产</h2>

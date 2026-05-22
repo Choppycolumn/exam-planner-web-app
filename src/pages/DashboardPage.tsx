@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, BookOpen, CalendarCheck, ClipboardList, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
+import { Bell, BookOpen, CalendarCheck, ClipboardList, CloudSun, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryKeys } from '../api/queryClient';
@@ -46,6 +46,11 @@ function formatMarketPrice(value?: number, currency?: string) {
   return `${value}${currency ? ` ${currency}` : ''}`;
 }
 
+function formatWeatherRange(min?: number, max?: number) {
+  if (typeof min !== 'number' || typeof max !== 'number') return '--';
+  return `${min}-${max}℃`;
+}
+
 export function DashboardPage() {
   const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, todayBrief, readOnly } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
@@ -64,6 +69,7 @@ export function DashboardPage() {
   const reviewTone = getReviewTone(reviewScore);
   const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
   const briefAckKey = todayBrief ? `examPlanner.dashboardBriefAck.${todayBrief.id}.${todayBrief.generatedAt}` : '';
+  const briefWeather = todayBrief?.payload.weather;
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
   const showBriefCard = !todayBrief || !briefAcknowledged;
@@ -164,8 +170,22 @@ export function DashboardPage() {
               ) : null}
             </div>
           </div>
-          {todayBrief && briefMarkets.length ? (
-            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {todayBrief ? (
+            <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-800">{briefWeather?.cityName || '天气'}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">{briefWeather?.ok ? briefWeather.condition : briefWeather?.error || '暂未获取'}</p>
+                  </div>
+                  <CloudSun className="text-blue-600" size={18} />
+                </div>
+                <p className="mt-2 text-sm text-slate-600">
+                  {briefWeather?.ok
+                    ? `${briefWeather.temperature}℃ · ${formatWeatherRange(briefWeather.minTemperature, briefWeather.maxTemperature)} · 降水 ${briefWeather.precipitationProbability ?? 0}%`
+                    : '天气稍后再看'}
+                </p>
+              </div>
               {successfulMarkets.length ? successfulMarkets.map((item) => (
                 <div key={`${item.name}-${item.symbol}`} className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2">
                   <div className="flex items-start justify-between gap-2">
