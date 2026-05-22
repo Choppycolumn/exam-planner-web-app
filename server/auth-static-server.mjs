@@ -1592,13 +1592,27 @@ async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
 }
 
 function fetchJsonWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-fsSL', '--max-time', String(timeoutSeconds), url], {
+  const result = spawnSync('curl', ['-fsSL', '-A', 'exam-planner-brief/1.0', '--max-time', String(timeoutSeconds), url], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
   return JSON.parse(result.stdout);
+}
+
+async function fetchJsonWithFallback(url, timeoutMs = 9000) {
+  try {
+    return await fetchJsonWithTimeout(url, timeoutMs);
+  } catch (primaryError) {
+    try {
+      return fetchJsonWithCurl(url, Math.max(3, Math.ceil(timeoutMs / 1000)));
+    } catch (fallbackError) {
+      const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`${primaryMessage}; curl fallback: ${fallbackMessage}`);
+    }
+  }
 }
 
 async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
@@ -1644,7 +1658,7 @@ function weatherCodeText(code) {
 async function getBriefWeather(settings) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(settings.latitude)}&longitude=${encodeURIComponent(settings.longitude)}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FShanghai&forecast_days=1`;
   try {
-    const data = await fetchJsonWithTimeout(url);
+    const data = await fetchJsonWithFallback(url);
     const current = data.current || {};
     const daily = data.daily || {};
     return {
