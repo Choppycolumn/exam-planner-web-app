@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Archive, BarChart3, Cpu, Download, HardDrive, RefreshCw, Sparkles } from 'lucide-react';
+import { Activity, Archive, BarChart3, Cpu, Database, Download, HardDrive, RefreshCw, Sparkles } from 'lucide-react';
 import { Page } from '../components/Page';
 import { EmptyState } from '../components/EmptyState';
 import { Toast } from '../components/Toast';
@@ -209,6 +209,40 @@ export function TaskCenterPage() {
             ? `${formatDateTime(status.errorThemes.latestBatch.completedAt)}，${status.errorThemes.latestBatch.status}，${status.errorThemes.latestBatch.occurrenceCount} 条证据`
             : '暂无'}。
         </p>
+      </section>
+
+      <section className="mt-5 card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><Database size={18} />SQLite 维护</h2>
+            <p className="mt-1 text-sm text-slate-500">夜间自动优化查询计划和统计缓存，手动执行不会清空数据。</p>
+          </div>
+          <button
+            className="btn btn-soft"
+            disabled={status?.readOnly || busyAction === 'sqlite'}
+            onClick={() => void runAction('sqlite', serverApi.runSqliteMaintenance, 'SQLite 维护已完成')}
+          >
+            <Database size={16} />立即维护
+          </button>
+        </div>
+        <dl className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <dt className="text-xs font-semibold text-slate-500">最近维护</dt>
+            <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDateTime(status?.maintenance.lastAt)}</dd>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <dt className="text-xs font-semibold text-slate-500">维护类型</dt>
+            <dd className="mt-1 text-sm font-semibold text-slate-800">{status?.maintenance.lastKind ?? '暂无'}</dd>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <dt className="text-xs font-semibold text-slate-500">下次夜间维护</dt>
+            <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDateTime(status?.maintenance.nextMaintenanceAt)}</dd>
+          </div>
+          <div className={`rounded-lg border p-3 ${status?.maintenance.lastError ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
+            <dt className="text-xs font-semibold opacity-80">最近结果</dt>
+            <dd className="mt-1 text-sm font-semibold">{status?.maintenance.lastError || '正常'}</dd>
+          </div>
+        </dl>
       </section>
 
       <section className="mt-5 card p-5">

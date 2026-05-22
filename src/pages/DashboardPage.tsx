@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Bell, BookOpen, CalendarCheck, ClipboardList, CloudSun, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
-import { queryKeys } from '../api/queryClient';
+import { queryClient, queryKeys } from '../api/queryClient';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
@@ -51,17 +51,54 @@ function formatWeatherRange(min?: number, max?: number) {
   return `${min}-${max}℃`;
 }
 
+function toneClass(tone?: string) {
+  if (tone === 'rose') return 'border-rose-100 bg-rose-50 text-rose-700';
+  if (tone === 'amber') return 'border-amber-100 bg-amber-50 text-amber-700';
+  if (tone === 'blue') return 'border-blue-100 bg-blue-50 text-blue-700';
+  if (tone === 'emerald') return 'border-emerald-100 bg-emerald-50 text-emerald-700';
+  return 'border-slate-200 bg-slate-50 text-slate-600';
+}
+
+function activityCellClass(minutes: number) {
+  if (minutes >= 360) return 'bg-emerald-600';
+  if (minutes >= 240) return 'bg-emerald-500';
+  if (minutes >= 120) return 'bg-blue-400';
+  if (minutes > 0) return 'bg-amber-300';
+  return 'bg-slate-100';
+}
+
 export function DashboardPage() {
-  const { activeGoal, todayTotal, totalStudyMinutes, studyTargetMinutes, latestExam, todayReview, yesterdayReview, visibleTasks, todayWaterRecord, todayBrief, readOnly } = useDashboardData();
+  const {
+    activeGoal,
+    todayTotal,
+    totalStudyMinutes,
+    studyTargetMinutes,
+    latestExam,
+    todayReview,
+    yesterdayReview,
+    visibleTasks,
+    todayWaterRecord,
+    todayBrief,
+    startupPlan,
+    reminders = [],
+    activityCalendar = [],
+    readOnly,
+  } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
+  const [inboxText, setInboxText] = useState('');
   const [chartsReady, setChartsReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const [briefAcknowledged, setBriefAcknowledged] = useState(false);
+  const [briefAckVersion, setBriefAckVersion] = useState(0);
   const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
     queryKey: queryKeys.dashboardCharts,
     queryFn: serverApi.getDashboardCharts,
     enabled: chartsReady,
     placeholderData: { today: todayISO(), distribution: [], trend: [] },
+  });
+  const { data: inboxData = { items: [], readOnly: false } } = useQuery({
+    queryKey: queryKeys.problemInbox('open'),
+    queryFn: () => serverApi.getProblemInbox('open', 6),
+    placeholderData: { items: [], readOnly: false },
   });
   const today = todayISO();
   const greeting = getTimeGreeting(currentTime);
@@ -72,6 +109,7 @@ export function DashboardPage() {
   const briefWeather = todayBrief?.payload.weather;
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
+  const briefAcknowledged = Boolean(briefAckVersion >= 0 && briefAckKey && localStorage.getItem(briefAckKey));
   const showBriefCard = !todayBrief || !briefAcknowledged;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
@@ -90,6 +128,32 @@ export function DashboardPage() {
     setTaskDraft({ title: '', dueDate: todayISO(), urgency: 'medium' });
   };
 
+  const refreshInbox = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.problemInbox('open') }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard }),
+    ]);
+  };
+
+  const addInboxItem = async () => {
+    if (readOnly || !inboxText.trim()) return;
+    await serverApi.saveProblemInbox(inboxText.trim(), today);
+    setInboxText('');
+    await refreshInbox();
+  };
+
+  const resolveInboxItem = async (id: number) => {
+    if (readOnly) return;
+    await serverApi.setProblemInboxStatus(id, 'resolved');
+    await refreshInbox();
+  };
+
+  const removeInboxItem = async (id: number) => {
+    if (readOnly || !confirm('确定删除这条问题记录吗？')) return;
+    await serverApi.removeProblemInbox(id);
+    await refreshInbox();
+  };
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setChartsReady(true), 250);
     return () => window.clearTimeout(timeoutId);
@@ -100,14 +164,10 @@ export function DashboardPage() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  useEffect(() => {
-    setBriefAcknowledged(Boolean(briefAckKey && localStorage.getItem(briefAckKey)));
-  }, [briefAckKey]);
-
   const acknowledgeBrief = () => {
     if (!briefAckKey) return;
     localStorage.setItem(briefAckKey, new Date().toISOString());
-    setBriefAcknowledged(true);
+    setBriefAckVersion((version) => version + 1);
   };
 
   return (
@@ -143,6 +203,124 @@ export function DashboardPage() {
           icon={<ClipboardList size={18} />}
         />
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
+      </div>
+
+      <div className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <section className="card p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-blue-700">今日启动</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">{startupPlan?.firstSession ?? '先开始一个 25 分钟低阻力学习块'}</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{startupPlan?.stage.hint ?? '打开主页后先确认今天最小推进动作。'}</p>
+            </div>
+            <span className={`rounded-lg border px-3 py-2 text-sm font-semibold ${toneClass(startupPlan?.stage.tone)}`}>
+              {startupPlan?.stage.label ?? '未设定阶段'}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">优先目标</p>
+              <p className="mt-1 truncate text-sm font-semibold text-slate-800">{startupPlan?.primaryTask?.title ?? '暂无待办短期目标'}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">今日均摊目标</p>
+              <p className="mt-1 text-sm font-semibold text-slate-800">{minutesToHoursText(startupPlan?.dailyTargetMinutes ?? dailyRequiredMinutes)}</p>
+            </div>
+            <Link className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-sm font-semibold text-blue-700 transition hover:bg-blue-100" to="/study-time">
+              开始记录学习时间
+            </Link>
+          </div>
+        </section>
+
+        <section className="card p-5">
+          <div className="flex items-center gap-2">
+            <AlertCircle size={17} className="text-amber-600" />
+            <h2 className="text-base font-semibold text-slate-900">提醒中心</h2>
+          </div>
+          <div className="mt-3 space-y-2">
+            {reminders.length ? reminders.map((item) => (
+              <div key={item.id} className={`rounded-lg border px-3 py-2 ${toneClass(item.tone)}`}>
+                <p className="text-sm font-semibold">{item.title}</p>
+                <p className="mt-1 text-xs opacity-80">{item.detail}</p>
+              </div>
+            )) : (
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+                今天没有明显积压项，保持节奏就好。
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="mt-6 grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <section className="card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">问题 Inbox</h2>
+              <p className="mt-1 text-sm text-slate-500">随手记今天暴露的问题，夜间会进入错误主题库分析。</p>
+            </div>
+            <Link className="text-sm font-semibold text-blue-700" to="/review-insights">查看主题库</Link>
+          </div>
+          <div className="mt-4 flex gap-2">
+            <input
+              className="field"
+              placeholder="例如：英语阅读定位太慢 / 高数计划没执行"
+              value={inboxText}
+              onChange={(event) => setInboxText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void addInboxItem();
+              }}
+              disabled={readOnly}
+            />
+            <button className="btn btn-primary shrink-0" disabled={readOnly || !inboxText.trim()} onClick={() => void addInboxItem()}>
+              <Plus size={16} />加入
+            </button>
+          </div>
+          <div className="mt-4 space-y-2">
+            {inboxData.items.length ? inboxData.items.map((item) => (
+              <div key={item.id} className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <div className="min-w-0">
+                  <p className="break-words text-sm font-medium text-slate-800">{item.text}</p>
+                  <p className="mt-1 text-xs text-slate-400">{item.date}</p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button className="rounded p-1 text-emerald-600 hover:bg-emerald-50" title="标记已处理" onClick={() => void resolveInboxItem(item.id)} disabled={readOnly}>
+                    <CheckCircle2 size={16} />
+                  </button>
+                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" title="删除" onClick={() => void removeInboxItem(item.id)} disabled={readOnly}>
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            )) : (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-500">暂时没有待处理问题。</p>
+            )}
+          </div>
+        </section>
+
+        <section className="card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">学习连续性</h2>
+              <p className="mt-1 text-sm text-slate-500">最近 12 周学习、复盘、喝水和短期目标完成情况。</p>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="h-3 w-3 rounded bg-slate-100" />空白
+              <span className="h-3 w-3 rounded bg-amber-300" />启动
+              <span className="h-3 w-3 rounded bg-blue-400" />稳定
+              <span className="h-3 w-3 rounded bg-emerald-600" />高强度
+            </div>
+          </div>
+          <div className="mt-4 grid gap-1" style={{ gridTemplateColumns: 'repeat(21, minmax(0, 1fr))' }}>
+            {activityCalendar.map((day) => (
+              <div
+                key={day.date}
+                className={`h-4 rounded ${activityCellClass(day.minutes)} ring-1 ring-white`}
+                title={`${day.date} 学习 ${minutesToHoursText(day.minutes)}；复盘 ${day.hasReview ? `${day.reviewScore} 分` : '无'}；喝水 ${day.waterCups}/${day.waterTargetCups}；任务 ${day.taskCompleted}/${day.taskTotal}`}
+              />
+            ))}
+          </div>
+        </section>
       </div>
 
       {showBriefCard ? (

@@ -25,6 +25,8 @@ export const queryKeys = {
   todayBrief: ['server', 'briefs', 'today'] as const,
   statistics: ['server', 'statistics'] as const,
   taskCenter: ['server', 'task-center'] as const,
+  problemInbox: (status: string = 'open') => ['server', 'problem-inbox', status] as const,
+  reviewPrefill: (date: string) => ['server', 'reviews', 'prefill', date] as const,
   reports: ['server', 'reports'] as const,
   errorThemes: (from?: string, to?: string) => ['server', 'error-themes', from ?? '', to ?? ''] as const,
   errorThemeDetail: (themeId: number, from?: string, to?: string) => ['server', 'error-themes', 'detail', themeId, from ?? '', to ?? ''] as const,

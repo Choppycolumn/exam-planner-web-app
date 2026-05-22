@@ -28,6 +28,7 @@ export function StudyTimePage() {
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedAt, setSavedAt] = useState('');
+  const [saveError, setSaveError] = useState(false);
 
   useEffect(() => {
     const next: Record<number, StudyTimeRow> = {};
@@ -39,6 +40,7 @@ export function StudyTimePage() {
     setRows(next);
     setIsDirty(false);
     setSavedAt('');
+    setSaveError(false);
   }, [activeProjects, recordsForDate]);
 
   const total = Object.values(rows).reduce((sum, row) => sum + combineTime(row), 0);
@@ -52,6 +54,7 @@ export function StudyTimePage() {
     if (readOnly || !activeProjects.length || isSaving) return;
     setIsSaving(true);
     try {
+      setSaveError(false);
       await studyRepository.saveDayRecords(
         date,
         activeProjects.filter((project) => project.id).map((project) => ({
@@ -65,6 +68,7 @@ export function StudyTimePage() {
       setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       setToast(mode === 'auto' ? '已自动保存' : '学习时间已保存');
     } catch {
+      setSaveError(true);
       setToast('保存失败，请稍后重试');
     } finally {
       setIsSaving(false);
@@ -107,12 +111,20 @@ export function StudyTimePage() {
           </div>
           {activeProjects.length ? (
             <div className="space-y-3">
-              <div className="sticky top-20 z-20 rounded-lg border border-blue-100 bg-white/95 p-3 shadow-sm backdrop-blur">
+              <div className={`sticky top-20 z-20 rounded-lg border p-3 shadow-sm backdrop-blur ${
+                saveError
+                  ? 'border-rose-200 bg-rose-50/95'
+                  : isSaving
+                    ? 'border-blue-200 bg-blue-50/95'
+                    : isDirty
+                      ? 'border-amber-200 bg-amber-50/95'
+                      : 'border-emerald-100 bg-white/95'
+              }`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-900">当天合计：{minutesToHoursText(total)}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {isSaving ? '正在保存...' : isDirty ? '停止输入 2 秒后自动保存' : savedAt ? `已保存于 ${savedAt}` : '当前没有未保存修改'}
+                      {saveError ? '保存失败，请点击立即保存重试' : isSaving ? '正在保存...' : isDirty ? '停止输入 2 秒后自动保存' : savedAt ? `已自动保存于 ${savedAt}` : '当前没有未保存修改'}
                     </p>
                   </div>
                   <button className="btn btn-primary" disabled={readOnly || isSaving} onClick={() => void saveRecords('manual')}>

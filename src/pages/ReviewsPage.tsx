@@ -1,11 +1,14 @@
 /* eslint-disable react-hooks/set-state-in-effect -- Selected-date form state intentionally mirrors the local DB record. */
 import { useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Save } from 'lucide-react';
+import { serverApi } from '../api/client';
+import { queryKeys } from '../api/queryClient';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { reviewsRepository } from '../db/repositories/reviewsRepository';
 import { useReviewsData } from '../hooks/useReviewsData';
-import { previousDateISO, todayISO } from '../utils/date';
+import { minutesToHoursText, previousDateISO, todayISO } from '../utils/date';
 import { getReviewAverageScore, getReviewTone } from '../utils/statistics';
 
 export function ReviewsPage() {
@@ -19,6 +22,11 @@ export function ReviewsPage() {
   const yesterdayAverageScore = getReviewAverageScore(yesterdayReview);
   const scoreDiff = yesterdayReview ? Math.round((draft.score - yesterdayAverageScore) * 10) / 10 : 0;
   const yesterdayTone = getReviewTone(yesterdayAverageScore);
+  const { data: prefill } = useQuery({
+    queryKey: queryKeys.reviewPrefill(date),
+    queryFn: () => serverApi.getReviewPrefill(date),
+    placeholderData: undefined,
+  });
 
   useEffect(() => {
     setDraft({
@@ -35,6 +43,15 @@ export function ReviewsPage() {
     await reviewsRepository.upsert({ date, ...draft });
     setToast(current ? '复盘已更新' : '复盘已保存');
     setTimeout(() => setToast(''), 1800);
+  };
+
+  const appendField = (field: 'summary' | 'problems' | 'tomorrowPlan', value = '') => {
+    const text = value.trim();
+    if (!text) return;
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      [field]: currentDraft[field]?.trim() ? `${currentDraft[field].trim()}\n${text}` : text,
+    }));
   };
 
   return (
@@ -58,6 +75,38 @@ export function ReviewsPage() {
           </div>
         </div>
         <div className="space-y-5">
+          <div className="card p-5">
+            <h2 className="text-base font-semibold">今日复盘预填</h2>
+            <p className="mt-1 text-sm text-slate-500">根据今天的学习、短期目标、喝水和问题 Inbox 生成素材，点一下就能带入表单。</p>
+            <div className="mt-4 grid gap-2 text-sm">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-500">今日学习</p>
+                <p className="mt-1 font-semibold text-slate-800">{prefill ? minutesToHoursText(prefill.totalMinutes) : '--'}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-500">投入最多</p>
+                <p className="mt-1 font-semibold text-slate-800">{prefill?.topProject ? `${prefill.topProject.name} ${minutesToHoursText(prefill.topProject.minutes)}` : '暂无'}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-500">喝水</p>
+                <p className="mt-1 font-semibold text-slate-800">{prefill ? `${prefill.water.cups}/${prefill.water.targetCups} 杯` : '--'}</p>
+              </div>
+            </div>
+            {prefill?.problemInboxItems.length ? (
+              <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-700">今天记录的问题</p>
+                <ul className="mt-2 space-y-1 text-sm text-amber-800">
+                  {prefill.problemInboxItems.map((item) => <li key={item.id}>- {item.text}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button className="btn btn-soft" type="button" onClick={() => appendField('summary', prefill?.suggestedSummary)}>带入总结</button>
+              <button className="btn btn-soft" type="button" onClick={() => appendField('problems', prefill?.suggestedProblems)}>带入问题</button>
+              <button className="btn btn-soft" type="button" onClick={() => appendField('tomorrowPlan', prefill?.previousTomorrowPlan)}>沿用昨日计划</button>
+            </div>
+          </div>
+
           <div className="card p-5">
             <h2 className="text-base font-semibold">昨日对比</h2>
             {yesterdayReview ? (

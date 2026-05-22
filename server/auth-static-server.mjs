@@ -55,10 +55,12 @@ let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
 let nightlyErrorThemeTimerStarted = false;
 let dailyBriefTimerStarted = false;
+let maintenanceTimerStarted = false;
 let dailyBriefTimer = null;
 let errorThemeBatchJob = null;
 let nextNightlyErrorThemeAt = null;
 let nextDailyBriefAt = null;
+let nextMaintenanceAt = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
@@ -402,6 +404,16 @@ CREATE TABLE IF NOT EXISTS daily_briefs (
   generated_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS problem_inbox_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT NOT NULL,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  source TEXT NOT NULL DEFAULT 'manual',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT
+);
 CREATE TABLE IF NOT EXISTS error_theme_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source TEXT NOT NULL DEFAULT 'local-model-batch',
@@ -489,6 +501,8 @@ CREATE INDEX IF NOT EXISTS idx_short_term_tasks_visible ON short_term_tasks(is_c
 CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
+CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
+CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
@@ -523,6 +537,7 @@ function writeStateToTables(state) {
     'DELETE FROM short_term_tasks;',
     'DELETE FROM water_intake_records;',
     'DELETE FROM confusing_words_backup;',
+    'DELETE FROM problem_inbox_items;',
   ];
 
   scripts.push(insertRowsSql('goals', ['id', 'name', 'description', 'deadline', 'is_active', 'type', 'notes', 'schema_version', 'created_at', 'updated_at'], normalized.goals.map((item, index) => ({
@@ -1363,15 +1378,28 @@ async function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = todayI
 FROM daily_reviews
 WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
 ORDER BY date;`);
+  const inboxItems = sqliteJson(`SELECT id, date, text
+FROM problem_inbox_items
+WHERE status = 'open' AND date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+ORDER BY date, id;`);
+  const inboxReviews = inboxItems.map((item) => ({
+    id: -Math.abs(Number(item.id)),
+    date: item.date,
+    summary: '',
+    wins: '',
+    problems: item.text,
+    tomorrowPlan: '',
+  }));
+  const reviewSources = [...reviews, ...inboxReviews];
   const corrections = loadErrorThemeCorrections();
-  const correctionResult = extractCorrectionProblemCandidates(reviews, corrections);
+  const correctionResult = extractCorrectionProblemCandidates(reviewSources, corrections);
   let embeddingMeta = null;
   let candidates = correctionResult.candidates;
   if (options.mode === 'rules') {
-    candidates = mergeProblemCandidates(correctionResult.candidates, extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys));
+    candidates = mergeProblemCandidates(correctionResult.candidates, extractRuleProblemCandidates(reviewSources, correctionResult.handledSegmentKeys));
   } else {
-    embeddingMeta = await extractEmbeddingProblemCandidates(reviews, timestamp, correctionResult.handledSegmentKeys, modelProfile);
-    const ruleCandidates = extractRuleProblemCandidates(reviews, correctionResult.handledSegmentKeys);
+    embeddingMeta = await extractEmbeddingProblemCandidates(reviewSources, timestamp, correctionResult.handledSegmentKeys, modelProfile);
+    const ruleCandidates = extractRuleProblemCandidates(reviewSources, correctionResult.handledSegmentKeys);
     candidates = mergeProblemCandidates(correctionResult.candidates, mergeProblemCandidates(embeddingMeta.candidates, ruleCandidates));
   }
   const rawCandidateCount = candidates.length;
@@ -1387,7 +1415,7 @@ ORDER BY date;`);
   const batchId = insertErrorThemeBatch({
     periodStart: from,
     periodEnd: to,
-    reviewCount: reviews.length,
+    reviewCount: reviewSources.length,
     occurrenceCount: candidates.length,
     themeCount: themeKeys.size,
     timestamp,
@@ -1409,7 +1437,7 @@ VALUES (${sqlValue(themeRowId)}, ${sqlValue(batchId)}, ${sqlValue(candidate.revi
     batchId,
     periodStart: from,
     periodEnd: to,
-    reviewCount: reviews.length,
+    reviewCount: reviewSources.length,
     occurrenceCount: candidates.length,
     rawCandidateCount,
     deduplicatedCount: Math.max(0, rawCandidateCount - candidates.length),
@@ -2771,6 +2799,68 @@ function nextWeeklyBackupAt() {
   return next.toISOString();
 }
 
+function chinaWallClockDelay(timeText = '03:20') {
+  const [hourText, minuteText] = String(timeText || '03:20').split(':');
+  const hour = Math.max(0, Math.min(23, Number(hourText) || 3));
+  const minute = Math.max(0, Math.min(59, Number(minuteText) || 20));
+  const now = new Date();
+  const chinaNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const targetChina = new Date(Date.UTC(
+    chinaNow.getUTCFullYear(),
+    chinaNow.getUTCMonth(),
+    chinaNow.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0,
+  ));
+  if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
+  const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
+  return { delay: Math.max(60 * 1000, targetUtcMs - now.getTime()), nextAt: new Date(targetUtcMs).toISOString() };
+}
+
+function runSqliteMaintenance(kind = 'manual') {
+  ensureSqliteStore();
+  const ranAt = nowISO();
+  try {
+    runSqlite('PRAGMA optimize;\nANALYZE;');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_sqlite_maintenance_at', ${sqlString(ranAt)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_sqlite_maintenance_kind', ${sqlString(kind)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_sqlite_maintenance_error', '', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    return { ok: true, ranAt, kind };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_sqlite_maintenance_error', ${sqlString(message)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    return { ok: false, ranAt, kind, error: message };
+  }
+}
+
+function scheduleDailyMaintenance() {
+  const { delay, nextAt } = chinaWallClockDelay('03:20');
+  nextMaintenanceAt = nextAt;
+  setTimeout(() => {
+    try {
+      ensureWeeklyBackup();
+      ensureAutomaticReports();
+      runSqliteMaintenance('nightly');
+      getDashboardPayload('write');
+      getStatisticsSummary();
+    } catch (error) {
+      console.error('[maintenance] nightly maintenance failed:', error);
+    } finally {
+      scheduleDailyMaintenance();
+    }
+  }, delay).unref();
+}
+
 function getDiskStatus() {
   const result = spawnSync('df', ['-k', dataDir], { encoding: 'utf8', timeout: 3000 });
   if (result.status !== 0 || !result.stdout) return null;
@@ -2822,6 +2912,9 @@ LIMIT 1;`)[0] || null;
   const embeddingRows = Number(sqliteScalar('SELECT COUNT(*) FROM review_sentence_embeddings;') || 0);
   const reviewRows = Number(sqliteScalar('SELECT COUNT(*) FROM daily_reviews;') || 0);
   const studyRows = Number(sqliteScalar('SELECT COUNT(*) FROM study_time_records;') || 0);
+  const lastMaintenanceAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_at' LIMIT 1;") || null;
+  const lastMaintenanceKind = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_kind' LIMIT 1;") || null;
+  const lastMaintenanceError = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_error' LIMIT 1;") || '';
   return {
     generatedAt: nowISO(),
     backup: {
@@ -2847,6 +2940,12 @@ LIMIT 1;`)[0] || null;
       lastCorrectionAt: corrections.lastUpdatedAt || null,
     },
     embedding: { ...getEmbeddingStatus(), embeddingRows },
+    maintenance: {
+      lastAt: lastMaintenanceAt,
+      lastKind: lastMaintenanceKind,
+      lastError: lastMaintenanceError,
+      nextMaintenanceAt,
+    },
     data: {
       reviews: reviewRows,
       studyTimeRecords: studyRows,
@@ -2953,6 +3052,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '7', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 8) {
+    createBackupFile('pre-problem-inbox', 'automatic backup before problem inbox migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '8', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -2977,6 +3082,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   if (!dailyBriefTimerStarted) {
     scheduleDailyBrief();
     dailyBriefTimerStarted = true;
+  }
+  if (!maintenanceTimerStarted) {
+    scheduleDailyMaintenance();
+    maintenanceTimerStarted = true;
   }
 }
 
@@ -3347,6 +3456,63 @@ updated_at = excluded.updated_at;`);
   tableChanged();
 }
 
+function problemInboxRowToObject(row) {
+  return {
+    id: Number(row.id),
+    date: row.date,
+    text: row.text,
+    status: row.status,
+    source: row.source,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    resolvedAt: row.resolvedAt || null,
+  };
+}
+
+function listProblemInboxItems({ limit = 12, status = 'all', from = '1900-01-01', to = '2999-12-31' } = {}) {
+  const statusClause = status === 'open' || status === 'resolved' ? `AND status = ${sqlString(status)}` : '';
+  return sqliteJson(`SELECT id, date, text, status, source, created_at AS createdAt, updated_at AS updatedAt, resolved_at AS resolvedAt
+FROM problem_inbox_items
+WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
+${statusClause}
+ORDER BY CASE status WHEN 'open' THEN 0 ELSE 1 END, date DESC, updated_at DESC, id DESC
+LIMIT ${Math.max(1, Math.min(100, Number(limit) || 12))};`).map(problemInboxRowToObject);
+}
+
+function saveProblemInboxItem(payload) {
+  const text = String(payload.text || '').trim();
+  if (!text) throw new Error('Problem inbox text is required');
+  const timestamp = nowISO();
+  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM problem_inbox_items WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
+    ? Number(payload.id)
+    : nextTableId('problem_inbox_items');
+  runSqlite(`INSERT INTO problem_inbox_items (id, date, text, status, source, created_at, updated_at, resolved_at)
+VALUES (${sqlValue(id)}, ${sqlValue(payload.date || todayISO())}, ${sqlValue(text)}, ${sqlValue(payload.status || 'open')}, ${sqlValue(payload.source || 'manual')}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)}, ${sqlValue(payload.resolvedAt || null)})
+ON CONFLICT(id) DO UPDATE SET
+date = excluded.date,
+text = excluded.text,
+status = excluded.status,
+source = excluded.source,
+updated_at = excluded.updated_at,
+resolved_at = excluded.resolved_at;`);
+  tableChanged();
+  return id;
+}
+
+function setProblemInboxStatus(id, status) {
+  const nextStatus = status === 'resolved' ? 'resolved' : 'open';
+  const timestamp = nowISO();
+  runSqlite(`UPDATE problem_inbox_items
+SET status = ${sqlString(nextStatus)}, updated_at = ${sqlString(timestamp)}, resolved_at = ${sqlValue(nextStatus === 'resolved' ? timestamp : null)}
+WHERE id = ${sqlValue(Number(id))};`);
+  tableChanged();
+}
+
+function deleteProblemInboxItem(id) {
+  runSqlite(`DELETE FROM problem_inbox_items WHERE id = ${sqlValue(Number(id))};`);
+  tableChanged();
+}
+
 function getStudyTargetMinutes() {
   return Math.max(0, Number(sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0);
 }
@@ -3392,6 +3558,104 @@ HAVING value > 0
 ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
 }
 
+function getActivityCalendar(days = 84, endDate = todayISO()) {
+  const startDate = addDaysISO(endDate, -(days - 1));
+  const totals = sqliteJson(`SELECT date, total_minutes AS minutes
+FROM study_daily_summaries
+WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)};`);
+  const reviews = sqliteJson(`SELECT date, score FROM daily_reviews WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)};`);
+  const water = sqliteJson(`SELECT date, cups, target_cups AS targetCups FROM water_intake_records WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)};`);
+  const taskRows = sqliteJson(`SELECT due_date AS date, COUNT(*) AS total,
+COALESCE(SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END), 0) AS completed
+FROM short_term_tasks
+WHERE due_date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
+GROUP BY due_date;`);
+  const totalMap = new Map(totals.map((item) => [item.date, Number(item.minutes || 0)]));
+  const reviewMap = new Map(reviews.map((item) => [item.date, Number(item.score || 0)]));
+  const waterMap = new Map(water.map((item) => [item.date, { cups: Number(item.cups || 0), targetCups: Number(item.targetCups || 6) }]));
+  const taskMap = new Map(taskRows.map((item) => [item.date, { total: Number(item.total || 0), completed: Number(item.completed || 0) }]));
+  return dateRange(startDate, endDate).map((date) => {
+    const waterItem = waterMap.get(date) || { cups: 0, targetCups: 6 };
+    const taskItem = taskMap.get(date) || { total: 0, completed: 0 };
+    return {
+      date,
+      minutes: totalMap.get(date) || 0,
+      reviewScore: reviewMap.get(date) || null,
+      hasReview: reviewMap.has(date),
+      waterCups: waterItem.cups,
+      waterTargetCups: waterItem.targetCups,
+      taskTotal: taskItem.total,
+      taskCompleted: taskItem.completed,
+    };
+  });
+}
+
+function getReviewPrefill(date = todayISO(), sessionRole = 'write') {
+  const totalMinutes = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(date)};`) || 0);
+  const topProject = sqliteJson(`SELECT project_name_snapshot AS name, minutes
+FROM study_project_daily_summaries
+WHERE date = ${sqlString(date)}
+ORDER BY minutes DESC, project_name_snapshot
+LIMIT 1;`).map((item) => ({ name: item.name, minutes: Number(item.minutes || 0) }))[0] || null;
+  const unfinishedTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency
+FROM short_term_tasks
+WHERE due_date <= ${sqlString(date)} AND is_completed = 0
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+LIMIT 6;`);
+  const water = sqliteJson(`SELECT cups, cup_ml AS cupMl, target_cups AS targetCups
+FROM water_intake_records WHERE date = ${sqlString(date)} LIMIT 1;`)[0] || { cups: 0, cupMl: 500, targetCups: 6 };
+  const inboxItems = listProblemInboxItems({ status: 'open', from: date, to: date, limit: 6 });
+  const previousReview = sqliteJson(`SELECT tomorrow_plan AS tomorrowPlan
+FROM daily_reviews WHERE date = ${sqlString(addDaysISO(date, -1))} LIMIT 1;`)[0] || null;
+  const suggestedSummary = [
+    totalMinutes ? `今日学习 ${minutesText(totalMinutes)}。` : '今日还没有记录学习时间。',
+    topProject ? `投入最多的是「${topProject.name}」${minutesText(topProject.minutes)}。` : '',
+    unfinishedTasks.length ? `仍有 ${unfinishedTasks.length} 个短期目标未完成。` : '短期目标没有明显积压。',
+    `喝水 ${Number(water.cups || 0)}/${Number(water.targetCups || 6)} 杯。`,
+  ].filter(Boolean).join('\n');
+  const suggestedProblems = [
+    ...inboxItems.map((item) => `- ${item.text}`),
+    unfinishedTasks.length ? `- 未完成任务：${unfinishedTasks.map((item) => item.title).join('；')}` : '',
+  ].filter(Boolean).join('\n');
+  return {
+    date,
+    totalMinutes,
+    topProject,
+    unfinishedTasks,
+    water: { cups: Number(water.cups || 0), cupMl: Number(water.cupMl || 500), targetCups: Number(water.targetCups || 6) },
+    problemInboxItems: inboxItems,
+    previousTomorrowPlan: previousReview?.tomorrowPlan || '',
+    suggestedSummary,
+    suggestedProblems,
+    readOnly: sessionRole === 'read',
+  };
+}
+
+function countdownStage(activeGoal, date = todayISO()) {
+  if (!activeGoal?.deadline) return { label: '未设定阶段', tone: 'slate', hint: '设置长期目标后自动判断备考阶段。' };
+  const daysLeft = Math.max(0, Math.ceil((parseDateString(activeGoal.deadline).getTime() - parseDateString(date).getTime()) / (24 * 60 * 60 * 1000)));
+  if (daysLeft <= 30) return { label: '冲刺期', tone: 'rose', hint: '优先真题复盘、错题回炉和作息稳定。' };
+  if (daysLeft <= 100) return { label: '真题期', tone: 'amber', hint: '保持真题节奏，按周复盘薄弱科目。' };
+  if (daysLeft <= 220) return { label: '强化期', tone: 'blue', hint: '重点放在题型熟练度、错题闭环和专项突破。' };
+  return { label: '基础期', tone: 'emerald', hint: '稳住基础概念、教材/课程推进和每日记录。' };
+}
+
+function getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview }) {
+  const reminders = [];
+  if (!todayReview) reminders.push({ id: 'review', tone: 'amber', title: '今天还没复盘', detail: '睡前留 5 分钟写下今天的问题和明日计划。' });
+  const last7 = getLastNDaysTotals(7, today);
+  const previousStudyDays = last7.slice(0, -1).filter((item) => item.minutes > 0);
+  const average = previousStudyDays.length ? Math.round(previousStudyDays.reduce((sum, item) => sum + item.minutes, 0) / previousStudyDays.length) : 0;
+  if (average && todayTotal < average * 0.6) reminders.push({ id: 'study-low', tone: 'rose', title: '今日学习时长偏低', detail: `低于近 7 天学习日均值 ${minutesText(average)}，先补一个短时段。` });
+  const tomorrow = addDaysISO(today, 1);
+  const dueTomorrow = visibleTasks.filter((task) => !task.isCompleted && task.dueDate <= tomorrow);
+  if (dueTomorrow.length) reminders.push({ id: 'task-due', tone: 'blue', title: '近期目标快到期', detail: `${dueTomorrow.length} 个短期目标在明天前到期。` });
+  const cups = Number(waterRecord?.cups || 0);
+  const targetCups = Number(waterRecord?.targetCups || 6);
+  if (cups < targetCups) reminders.push({ id: 'water', tone: cups ? 'amber' : 'rose', title: '喝水未达标', detail: `今日 ${cups}/${targetCups} 杯，离目标还差 ${Math.max(0, targetCups - cups)} 杯。` });
+  return reminders.slice(0, 5);
+}
+
 function getDashboardPayload(sessionRole) {
   const cacheDate = todayISO();
   if (dashboardPayloadCache?.revision === dataRevision && dashboardPayloadCache.date === cacheDate) {
@@ -3421,6 +3685,23 @@ ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_da
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
   const todayBrief = getDailyBriefByDate(today) || getLatestDailyBriefSummary();
+  const stage = countdownStage(activeGoal, today);
+  const daysLeft = activeGoal ? Math.max(1, Math.ceil((parseDateString(activeGoal.deadline).getTime() - parseDateString(today).getTime()) / (24 * 60 * 60 * 1000))) : 0;
+  const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
+  const dailyTargetMinutes = daysLeft ? Math.ceil(remainingStudyMinutes / daysLeft) : 0;
+  const primaryTask = visibleTasks.find((task) => !task.isCompleted) || null;
+  const startupPlan = {
+    stage,
+    primaryTask,
+    dailyTargetMinutes,
+    firstSession: primaryTask
+      ? `先推进「${primaryTask.title}」25-45 分钟`
+      : todayTotal
+        ? '今天已经启动，继续保持一个完整学习块'
+        : '先开始一个 25 分钟低阻力学习块',
+  };
+  const reminders = getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview: reviews.find((review) => review.date === today) || null });
+  const activityCalendar = getActivityCalendar(84, today);
 
   const payload = {
     activeGoal,
@@ -3434,6 +3715,9 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     visibleTasks,
     todayWaterRecord: waterRecord,
     todayBrief,
+    startupPlan,
+    reminders,
+    activityCalendar,
   };
   dashboardPayloadCache = { revision: dataRevision, date: today, payload };
   return { ...payload, readOnly: sessionRole === 'read' };
@@ -3915,6 +4199,24 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url?.startsWith('/api/problem-inbox') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const status = requestUrl.searchParams.get('status') || 'open';
+    const from = requestUrl.searchParams.get('from') || '1900-01-01';
+    const to = requestUrl.searchParams.get('to') || '2999-12-31';
+    const limit = queryLimit(requestUrl.searchParams, 12, 100) ?? 12;
+    sendJson(res, { items: listProblemInboxItems({ limit, status, from, to }), readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/reviews/prefill') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    sendJson(res, getReviewPrefill(requestUrl.searchParams.get('date') || todayISO(), sessionRole));
+    return;
+  }
+
   if (req.url?.startsWith('/api/reviews') && req.method === 'GET') {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
@@ -4080,6 +4382,11 @@ ORDER BY project_id;`);
   const body = req.method === 'POST' ? await readJsonBody(req) : {};
   const timestamp = nowISO();
 
+  if (req.url === '/api/maintenance/sqlite' && req.method === 'POST') {
+    sendJson(res, runSqliteMaintenance('manual'));
+    return;
+  }
+
   if (req.url === '/api/reset' && req.method === 'POST') {
     writeState(baseState());
     sendJson(res, { ok: true });
@@ -4114,6 +4421,24 @@ ORDER BY project_id;`);
 
   if (req.url === '/api/settings/study-target' && req.method === 'POST') {
     sendJson(res, saveStudyTargetMinutes(body));
+    return;
+  }
+
+  if (req.url === '/api/problem-inbox/save' && req.method === 'POST') {
+    const id = saveProblemInboxItem(body);
+    sendJson(res, { ok: true, id, item: listProblemInboxItems({ status: 'all', limit: 1, from: body.date || '1900-01-01', to: body.date || '2999-12-31' }).find((item) => item.id === id) || null });
+    return;
+  }
+
+  if (req.url === '/api/problem-inbox/status' && req.method === 'POST') {
+    setProblemInboxStatus(body.id, body.status);
+    sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/problem-inbox/remove' && req.method === 'POST') {
+    deleteProblemInboxItem(body.id);
+    sendJson(res, { ok: true });
     return;
   }
 

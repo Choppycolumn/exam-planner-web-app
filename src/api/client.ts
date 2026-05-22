@@ -28,6 +28,58 @@ export interface DashboardData {
   visibleTasks: ShortTermTask[];
   todayWaterRecord: WaterIntakeRecord | null;
   todayBrief: DailyBrief | null;
+  startupPlan?: DashboardStartupPlan;
+  reminders?: DashboardReminder[];
+  activityCalendar?: DashboardActivityDay[];
+  readOnly?: boolean;
+}
+
+export interface DashboardStartupPlan {
+  stage: { label: string; tone: 'slate' | 'emerald' | 'blue' | 'amber' | 'rose'; hint: string };
+  primaryTask: ShortTermTask | null;
+  dailyTargetMinutes: number;
+  firstSession: string;
+}
+
+export interface DashboardReminder {
+  id: string;
+  tone: 'slate' | 'emerald' | 'blue' | 'amber' | 'rose';
+  title: string;
+  detail: string;
+}
+
+export interface DashboardActivityDay {
+  date: string;
+  minutes: number;
+  reviewScore: number | null;
+  hasReview: boolean;
+  waterCups: number;
+  waterTargetCups: number;
+  taskTotal: number;
+  taskCompleted: number;
+}
+
+export interface ProblemInboxItem {
+  id: number;
+  date: string;
+  text: string;
+  status: 'open' | 'resolved';
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+export interface ReviewPrefill {
+  date: string;
+  totalMinutes: number;
+  topProject: { name: string; minutes: number } | null;
+  unfinishedTasks: Array<{ id: number; title: string; dueDate: string; urgency: string }>;
+  water: { cups: number; cupMl: number; targetCups: number };
+  problemInboxItems: ProblemInboxItem[];
+  previousTomorrowPlan: string;
+  suggestedSummary: string;
+  suggestedProblems: string;
   readOnly?: boolean;
 }
 
@@ -195,6 +247,12 @@ export interface TaskCenterStatus {
     lastCorrectionAt: string | null;
   };
   embedding: EmbeddingStatus;
+  maintenance: {
+    lastAt: string | null;
+    lastKind: string | null;
+    lastError: string;
+    nextMaintenanceAt: string | null;
+  };
   data: {
     reviews: number;
     studyTimeRecords: number;
@@ -446,6 +504,14 @@ export const serverApi = {
     const query = params.toString();
     return apiRequest<ReviewsResponse>(`/reviews${query ? `?${query}` : ''}`);
   },
+  getReviewPrefill: (date: string) => apiRequest<ReviewPrefill>(`/reviews/prefill?date=${encodeURIComponent(date)}`),
+  getProblemInbox: (status: 'open' | 'resolved' | 'all' = 'open', limit = 12) =>
+    apiRequest<{ items: ProblemInboxItem[]; readOnly?: boolean }>(`/problem-inbox?status=${encodeURIComponent(status)}&limit=${limit}`),
+  saveProblemInbox: (text: string, date?: string) =>
+    apiRequest<{ ok: true; id: number; item: ProblemInboxItem | null }>('/problem-inbox/save', { method: 'POST', body: { text, date } }),
+  setProblemInboxStatus: (id: number, status: 'open' | 'resolved') =>
+    apiRequest<{ ok: true }>('/problem-inbox/status', { method: 'POST', body: { id, status } }),
+  removeProblemInbox: (id: number) => apiRequest<{ ok: true }>('/problem-inbox/remove', { method: 'POST', body: { id } }),
   getStudyRecordsByDate: (date: string) => apiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`),
   getStatisticsSummary: () => apiRequest<StatisticsSummary>('/statistics/summary'),
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
@@ -472,6 +538,7 @@ export const serverApi = {
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
   getTaskCenterStatus: () => apiRequest<TaskCenterStatus>('/tasks/status'),
+  runSqliteMaintenance: () => apiRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('/maintenance/sqlite', { method: 'POST' }),
   getReports: () => apiRequest<{ reports: LearningReport[] }>('/reports'),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
     apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
