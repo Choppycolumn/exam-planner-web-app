@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Save } from 'lucide-react';
 import { serverApi } from '../api/client';
-import { queryKeys } from '../api/queryClient';
+import { queryClient, queryKeys } from '../api/queryClient';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { reviewsRepository } from '../db/repositories/reviewsRepository';
@@ -14,6 +14,7 @@ import { getReviewAverageScore, getReviewTone } from '../utils/statistics';
 export function ReviewsPage() {
   const { reviews } = useReviewsData();
   const [date, setDate] = useState(todayISO());
+  const [autoImportedDate, setAutoImportedDate] = useState('');
   const current = useMemo(() => reviews.find((review) => review.date === date), [reviews, date]);
   const yesterdayDate = previousDateISO(date);
   const yesterdayReview = useMemo(() => reviews.find((review) => review.date === yesterdayDate), [reviews, yesterdayDate]);
@@ -28,6 +29,11 @@ export function ReviewsPage() {
     placeholderData: undefined,
   });
 
+  const showToast = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(''), 2200);
+  };
+
   useEffect(() => {
     setDraft({
       summary: current?.summary ?? '',
@@ -36,13 +42,31 @@ export function ReviewsPage() {
       tomorrowPlan: current?.tomorrowPlan ?? '',
       score: getReviewAverageScore(current) || 6,
     });
+    setAutoImportedDate('');
   }, [current]);
+
+  useEffect(() => {
+    if (current || autoImportedDate === date || !prefill?.problemInboxItems.length || draft.problems.trim()) return;
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      problems: prefill.suggestedProblems,
+    }));
+    setAutoImportedDate(date);
+  }, [autoImportedDate, current, date, draft.problems, prefill]);
 
   const save = async () => {
     if (!draft.summary.trim()) return alert('请至少填写今日总结');
-    await reviewsRepository.upsert({ date, ...draft });
-    setToast(current ? '复盘已更新' : '复盘已保存');
-    setTimeout(() => setToast(''), 1800);
+    showToast(current ? '复盘正在后台更新' : '复盘正在后台保存');
+    void reviewsRepository.upsert({ date, ...draft })
+      .then(async () => {
+        if (prefill?.problemInboxItems.length) {
+          await serverApi.resolveProblemInboxByDate(date);
+          await queryClient.invalidateQueries({ queryKey: queryKeys.problemInbox('open') });
+          await queryClient.invalidateQueries({ queryKey: queryKeys.reviewPrefill(date) });
+        }
+        showToast(current ? '复盘已更新，问题 Inbox 已同步' : '复盘已保存，问题 Inbox 已同步');
+      })
+      .catch(() => showToast('复盘保存失败，请稍后重试'));
   };
 
   const appendField = (field: 'summary' | 'problems' | 'tomorrowPlan', value = '') => {
@@ -98,6 +122,7 @@ export function ReviewsPage() {
                 <ul className="mt-2 space-y-1 text-sm text-amber-800">
                   {prefill.problemInboxItems.map((item) => <li key={item.id}>- {item.text}</li>)}
                 </ul>
+                {!current ? <p className="mt-2 text-xs font-semibold text-amber-700">已自动带入“今日问题”，保存复盘后会标记为已处理。</p> : null}
               </div>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-2">

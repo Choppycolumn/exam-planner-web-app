@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, PlayCircle, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
@@ -82,10 +82,12 @@ export function DashboardPage() {
     startupPlan,
     reminders = [],
     activityCalendar = [],
+    errorThemeWall = [],
     readOnly,
   } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
   const [inboxText, setInboxText] = useState('');
+  const [startPanelOpen, setStartPanelOpen] = useState(false);
   const [chartsReady, setChartsReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [briefAckVersion, setBriefAckVersion] = useState(0);
@@ -213,9 +215,14 @@ export function DashboardPage() {
               <h2 className="mt-1 text-lg font-semibold text-slate-950">{startupPlan?.firstSession ?? '先开始一个 25 分钟低阻力学习块'}</h2>
               <p className="mt-2 text-sm leading-6 text-slate-600">{startupPlan?.stage.hint ?? '打开主页后先确认今天最小推进动作。'}</p>
             </div>
-            <span className={`rounded-lg border px-3 py-2 text-sm font-semibold ${toneClass(startupPlan?.stage.tone)}`}>
-              {startupPlan?.stage.label ?? '未设定阶段'}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`rounded-lg border px-3 py-2 text-sm font-semibold ${toneClass(startupPlan?.stage.tone)}`}>
+                {startupPlan?.stage.label ?? '未设定阶段'}
+              </span>
+              <button className="btn btn-primary" type="button" onClick={() => setStartPanelOpen((open) => !open)}>
+                <PlayCircle size={16} />{startPanelOpen ? '收起开工清单' : '开始今天'}
+              </button>
+            </div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -230,6 +237,32 @@ export function DashboardPage() {
               开始记录学习时间
             </Link>
           </div>
+          {startPanelOpen ? (
+            <div className="mt-4 grid gap-3 rounded-lg border border-blue-100 bg-blue-50/70 p-4 md:grid-cols-[1fr_1fr]">
+              <div>
+                <p className="text-sm font-semibold text-blue-800">开工三步</p>
+                <div className="mt-3 space-y-2">
+                  {(startupPlan?.checklist?.length ? startupPlan.checklist : ['确认今天最小任务', '开始一个学习块', '睡前复盘']).map((item) => (
+                    <div key={item} className="flex items-center gap-2 rounded-lg bg-white/80 px-3 py-2 text-sm text-slate-700">
+                      <CheckCircle2 size={15} className="text-blue-600" />{item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-blue-800">今日注意</p>
+                <div className="mt-3 space-y-2">
+                  {reminders.slice(0, 3).map((item) => (
+                    <div key={item.id} className={`rounded-lg border px-3 py-2 text-sm ${toneClass(item.tone)}`}>
+                      <p className="font-semibold">{item.title}</p>
+                      <p className="mt-1 text-xs opacity-80">{item.detail}</p>
+                    </div>
+                  ))}
+                  {!reminders.length ? <p className="rounded-lg bg-white/80 px-3 py-2 text-sm text-slate-500">今天没有明显积压项。</p> : null}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="card p-5">
@@ -322,6 +355,35 @@ export function DashboardPage() {
           </div>
         </section>
       </div>
+
+      <section className="mt-6 card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">高频问题墙</h2>
+            <p className="mt-1 text-sm text-slate-500">来自错误主题库的高频错因，越大代表最近出现越多。</p>
+          </div>
+          <Link className="text-sm font-semibold text-blue-700" to="/review-insights">打开错因分析</Link>
+        </div>
+        {errorThemeWall.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {errorThemeWall.map((item) => {
+              const size = Math.min(22, 12 + item.occurrenceCount * 1.4);
+              return (
+                <span
+                  key={item.id}
+                  className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 font-semibold text-rose-700"
+                  style={{ fontSize: `${size}px` }}
+                  title={`${item.reviewDayCount} 天 / ${item.occurrenceCount} 条；最近 ${item.lastSeenAt}`}
+                >
+                  {item.label}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">暂无高频问题，夜间预计算后会自动显示。</p>
+        )}
+      </section>
 
       {showBriefCard ? (
         <section className="mt-6 rounded-xl border border-blue-100 bg-blue-50/70 p-5 transition hover:-translate-y-0.5 hover:shadow-lg">

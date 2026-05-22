@@ -31,6 +31,7 @@ export interface DashboardData {
   startupPlan?: DashboardStartupPlan;
   reminders?: DashboardReminder[];
   activityCalendar?: DashboardActivityDay[];
+  errorThemeWall?: DashboardErrorThemeWallItem[];
   readOnly?: boolean;
 }
 
@@ -38,6 +39,7 @@ export interface DashboardStartupPlan {
   stage: { label: string; tone: 'slate' | 'emerald' | 'blue' | 'amber' | 'rose'; hint: string };
   primaryTask: ShortTermTask | null;
   dailyTargetMinutes: number;
+  checklist?: string[];
   firstSession: string;
 }
 
@@ -57,6 +59,24 @@ export interface DashboardActivityDay {
   waterTargetCups: number;
   taskTotal: number;
   taskCompleted: number;
+}
+
+export interface DashboardErrorThemeWallItem {
+  id: number;
+  normalizedLabel: string;
+  label: string;
+  occurrenceCount: number;
+  reviewDayCount: number;
+  lastSeenAt: string;
+}
+
+export interface ReviewTrendResponse {
+  periodStart: string;
+  periodEnd: string;
+  days: number;
+  trend: Array<{ date: string; score: number | null }>;
+  precomputedAt?: string;
+  readOnly?: boolean;
 }
 
 export interface ProblemInboxItem {
@@ -252,6 +272,9 @@ export interface TaskCenterStatus {
     lastKind: string | null;
     lastError: string;
     nextMaintenanceAt: string | null;
+    lastPrecomputeAt?: string | null;
+    lastPrecomputeTrigger?: string | null;
+    lastPrecomputeError?: string;
   };
   data: {
     reviews: number;
@@ -358,6 +381,7 @@ export interface EmbeddingStatus {
 export interface ErrorThemeAnalysis {
   periodStart: string;
   periodEnd: string;
+  precomputedAt?: string;
   latestBatch: {
     id: number;
     source: string;
@@ -436,6 +460,7 @@ let stateCache: ServerState | null = null;
 let statePromise: Promise<ServerState> | null = null;
 let dashboardCache: DashboardData | null = null;
 let dashboardPromise: Promise<DashboardData> | null = null;
+const shortApiCache = new Map<string, { expiresAt: number; value: unknown }>();
 
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -456,9 +481,20 @@ export const notifyDataChanged = () => {
   statePromise = null;
   dashboardCache = null;
   dashboardPromise = null;
+  shortApiCache.clear();
   invalidateServerQueries();
   window.dispatchEvent(new Event('server-data-changed'));
 };
+
+function cachedApiRequest<T>(path: string, ttlMs = 60_000): Promise<T> {
+  const key = `GET:${path}`;
+  const cached = shortApiCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value as T);
+  return apiRequest<T>(path).then((value) => {
+    shortApiCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return value;
+  });
+}
 
 function cachedState() {
   if (stateCache) return Promise.resolve(stateCache);
@@ -483,16 +519,16 @@ function cachedDashboard() {
 export const serverApi = {
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
-  getDashboardCharts: () => apiRequest<DashboardChartsData>('/dashboard/charts'),
-  getGoals: () => apiRequest<ReferenceList<Goal>>('/goals'),
-  getProjects: () => apiRequest<ReferenceList<StudyProject>>('/projects'),
-  getSubjects: () => apiRequest<ReferenceList<Subject>>('/subjects'),
-  getStudyTarget: () => apiRequest<StudyTargetSetting>('/settings/study-target'),
+  getDashboardCharts: () => cachedApiRequest<DashboardChartsData>('/dashboard/charts', 90_000),
+  getGoals: () => cachedApiRequest<ReferenceList<Goal>>('/goals', 120_000),
+  getProjects: () => cachedApiRequest<ReferenceList<StudyProject>>('/projects', 120_000),
+  getSubjects: () => cachedApiRequest<ReferenceList<Subject>>('/subjects', 120_000),
+  getStudyTarget: () => cachedApiRequest<StudyTargetSetting>('/settings/study-target', 120_000),
   saveStudyTarget: (targetHours: number) => apiRequest<StudyTargetSetting>('/settings/study-target', { method: 'POST', body: { targetHours } }),
   getBriefSettings: () => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings'),
   saveBriefSettings: (settings: DailyBriefSettings) => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings', { method: 'POST', body: settings }),
-  getBriefs: (limit = 30) => apiRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>(`/briefs?limit=${limit}`),
-  getTodayBrief: () => apiRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('/briefs/today'),
+  getBriefs: (limit = 30) => cachedApiRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>(`/briefs?limit=${limit}`, 60_000),
+  getTodayBrief: () => cachedApiRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('/briefs/today', 60_000),
   generateBrief: (sendEmail = false) => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/generate', { method: 'POST', body: { sendEmail } }),
   sendLatestBrief: () => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/send-latest', { method: 'POST' }),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
@@ -502,18 +538,20 @@ export const serverApi = {
     if (limit) params.set('limit', String(limit));
     if (offset) params.set('offset', String(offset));
     const query = params.toString();
-    return apiRequest<ReviewsResponse>(`/reviews${query ? `?${query}` : ''}`);
+    return cachedApiRequest<ReviewsResponse>(`/reviews${query ? `?${query}` : ''}`, 45_000);
   },
-  getReviewPrefill: (date: string) => apiRequest<ReviewPrefill>(`/reviews/prefill?date=${encodeURIComponent(date)}`),
+  getReviewPrefill: (date: string) => cachedApiRequest<ReviewPrefill>(`/reviews/prefill?date=${encodeURIComponent(date)}`, 30_000),
+  getReviewTrend: (days = 30) => cachedApiRequest<ReviewTrendResponse>(`/reviews/trend?days=${days}`, 120_000),
   getProblemInbox: (status: 'open' | 'resolved' | 'all' = 'open', limit = 12) =>
-    apiRequest<{ items: ProblemInboxItem[]; readOnly?: boolean }>(`/problem-inbox?status=${encodeURIComponent(status)}&limit=${limit}`),
+    cachedApiRequest<{ items: ProblemInboxItem[]; readOnly?: boolean }>(`/problem-inbox?status=${encodeURIComponent(status)}&limit=${limit}`, 30_000),
   saveProblemInbox: (text: string, date?: string) =>
     apiRequest<{ ok: true; id: number; item: ProblemInboxItem | null }>('/problem-inbox/save', { method: 'POST', body: { text, date } }),
   setProblemInboxStatus: (id: number, status: 'open' | 'resolved') =>
     apiRequest<{ ok: true }>('/problem-inbox/status', { method: 'POST', body: { id, status } }),
   removeProblemInbox: (id: number) => apiRequest<{ ok: true }>('/problem-inbox/remove', { method: 'POST', body: { id } }),
-  getStudyRecordsByDate: (date: string) => apiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`),
-  getStatisticsSummary: () => apiRequest<StatisticsSummary>('/statistics/summary'),
+  resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
+  getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
+  getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
     apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
@@ -537,9 +575,10 @@ export const serverApi = {
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
-  getTaskCenterStatus: () => apiRequest<TaskCenterStatus>('/tasks/status'),
+  getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
   runSqliteMaintenance: () => apiRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('/maintenance/sqlite', { method: 'POST' }),
-  getReports: () => apiRequest<{ reports: LearningReport[] }>('/reports'),
+  runPrecompute: () => apiRequest<{ ok: boolean; ranAt: string; error?: string }>('/maintenance/precompute', { method: 'POST' }),
+  getReports: () => cachedApiRequest<{ reports: LearningReport[] }>('/reports', 120_000),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
     apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
   getErrorThemeAnalysis: (from?: string, to?: string) => {
@@ -547,9 +586,9 @@ export const serverApi = {
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     const query = params.toString();
-    return apiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`);
+    return cachedApiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`, 120_000);
   },
-  getEmbeddingStatus: () => apiRequest<EmbeddingStatus>('/error-themes/embedding/status'),
+  getEmbeddingStatus: () => cachedApiRequest<EmbeddingStatus>('/error-themes/embedding/status', 120_000),
   getErrorThemeDetail: (themeId: number, from?: string, to?: string) => {
     const params = new URLSearchParams({ themeId: String(themeId) });
     if (from) params.set('from', from);

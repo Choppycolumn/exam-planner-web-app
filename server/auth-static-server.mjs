@@ -414,6 +414,12 @@ CREATE TABLE IF NOT EXISTS problem_inbox_items (
   updated_at TEXT NOT NULL,
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS precomputed_cache (
+  cache_key TEXT PRIMARY KEY,
+  payload_json TEXT NOT NULL,
+  source_updated_at TEXT,
+  computed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS error_theme_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source TEXT NOT NULL DEFAULT 'local-model-batch',
@@ -503,6 +509,7 @@ CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind,
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_precomputed_cache_computed_at ON precomputed_cache(computed_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
@@ -2489,6 +2496,15 @@ WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`)[0] || { occurrence
   };
 }
 
+function getCachedErrorThemeAnalysis(periodStart = '1900-01-01', periodEnd = todayISO()) {
+  const from = periodStart || '1900-01-01';
+  const to = periodEnd || todayISO();
+  const cacheKey = `error-themes:${from}:${to}`;
+  const cached = getPrecomputedCache(cacheKey);
+  if (cached) return cached;
+  return setPrecomputedCache(cacheKey, getErrorThemeAnalysis(from, to));
+}
+
 function getErrorThemeDetail(themeId, periodStart = '1900-01-01', periodEnd = todayISO()) {
   ensureSqliteStore();
   const id = Number(themeId || 0);
@@ -2658,17 +2674,52 @@ function reportExists(kind, periodStart, periodEnd) {
 WHERE kind = ${sqlString(kind)} AND period_start = ${sqlString(periodStart)} AND period_end = ${sqlString(periodEnd)};`) || 0) > 0;
 }
 
-function ensureAutomaticReports() {
+function ensureAutomaticReports({ includeCurrent = true } = {}) {
   const today = todayISO();
   for (const kind of ['weekly', 'monthly']) {
-    const { periodStart, periodEnd } = previousPeriod(kind, today);
-    if (!reportExists(kind, periodStart, periodEnd)) {
-      generateLearningReport(kind, periodStart, periodEnd, 'auto');
+    const periods = [previousPeriod(kind, today)];
+    if (includeCurrent) periods.push(currentPeriod(kind, today));
+    for (const { periodStart, periodEnd } of periods) {
+      if (includeCurrent || !reportExists(kind, periodStart, periodEnd)) {
+        generateLearningReport(kind, periodStart, periodEnd, 'auto');
+      }
     }
   }
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_report_check_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+}
+
+async function precomputeNightlyArtifacts(trigger = 'nightly') {
+  const today = todayISO();
+  const timestamp = nowISO();
+  try {
+    await runErrorThemeBatch('1900-01-01', today, { mode: 'rules', modelProfile: 'rules' });
+    ensureAutomaticReports({ includeCurrent: true });
+    for (const days of [7, 30, 90]) {
+      const from = days === 90 ? '1900-01-01' : addDaysISO(today, -(days - 1));
+      setPrecomputedCache(`error-themes:${from}:${today}`, getErrorThemeAnalysis(from, today));
+    }
+    setPrecomputedCache(`review-trend:30:${today}`, getReviewTrendPayload(30, today));
+    setPrecomputedCache(`review-trend:90:${today}`, getReviewTrendPayload(90, today));
+    setPrecomputedCache(`dashboard-error-wall:${today}`, { items: getErrorThemeWall(12, 90, today) });
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_precompute_at', ${sqlString(timestamp)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_precompute_trigger', ${sqlString(trigger)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;
+INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_precompute_error', '', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    return { ok: true, ranAt: timestamp };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_precompute_error', ${sqlString(message)}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    return { ok: false, ranAt: timestamp, error: message };
+  }
 }
 
 function listLearningReports() {
@@ -2846,10 +2897,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 function scheduleDailyMaintenance() {
   const { delay, nextAt } = chinaWallClockDelay('03:20');
   nextMaintenanceAt = nextAt;
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       ensureWeeklyBackup();
-      ensureAutomaticReports();
+      await precomputeNightlyArtifacts('nightly');
       runSqliteMaintenance('nightly');
       getDashboardPayload('write');
       getStatisticsSummary();
@@ -2915,6 +2966,9 @@ LIMIT 1;`)[0] || null;
   const lastMaintenanceAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_at' LIMIT 1;") || null;
   const lastMaintenanceKind = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_kind' LIMIT 1;") || null;
   const lastMaintenanceError = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_sqlite_maintenance_error' LIMIT 1;") || '';
+  const lastPrecomputeAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_at' LIMIT 1;") || null;
+  const lastPrecomputeTrigger = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_trigger' LIMIT 1;") || null;
+  const lastPrecomputeError = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_error' LIMIT 1;") || '';
   return {
     generatedAt: nowISO(),
     backup: {
@@ -2945,6 +2999,9 @@ LIMIT 1;`)[0] || null;
       lastKind: lastMaintenanceKind,
       lastError: lastMaintenanceError,
       nextMaintenanceAt,
+      lastPrecomputeAt,
+      lastPrecomputeTrigger,
+      lastPrecomputeError,
     },
     data: {
       reviews: reviewRows,
@@ -3056,6 +3113,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     createBackupFile('pre-problem-inbox', 'automatic backup before problem inbox migration');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', '8', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 9) {
+    createBackupFile('pre-precomputed-cache', 'automatic backup before precomputed cache migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '9', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
@@ -3235,6 +3298,33 @@ function tableChanged() {
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('data_updated_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+}
+
+function sourceUpdatedAt() {
+  return sqliteScalar("SELECT value FROM app_metadata WHERE key = 'data_updated_at' LIMIT 1;") || '';
+}
+
+function setPrecomputedCache(cacheKey, payload) {
+  const timestamp = nowISO();
+  runSqlite(`INSERT INTO precomputed_cache (cache_key, payload_json, source_updated_at, computed_at)
+VALUES (${sqlString(cacheKey)}, ${sqlString(JSON.stringify(payload))}, ${sqlString(sourceUpdatedAt())}, ${sqlString(timestamp)})
+ON CONFLICT(cache_key) DO UPDATE SET
+  payload_json = excluded.payload_json,
+  source_updated_at = excluded.source_updated_at,
+  computed_at = excluded.computed_at;`);
+  return { ...payload, precomputedAt: timestamp };
+}
+
+function getPrecomputedCache(cacheKey, maxAgeMs = 24 * 60 * 60 * 1000) {
+  const row = sqliteJson(`SELECT payload_json AS payloadJson, source_updated_at AS sourceUpdatedAt, computed_at AS computedAt
+FROM precomputed_cache
+WHERE cache_key = ${sqlString(cacheKey)}
+LIMIT 1;`)[0];
+  if (!row?.payloadJson) return null;
+  if (maxAgeMs && Date.now() - new Date(row.computedAt).getTime() > maxAgeMs) return null;
+  const currentSource = sourceUpdatedAt();
+  if (currentSource && row.sourceUpdatedAt && new Date(row.sourceUpdatedAt).getTime() < new Date(currentSource).getTime()) return null;
+  return { ...JSON.parse(row.payloadJson), precomputedAt: row.computedAt };
 }
 
 function rebuildStudySummaries() {
@@ -3513,6 +3603,15 @@ function deleteProblemInboxItem(id) {
   tableChanged();
 }
 
+function resolveProblemInboxForDate(date = todayISO()) {
+  const timestamp = nowISO();
+  runSqlite(`UPDATE problem_inbox_items
+SET status = 'resolved', updated_at = ${sqlString(timestamp)}, resolved_at = ${sqlString(timestamp)}
+WHERE date = ${sqlString(date)} AND status = 'open';`);
+  tableChanged();
+  return { ok: true, resolvedAt: timestamp };
+}
+
 function getStudyTargetMinutes() {
   return Math.max(0, Number(sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0);
 }
@@ -3590,6 +3689,50 @@ GROUP BY due_date;`);
   });
 }
 
+function getReviewTrendPayload(days = 30, endDate = todayISO()) {
+  const safeDays = Math.max(7, Math.min(120, Number(days) || 30));
+  const startDate = addDaysISO(endDate, -(safeDays - 1));
+  const rows = sqliteJson(`SELECT date, score
+FROM daily_reviews
+WHERE date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
+ORDER BY date;`).map((item) => ({ date: item.date, score: Number(item.score || 0) }));
+  const scoreMap = new Map(rows.map((item) => [item.date, item.score]));
+  return {
+    periodStart: startDate,
+    periodEnd: endDate,
+    days: safeDays,
+    trend: dateRange(startDate, endDate).map((date) => ({ date, score: scoreMap.get(date) || null })),
+  };
+}
+
+function getCachedReviewTrend(days = 30, endDate = todayISO()) {
+  const cacheKey = `review-trend:${days}:${endDate}`;
+  const cached = getPrecomputedCache(cacheKey);
+  if (cached) return cached;
+  return setPrecomputedCache(cacheKey, getReviewTrendPayload(days, endDate));
+}
+
+function getErrorThemeWall(limit = 12, days = 90, endDate = todayISO()) {
+  const startDate = addDaysISO(endDate, -(Math.max(7, Number(days) || 90) - 1));
+  return sqliteJson(`SELECT t.id, t.normalized_label AS normalizedLabel, t.label,
+COUNT(o.id) AS occurrenceCount,
+COUNT(DISTINCT o.date) AS reviewDayCount,
+MAX(o.date) AS lastSeenAt
+FROM error_themes t
+JOIN error_theme_occurrences o ON o.theme_id = t.id
+WHERE o.date BETWEEN ${sqlString(startDate)} AND ${sqlString(endDate)}
+GROUP BY t.id, t.normalized_label, t.label
+ORDER BY occurrenceCount DESC, reviewDayCount DESC, lastSeenAt DESC
+LIMIT ${Math.max(1, Math.min(30, Number(limit) || 12))};`).map((item) => ({
+    id: Number(item.id),
+    normalizedLabel: item.normalizedLabel,
+    label: item.label,
+    occurrenceCount: Number(item.occurrenceCount || 0),
+    reviewDayCount: Number(item.reviewDayCount || 0),
+    lastSeenAt: item.lastSeenAt || '',
+  }));
+}
+
 function getReviewPrefill(date = todayISO(), sessionRole = 'write') {
   const totalMinutes = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(date)};`) || 0);
   const topProject = sqliteJson(`SELECT project_name_snapshot AS name, minutes
@@ -3638,6 +3781,14 @@ function countdownStage(activeGoal, date = todayISO()) {
   if (daysLeft <= 100) return { label: '真题期', tone: 'amber', hint: '保持真题节奏，按周复盘薄弱科目。' };
   if (daysLeft <= 220) return { label: '强化期', tone: 'blue', hint: '重点放在题型熟练度、错题闭环和专项突破。' };
   return { label: '基础期', tone: 'emerald', hint: '稳住基础概念、教材/课程推进和每日记录。' };
+}
+
+function stageChecklist(stageLabel) {
+  if (stageLabel === '冲刺期') return ['先处理最近真题错因', '安排一轮限时训练', '睡前复盘明日科目顺序'];
+  if (stageLabel === '真题期') return ['完成一段真题或套卷复盘', '把错因写进问题 Inbox', '留出薄弱科目固定时间'];
+  if (stageLabel === '强化期') return ['推进一个专项题型', '复看昨日错题', '把任务拆到 45 分钟内'];
+  if (stageLabel === '基础期') return ['先完成基础知识推进', '记录一个学习时间块', '晚上用 5 分钟复盘'];
+  return ['确认长期目标日期', '添加今天最小任务', '完成一次短学习块'];
 }
 
 function getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview }) {
@@ -3694,6 +3845,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     stage,
     primaryTask,
     dailyTargetMinutes,
+    checklist: stageChecklist(stage.label),
     firstSession: primaryTask
       ? `先推进「${primaryTask.title}」25-45 分钟`
       : todayTotal
@@ -3702,6 +3854,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
   };
   const reminders = getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview: reviews.find((review) => review.date === today) || null });
   const activityCalendar = getActivityCalendar(84, today);
+  const errorThemeWall = (getPrecomputedCache(`dashboard-error-wall:${today}`)?.items || getErrorThemeWall(10, 90, today)).slice(0, 10);
 
   const payload = {
     activeGoal,
@@ -3718,6 +3871,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     startupPlan,
     reminders,
     activityCalendar,
+    errorThemeWall,
   };
   dashboardPayloadCache = { revision: dataRevision, date: today, payload };
   return { ...payload, readOnly: sessionRole === 'read' };
@@ -4217,6 +4371,14 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url?.startsWith('/api/reviews/trend') && req.method === 'GET') {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const days = Math.max(7, Math.min(120, Number(requestUrl.searchParams.get('days') || 30)));
+    sendJson(res, { ...getCachedReviewTrend(days, todayISO()), readOnly: sessionRole === 'read' });
+    return;
+  }
+
   if (req.url?.startsWith('/api/reviews') && req.method === 'GET') {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
@@ -4281,7 +4443,7 @@ ORDER BY project_id;`);
     const requestUrl = new URL(req.url, 'http://localhost');
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || todayISO();
-    sendJson(res, { ...getErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
+    sendJson(res, { ...getCachedErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
     return;
   }
 
@@ -4387,6 +4549,11 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (req.url === '/api/maintenance/precompute' && req.method === 'POST') {
+    sendJson(res, await precomputeNightlyArtifacts('manual'));
+    return;
+  }
+
   if (req.url === '/api/reset' && req.method === 'POST') {
     writeState(baseState());
     sendJson(res, { ok: true });
@@ -4439,6 +4606,11 @@ ORDER BY project_id;`);
   if (req.url === '/api/problem-inbox/remove' && req.method === 'POST') {
     deleteProblemInboxItem(body.id);
     sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/problem-inbox/resolve-date' && req.method === 'POST') {
+    sendJson(res, resolveProblemInboxForDate(body.date || todayISO()));
     return;
   }
 

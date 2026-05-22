@@ -20,6 +20,7 @@ const emptyDashboard: DashboardData = {
   startupPlan: undefined,
   reminders: [],
   activityCalendar: [],
+  errorThemeWall: [],
   readOnly: false,
 };
 

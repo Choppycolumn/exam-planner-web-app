@@ -224,8 +224,15 @@ export function TaskCenterPage() {
           >
             <Database size={16} />立即维护
           </button>
+          <button
+            className="btn btn-primary"
+            disabled={status?.readOnly || busyAction === 'precompute'}
+            onClick={() => void runAction('precompute', serverApi.runPrecompute, '趋势、错因和报告已重新预计算')}
+          >
+            <RefreshCw size={16} />立即预计算
+          </button>
         </div>
-        <dl className="mt-4 grid gap-3 md:grid-cols-4">
+        <dl className="mt-4 grid gap-3 md:grid-cols-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
             <dt className="text-xs font-semibold text-slate-500">最近维护</dt>
             <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDateTime(status?.maintenance.lastAt)}</dd>
@@ -238,9 +245,13 @@ export function TaskCenterPage() {
             <dt className="text-xs font-semibold text-slate-500">下次夜间维护</dt>
             <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDateTime(status?.maintenance.nextMaintenanceAt)}</dd>
           </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <dt className="text-xs font-semibold text-slate-500">最近预计算</dt>
+            <dd className="mt-1 text-sm font-semibold text-slate-800">{formatDateTime(status?.maintenance.lastPrecomputeAt)}</dd>
+          </div>
           <div className={`rounded-lg border p-3 ${status?.maintenance.lastError ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>
             <dt className="text-xs font-semibold opacity-80">最近结果</dt>
-            <dd className="mt-1 text-sm font-semibold">{status?.maintenance.lastError || '正常'}</dd>
+            <dd className="mt-1 text-sm font-semibold">{status?.maintenance.lastError || status?.maintenance.lastPrecomputeError || '正常'}</dd>
           </div>
         </dl>
       </section>

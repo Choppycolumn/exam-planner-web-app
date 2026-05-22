@@ -68,6 +68,10 @@ export function ReviewInsightsPage() {
     queryFn: () => serverApi.getErrorThemeAnalysis(problemStart, problemEnd),
     placeholderData: emptyErrorThemeAnalysis,
   });
+  const { data: reviewTrendData } = useQuery({
+    queryKey: queryKeys.reviewTrend(30),
+    queryFn: () => serverApi.getReviewTrend(30),
+  });
   const { data: embeddingStatus = emptyEmbeddingStatus } = useQuery({
     queryKey: queryKeys.embeddingStatus,
     queryFn: serverApi.getEmbeddingStatus,
@@ -93,7 +97,7 @@ export function ReviewInsightsPage() {
     enabled: Boolean(selectedThemeId),
   });
   const sortedReviews = [...reportReviews].sort((a, b) => b.date.localeCompare(a.date));
-  const trend = getReviewTrend(trendReviews, 30);
+  const trend = reviewTrendData?.trend ?? getReviewTrend(trendReviews, 30);
   const readOnly = reviewsReadOnly || Boolean(errorThemeAnalysis.readOnly);
   const reviewedDays = total;
   const averageScore = reviewedDays
@@ -178,7 +182,7 @@ export function ReviewInsightsPage() {
       </div>
 
       <ChartBox title="最近 30 天复盘评分趋势">
-        {trendReviews.length ? <ReviewTrendChart data={trend} /> : <EmptyState title="还没有复盘数据" description="完成一次每日复盘后，这里会显示趋势。" />}
+        {trend.some((item) => item.score !== null) ? <ReviewTrendChart data={trend} /> : <EmptyState title="还没有复盘数据" description="完成一次每日复盘后，这里会显示趋势。" />}
       </ChartBox>
 
       <section className="mt-5 card p-5">
@@ -207,6 +211,31 @@ export function ReviewInsightsPage() {
             </button>
           </div>
         </div>
+
+        {errorThemeAnalysis.themes.length ? (
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-slate-900">错因词云</h3>
+              {errorThemeAnalysis.precomputedAt ? <span className="text-xs text-slate-400">缓存于 {new Date(errorThemeAnalysis.precomputedAt).toLocaleString()}</span> : null}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {errorThemeAnalysis.themes.map((theme) => {
+                const size = Math.min(24, 12 + theme.occurrenceCount * 1.3);
+                return (
+                  <button
+                    key={theme.id}
+                    className="rounded-lg border border-rose-100 bg-rose-50 px-3 py-2 font-semibold text-rose-700 transition hover:bg-rose-100"
+                    style={{ fontSize: `${size}px` }}
+                    onClick={() => setSelectedThemeId(theme.id)}
+                    title={`${theme.reviewDayCount} 天 / ${theme.occurrenceCount} 条`}
+                  >
+                    {theme.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         <div className={`mt-4 rounded-lg border p-4 ${embeddingStatus.available ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">

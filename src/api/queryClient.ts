@@ -3,8 +3,8 @@ import { QueryClient } from '@tanstack/react-query';
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30_000,
-      gcTime: 5 * 60_000,
+      staleTime: 90_000,
+      gcTime: 15 * 60_000,
       retry: 1,
       refetchOnWindowFocus: false,
     },
@@ -27,6 +27,7 @@ export const queryKeys = {
   taskCenter: ['server', 'task-center'] as const,
   problemInbox: (status: string = 'open') => ['server', 'problem-inbox', status] as const,
   reviewPrefill: (date: string) => ['server', 'reviews', 'prefill', date] as const,
+  reviewTrend: (days: number = 30) => ['server', 'reviews', 'trend', days] as const,
   reports: ['server', 'reports'] as const,
   errorThemes: (from?: string, to?: string) => ['server', 'error-themes', from ?? '', to ?? ''] as const,
   errorThemeDetail: (themeId: number, from?: string, to?: string) => ['server', 'error-themes', 'detail', themeId, from ?? '', to ?? ''] as const,
