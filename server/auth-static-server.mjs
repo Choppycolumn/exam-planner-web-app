@@ -7,6 +7,7 @@ import { connect as tlsConnect } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
+import { setDefaultResultOrder } from 'node:dns';
 
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
@@ -34,6 +35,12 @@ const loginFailureDelaySpreadMs = 1000;
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
+}
+
+try {
+  setDefaultResultOrder('ipv4first');
+} catch {
+  // Older Node runtimes can ignore this; curl fallback below also forces IPv4.
 }
 
 const mimeTypes = {
@@ -1677,7 +1684,7 @@ async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
 }
 
 function fetchJsonWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-fsSL', '-A', 'exam-planner-brief/1.0', '--max-time', String(timeoutSeconds), url], {
+  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '2', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
   });
@@ -1686,18 +1693,27 @@ function fetchJsonWithCurl(url, timeoutSeconds = 9) {
   return JSON.parse(result.stdout);
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function fetchJsonWithFallback(url, timeoutMs = 9000) {
-  try {
-    return await fetchJsonWithTimeout(url, timeoutMs);
-  } catch (primaryError) {
+  const errors = [];
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return fetchJsonWithCurl(url, Math.max(3, Math.ceil(timeoutMs / 1000)));
-    } catch (fallbackError) {
-      const primaryMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
-      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
-      throw new Error(`${primaryMessage}; curl fallback: ${fallbackMessage}`);
+      return await fetchJsonWithTimeout(url, timeoutMs);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+      if (attempt === 0) await wait(600);
     }
   }
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return fetchJsonWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
+    } catch (error) {
+      errors.push(`curl fallback: ${error instanceof Error ? error.message : String(error)}`);
+      if (attempt === 0) await wait(600);
+    }
+  }
+  throw new Error(errors.join('; '));
 }
 
 async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
@@ -1740,6 +1756,29 @@ function weatherCodeText(code) {
   return labels[Number(code)] || '天气数据已获取';
 }
 
+async function getBriefWeatherBackup(settings, fallbackReason) {
+  const url = `https://wttr.in/~${encodeURIComponent(settings.latitude)},${encodeURIComponent(settings.longitude)}?format=j1`;
+  const data = await fetchJsonWithFallback(url, 10000);
+  const current = data.current_condition?.[0] || {};
+  const todayForecast = data.weather?.[0] || {};
+  const hourly = todayForecast.hourly?.[0] || {};
+  return {
+    ok: true,
+    cityName: settings.cityName,
+    temperature: Number(current.temp_C ?? 0),
+    humidity: Number(current.humidity ?? 0),
+    windSpeed: Number(current.windspeedKmph ?? 0),
+    precipitation: Number(current.precipMM ?? 0),
+    weatherCode: Number(current.weatherCode ?? 0),
+    condition: current.weatherDesc?.[0]?.value?.trim() || '天气数据已获取',
+    maxTemperature: Number(todayForecast.maxtempC ?? current.temp_C ?? 0),
+    minTemperature: Number(todayForecast.mintempC ?? current.temp_C ?? 0),
+    precipitationProbability: Number(hourly.chanceofrain ?? 0),
+    source: 'wttr.in',
+    fallbackReason,
+  };
+}
+
 async function getBriefWeather(settings) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(settings.latitude)}&longitude=${encodeURIComponent(settings.longitude)}&current=temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FShanghai&forecast_days=1`;
   try {
@@ -1758,9 +1797,16 @@ async function getBriefWeather(settings) {
       maxTemperature: Number(daily.temperature_2m_max?.[0] ?? current.temperature_2m ?? 0),
       minTemperature: Number(daily.temperature_2m_min?.[0] ?? current.temperature_2m ?? 0),
       precipitationProbability: Number(daily.precipitation_probability_max?.[0] ?? 0),
+      source: 'open-meteo',
     };
   } catch (error) {
-    return { ok: false, cityName: settings.cityName, error: error instanceof Error ? error.message : String(error) };
+    const primaryMessage = error instanceof Error ? error.message : String(error);
+    try {
+      return await getBriefWeatherBackup(settings, primaryMessage);
+    } catch (backupError) {
+      const backupMessage = backupError instanceof Error ? backupError.message : String(backupError);
+      return { ok: false, cityName: settings.cityName, error: `${primaryMessage}; wttr fallback: ${backupMessage}` };
+    }
   }
 }
 
