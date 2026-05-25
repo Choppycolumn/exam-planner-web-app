@@ -51,7 +51,7 @@ export function LibraryReaderPage() {
   const [objectUrl, setObjectUrl] = useState('');
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
-  const [viewerTarget, setViewerTarget] = useState<{ bookId: number; page: number; nonce: number } | null>(null);
+  const [lastTargetPage, setLastTargetPage] = useState<number | null>(null);
   const [bookmarkPage, setBookmarkPage] = useState('');
   const [bookmarkTitle, setBookmarkTitle] = useState('');
   const [bookmarkSaving, setBookmarkSaving] = useState(false);
@@ -80,11 +80,10 @@ export function LibraryReaderPage() {
   const serverFileUrl = book ? serverApi.libraryFileUrl(book.id) : '';
   const totalPages = book?.pageCount || null;
   const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
-  const currentPage = viewerTarget?.bookId === bookId ? viewerTarget.page : savedPage;
-  const jumpNonce = viewerTarget?.bookId === bookId ? viewerTarget.nonce : 0;
+  const currentPage = lastTargetPage ?? savedPage;
   const fileSourceUrl = objectUrl || serverFileUrl;
-  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(fileSourceUrl, currentPage, jumpNonce) : fileSourceUrl;
-  const readerKey = `${bookId}:${cachedSource ? 'cache' : 'server'}:${currentPage}:${jumpNonce}:${fileSourceUrl}`;
+  const readerUrl = fileSourceUrl;
+  const readerKey = `${bookId}:${cachedSource ? 'cache' : 'server'}:${fileSourceUrl}`;
 
   useEffect(() => {
     if (!book) return;
@@ -164,19 +163,21 @@ export function LibraryReaderPage() {
     window.setTimeout(() => setToast(''), 1800);
   };
 
-  const goToPage = (page: number) => {
+  const markTargetPage = (page: number) => {
     if (!book) return;
     const nextPage = clampPage(page, totalPages);
-    setViewerTarget((previous) => ({
-      bookId: book.id,
-      page: nextPage,
-      nonce: previous?.bookId === book.id ? previous.nonce + 1 : 1,
-    }));
+    setLastTargetPage(nextPage);
+    currentPageRef.current = nextPage;
     setBookmarkPage(String(nextPage));
   };
 
-  const jumpToBookmark = (page: number) => {
-    goToPage(page);
+  const bookmarkHref = (page: number) => {
+    const targetPage = clampPage(page, totalPages);
+    return withPdfPage(serverFileUrl, targetPage, targetPage);
+  };
+
+  const handleBookmarkOpen = (page: number) => {
+    markTargetPage(page);
   };
 
   const saveBookmark = async () => {
@@ -233,11 +234,6 @@ export function LibraryReaderPage() {
       const url = URL.createObjectURL(blob);
       setObjectUrl(url);
       setCachedSource(true);
-      setViewerTarget((previous) => ({
-        bookId: book.id,
-        page: currentPage,
-        nonce: previous?.bookId === book.id ? previous.nonce + 1 : 1,
-      }));
       showToast('已缓存到这台浏览器');
     } catch {
       showToast('缓存失败，请稍后再试');
@@ -276,7 +272,7 @@ export function LibraryReaderPage() {
         <Link to="/library" className="btn btn-soft"><ArrowLeft size={16} />返回图书馆</Link>
         {book ? (
           <div className="flex flex-wrap gap-2">
-            <a className="btn btn-soft" href={book.fileType === 'pdf' ? readerUrl : serverFileUrl} target="_blank" rel="noreferrer"><Download size={16} />打开原文件</a>
+            <a className="btn btn-soft" href={serverFileUrl} target="_blank" rel="noreferrer"><Download size={16} />打开原文件</a>
             <button className="btn btn-primary" onClick={cacheCurrentFile}><HardDriveDownload size={16} />{cachedSource ? '更新本机缓存' : '缓存到本机'}</button>
           </div>
         ) : null}
@@ -330,6 +326,7 @@ export function LibraryReaderPage() {
           <aside className="space-y-5">
             <div className="card p-5">
               <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><Bookmark size={18} />书签</h2>
+              <p className="mt-2 text-xs leading-5 text-slate-500">点击书签会在新标签打开对应页，避免内嵌 PDF 阅读器跳页失效。</p>
               <div className="mt-4 grid gap-2 sm:grid-cols-[96px_1fr_auto]">
                 <input
                   className="field"
@@ -361,12 +358,12 @@ export function LibraryReaderPage() {
               <div className="mt-4 space-y-2">
                 {detailQuery.data?.bookmarks?.length ? detailQuery.data.bookmarks.map((item) => (
                   <article key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <button type="button" className="w-full text-left" onClick={() => jumpToBookmark(item.pageNumber)}>
+                    <a className="block w-full text-left" href={bookmarkHref(item.pageNumber)} target="_blank" rel="noreferrer" onClick={() => handleBookmarkOpen(item.pageNumber)}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
-                        <span className="text-xs font-semibold text-blue-600">跳转 P{item.pageNumber}</span>
+                        <span className="text-xs font-semibold text-blue-600">打开 P{item.pageNumber}</span>
                       </div>
-                    </button>
+                    </a>
                     <div className="mt-2 flex justify-end">
                       <button type="button" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={readOnly} onClick={() => void removeBookmark(item.id)} title="删除书签">
                         <Trash2 size={15} />
