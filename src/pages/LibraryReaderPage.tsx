@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
@@ -35,23 +35,12 @@ function clampPage(value: string | number, totalPages?: number | null) {
   return totalPages ? Math.min(parsed, totalPages) : parsed;
 }
 
-const LEAVE_BOOKMARK_TITLE = '上次离开';
-
-function withPdfPage(url: string, page: number, nonce: number) {
-  if (!url) return '';
-  const base = url.split('#')[0];
-  if (base.startsWith('blob:')) return `${base}#page=${page}`;
-  const separator = base.includes('?') ? '&' : '?';
-  return `${base}${separator}pdfPage=${page}&pdfJump=${nonce}#page=${page}`;
-}
-
 export function LibraryReaderPage() {
   const params = useParams();
   const bookId = Number(params.id || 0);
   const [objectUrl, setObjectUrl] = useState('');
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
-  const [lastTargetPage, setLastTargetPage] = useState<number | null>(null);
   const [bookmarkPage, setBookmarkPage] = useState('');
   const [bookmarkTitle, setBookmarkTitle] = useState('');
   const [bookmarkSaving, setBookmarkSaving] = useState(false);
@@ -59,8 +48,6 @@ export function LibraryReaderPage() {
   const [noteTitle, setNoteTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
-  const currentPageRef = useRef(1);
-  const leaveBookmarkIdRef = useRef<number | null>(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.libraryBook(bookId),
@@ -80,7 +67,6 @@ export function LibraryReaderPage() {
   const serverFileUrl = book ? serverApi.libraryFileUrl(book.id) : '';
   const totalPages = book?.pageCount || null;
   const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
-  const currentPage = lastTargetPage ?? savedPage;
   const fileSourceUrl = objectUrl || serverFileUrl;
   const readerUrl = fileSourceUrl;
   const readerKey = `${bookId}:${cachedSource ? 'cache' : 'server'}:${fileSourceUrl}`;
@@ -125,59 +111,9 @@ export function LibraryReaderPage() {
     }
   }, [book, textQuery.data?.chunks]);
 
-  useEffect(() => {
-    currentPageRef.current = currentPage;
-  }, [currentPage]);
-
-  useEffect(() => {
-    const leaveBookmark = detailQuery.data?.bookmarks?.find((item) => item.title === LEAVE_BOOKMARK_TITLE);
-    leaveBookmarkIdRef.current = leaveBookmark?.id ?? null;
-  }, [detailQuery.data?.bookmarks]);
-
-  useEffect(() => {
-    if (!book?.id || readOnly) return undefined;
-    const targetBookId = book.id;
-    return () => {
-      const page = currentPageRef.current;
-      const payload = {
-        id: leaveBookmarkIdRef.current ?? undefined,
-        bookId: targetBookId,
-        pageNumber: page,
-        title: LEAVE_BOOKMARK_TITLE,
-      };
-      const body = JSON.stringify(payload);
-      const sent = navigator.sendBeacon?.('/api/library/bookmarks/save', new Blob([body], { type: 'application/json' }));
-      if (!sent) {
-        void fetch('/api/library/bookmarks/save', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body,
-          keepalive: true,
-        }).catch(() => undefined);
-      }
-    };
-  }, [book?.id, readOnly]);
-
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(''), 1800);
-  };
-
-  const markTargetPage = (page: number) => {
-    if (!book) return;
-    const nextPage = clampPage(page, totalPages);
-    setLastTargetPage(nextPage);
-    currentPageRef.current = nextPage;
-    setBookmarkPage(String(nextPage));
-  };
-
-  const bookmarkHref = (page: number) => {
-    const targetPage = clampPage(page, totalPages);
-    return withPdfPage(serverFileUrl, targetPage, targetPage);
-  };
-
-  const handleBookmarkOpen = (page: number) => {
-    markTargetPage(page);
   };
 
   const saveBookmark = async () => {
@@ -246,7 +182,7 @@ export function LibraryReaderPage() {
     if (!content) return alert('请先写一点笔记内容');
     setSaving(true);
     try {
-      await serverApi.saveLibraryNote({ bookId: book.id, title: noteTitle.trim(), content, locator: `page:${currentPage}` });
+      await serverApi.saveLibraryNote({ bookId: book.id, title: noteTitle.trim(), content, locator: `page:${savedPage}` });
       setNote('');
       setNoteTitle('');
       await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
@@ -326,7 +262,7 @@ export function LibraryReaderPage() {
           <aside className="space-y-5">
             <div className="card p-5">
               <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><Bookmark size={18} />书签</h2>
-              <p className="mt-2 text-xs leading-5 text-slate-500">点击书签会在新标签打开对应页，避免内嵌 PDF 阅读器跳页失效。</p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">书签只记录页码和标题，不再触发 PDF 刷新或跳页。</p>
               <div className="mt-4 grid gap-2 sm:grid-cols-[96px_1fr_auto]">
                 <input
                   className="field"
@@ -358,12 +294,10 @@ export function LibraryReaderPage() {
               <div className="mt-4 space-y-2">
                 {detailQuery.data?.bookmarks?.length ? detailQuery.data.bookmarks.map((item) => (
                   <article key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <a className="block w-full text-left" href={bookmarkHref(item.pageNumber)} target="_blank" rel="noreferrer" onClick={() => handleBookmarkOpen(item.pageNumber)}>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
-                        <span className="text-xs font-semibold text-blue-600">打开 P{item.pageNumber}</span>
-                      </div>
-                    </a>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
+                      <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600">P{item.pageNumber}</span>
+                    </div>
                     <div className="mt-2 flex justify-end">
                       <button type="button" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={readOnly} onClick={() => void removeBookmark(item.id)} title="删除书签">
                         <Trash2 size={15} />
