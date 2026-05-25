@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, BookOpen, Download, FileText, HardDriveDownload, NotebookPen, Save } from 'lucide-react';
+import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, ChevronLeft, ChevronRight, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
+import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { notifyDataChanged, serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { getCachedLibraryFile, getCachedLibraryText, libraryCacheVersion, putCachedLibraryFile, putCachedLibraryText } from '../features/library/cache';
+
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B';
@@ -25,18 +29,43 @@ function textStatusHint(status?: string, error?: string) {
   return '';
 }
 
+function parsePageLocator(locator = '') {
+  const match = locator.match(/^page:(\d+)$/);
+  return match ? Math.max(1, Number(match[1]) || 1) : 1;
+}
+
+function clampPage(value: string | number, totalPages?: number | null) {
+  const parsed = Math.max(1, Math.round(Number(value) || 1));
+  return totalPages ? Math.min(parsed, totalPages) : parsed;
+}
+
+function pageProgressPercent(page: number, totalPages?: number | null) {
+  if (!totalPages) return 0;
+  return Math.max(0, Math.min(100, Math.round((page / totalPages) * 1000) / 10));
+}
+
+function withPdfPage(url: string, page: number) {
+  if (!url) return '';
+  return `${url.split('#')[0]}#page=${page}`;
+}
+
 export function LibraryReaderPage() {
   const params = useParams();
   const bookId = Number(params.id || 0);
   const [objectUrl, setObjectUrl] = useState('');
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
-  const [progressDraft, setProgressDraft] = useState<{ bookId: number; value: number } | null>(null);
+  const [pageDraft, setPageDraft] = useState<{ bookId: number; value: string } | null>(null);
+  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
+  const [pdfRendering, setPdfRendering] = useState(false);
+  const [pdfError, setPdfError] = useState('');
+  const [scale, setScale] = useState(1.2);
+  const [bookmarkTitle, setBookmarkTitle] = useState('');
   const [note, setNote] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
-  const progressTimer = useRef<number | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.libraryBook(bookId),
@@ -54,8 +83,12 @@ export function LibraryReaderPage() {
 
   const textChunks = textQuery.data?.chunks?.length ? textQuery.data.chunks : cachedChunks ?? [];
   const serverFileUrl = book ? serverApi.libraryFileUrl(book.id) : '';
-  const readerUrl = objectUrl || serverFileUrl;
-  const progress = progressDraft?.bookId === bookId ? progressDraft.value : Math.round(book?.progressPercent || 0);
+  const totalPages = book?.pageCount || pdfDoc?.numPages || null;
+  const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
+  const pageInputValue = pageDraft?.bookId === bookId ? pageDraft.value : String(savedPage);
+  const currentPage = clampPage(pageInputValue || savedPage, totalPages);
+  const pdfSourceUrl = objectUrl || serverFileUrl;
+  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(pdfSourceUrl, currentPage) : pdfSourceUrl;
 
   useEffect(() => {
     if (!book) return;
@@ -89,22 +122,124 @@ export function LibraryReaderPage() {
     }
   }, [book, textQuery.data?.chunks]);
 
+  useEffect(() => {
+    if (!book || book.fileType !== 'pdf' || !pdfSourceUrl) return;
+    let cancelled = false;
+    const task = getDocument({ url: pdfSourceUrl });
+    task.promise
+      .then((document) => {
+        if (!cancelled) {
+          setPdfError('');
+          setPdfDoc(document);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPdfDoc(null);
+          setPdfError('PDF 阅读器加载失败，请使用“打开原文件”查看。');
+        }
+      });
+    return () => {
+      cancelled = true;
+      void task.destroy();
+    };
+  }, [book, pdfSourceUrl]);
+
+  useEffect(() => {
+    if (!pdfDoc || book?.fileType !== 'pdf') return;
+    let cancelled = false;
+    pdfDoc.getPage(currentPage)
+      .then(async (page) => {
+        if (cancelled) return;
+        setPdfRendering(true);
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext('2d');
+        if (!canvas || !context) return;
+        const viewport = page.getViewport({ scale });
+        const outputScale = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(viewport.width * outputScale);
+        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+        if (!cancelled) setPdfRendering(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPdfRendering(false);
+          setPdfError('当前页渲染失败，请尝试刷新或打开原文件。');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [book?.fileType, currentPage, pdfDoc, scale]);
+
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(''), 1800);
   };
 
-  const saveProgress = (nextProgress = progress, locator = '') => {
+  const saveCurrentPage = async () => {
     if (!book || readOnly) return;
-    if (progressTimer.current) window.clearTimeout(progressTimer.current);
-    progressTimer.current = window.setTimeout(() => {
-      void serverApi.saveLibraryProgress({ bookId: book.id, progressPercent: nextProgress, locator })
-        .then(() => {
-          notifyDataChanged();
-          void queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
-        })
-        .catch(() => undefined);
-    }, 500);
+    const page = clampPage(pageInputValue, totalPages);
+    try {
+      await serverApi.saveLibraryProgress({
+        bookId: book.id,
+        progressPercent: pageProgressPercent(page, totalPages),
+        locator: `page:${page}`,
+      });
+      setPageDraft({ bookId: book.id, value: String(page) });
+      notifyDataChanged();
+      await queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
+      showToast(`已保存到第 ${page} 页`);
+    } catch {
+      showToast('页码保存失败');
+    }
+  };
+
+  const goToPage = (page: number) => {
+    if (!book) return;
+    const nextPage = clampPage(page, totalPages);
+    setPageDraft({ bookId: book.id, value: String(nextPage) });
+    if (!readOnly) {
+      void serverApi.saveLibraryProgress({
+        bookId: book.id,
+        progressPercent: pageProgressPercent(nextPage, totalPages),
+        locator: `page:${nextPage}`,
+      }).then(() => {
+        notifyDataChanged();
+        void queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
+      }).catch(() => undefined);
+    }
+  };
+
+  const addBookmark = async () => {
+    if (!book || readOnly) return;
+    try {
+      await serverApi.saveLibraryBookmark({
+        bookId: book.id,
+        pageNumber: currentPage,
+        title: bookmarkTitle.trim() || `第 ${currentPage} 页`,
+      });
+      setBookmarkTitle('');
+      await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
+      showToast('书签已添加');
+    } catch {
+      showToast('书签添加失败');
+    }
+  };
+
+  const removeBookmark = async (id: number) => {
+    if (!book || readOnly) return;
+    try {
+      await serverApi.removeLibraryBookmark(id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
+      showToast('书签已删除');
+    } catch {
+      showToast('书签删除失败');
+    }
   };
 
   const cacheCurrentFile = async () => {
@@ -130,7 +265,7 @@ export function LibraryReaderPage() {
     if (!content) return alert('请先写一点笔记内容');
     setSaving(true);
     try {
-      await serverApi.saveLibraryNote({ bookId: book.id, title: noteTitle.trim(), content, locator: `progress:${progress}` });
+      await serverApi.saveLibraryNote({ bookId: book.id, title: noteTitle.trim(), content, locator: `page:${currentPage}` });
       setNote('');
       setNoteTitle('');
       await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
@@ -156,7 +291,7 @@ export function LibraryReaderPage() {
         <Link to="/library" className="btn btn-soft"><ArrowLeft size={16} />返回图书馆</Link>
         {book ? (
           <div className="flex flex-wrap gap-2">
-            <a className="btn btn-soft" href={serverFileUrl} target="_blank" rel="noreferrer"><Download size={16} />打开原文件</a>
+            <a className="btn btn-soft" href={book.fileType === 'pdf' ? readerUrl : serverFileUrl} target="_blank" rel="noreferrer"><Download size={16} />打开原文件</a>
             <button className="btn btn-primary" onClick={cacheCurrentFile}><HardDriveDownload size={16} />{cachedSource ? '更新本机缓存' : '缓存到本机'}</button>
           </div>
         ) : null}
@@ -171,29 +306,54 @@ export function LibraryReaderPage() {
             <div className="card p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold text-slate-700">阅读进度</p>
+                  <p className="text-sm font-semibold text-slate-700">当前页码</p>
                   <p className="mt-1 text-sm text-slate-500">{cachedSource ? '当前使用本浏览器缓存文件' : '当前读取服务器文件'}</p>
                 </div>
-                <span className="text-2xl font-semibold text-slate-950">{progress}%</span>
+                <span className="text-2xl font-semibold text-slate-950">
+                  {book.pageCount ? `${currentPage}/${book.pageCount}` : `第 ${currentPage} 页`}
+                </span>
               </div>
-              <input
-                className="mt-4 w-full accent-blue-600"
-                type="range"
-                min={0}
-                max={100}
-                value={progress}
-                disabled={readOnly}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setProgressDraft({ bookId: book.id, value: next });
-                  saveProgress(next, `progress:${next}`);
-                }}
-              />
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button className="btn btn-soft" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}>
+                  <ChevronLeft size={16} />上一页
+                </button>
+                <input
+                  className="field max-w-40"
+                  type="number"
+                  min={1}
+                  max={totalPages ?? undefined}
+                  value={pageInputValue}
+                  disabled={readOnly}
+                  onChange={(event) => setPageDraft({ bookId: book.id, value: event.target.value })}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void saveCurrentPage();
+                  }}
+                />
+                {totalPages ? <span className="text-sm text-slate-500">/ {totalPages} 页</span> : null}
+                <button className="btn btn-soft" disabled={Boolean(totalPages && currentPage >= totalPages)} onClick={() => goToPage(currentPage + 1)}>
+                  下一页<ChevronRight size={16} />
+                </button>
+                <button className="btn btn-primary" disabled={readOnly} onClick={() => void saveCurrentPage()}>
+                  <Save size={16} />保存页码
+                </button>
+              </div>
             </div>
 
             {book.fileType === 'pdf' ? (
-              <div className="card overflow-hidden">
-                <iframe title={book.title} src={readerUrl} className="h-[78vh] w-full border-0 bg-white" />
+              <div className="card overflow-hidden p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm text-slate-500">
+                    {pdfRendering ? '页面渲染中...' : pdfError || `第 ${currentPage} 页`}
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="btn btn-soft" onClick={() => setScale((value) => Math.max(0.8, Math.round((value - 0.1) * 10) / 10))}>缩小</button>
+                    <button className="btn btn-soft" onClick={() => setScale((value) => Math.min(2.2, Math.round((value + 0.1) * 10) / 10))}>放大</button>
+                  </div>
+                </div>
+                <div className="max-h-[78vh] overflow-auto rounded bg-slate-100 p-4">
+                  {pdfError ? <EmptyState title="PDF 阅读器加载失败" description="可以先点击上方“打开原文件”查看。" /> : null}
+                  <canvas ref={canvasRef} className="mx-auto bg-white shadow-sm" />
+                </div>
               </div>
             ) : null}
 
@@ -218,6 +378,39 @@ export function LibraryReaderPage() {
           </section>
 
           <aside className="space-y-5">
+            <div className="card p-5">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><Bookmark size={18} />书签</h2>
+              <div className="mt-4 flex gap-2">
+                <input
+                  className="field"
+                  value={bookmarkTitle}
+                  disabled={readOnly}
+                  onChange={(event) => setBookmarkTitle(event.target.value)}
+                  placeholder={`第 ${currentPage} 页`}
+                />
+                <button className="btn btn-primary shrink-0" disabled={readOnly} onClick={() => void addBookmark()}>
+                  <BookmarkPlus size={16} />
+                </button>
+              </div>
+              <div className="mt-4 space-y-2">
+                {detailQuery.data?.bookmarks?.length ? detailQuery.data.bookmarks.map((item) => (
+                  <article key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <button className="w-full text-left" onClick={() => goToPage(item.pageNumber)}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
+                        <span className="text-xs text-slate-500">P{item.pageNumber}</span>
+                      </div>
+                    </button>
+                    <div className="mt-2 flex justify-end">
+                      <button className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={readOnly} onClick={() => void removeBookmark(item.id)} title="删除书签">
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </article>
+                )) : <EmptyState title="还没有书签" description="把容易回看的页码标在这里。" />}
+              </div>
+            </div>
+
             <div className="card p-5">
               <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><NotebookPen size={18} />阅读笔记</h2>
               <input className="field mt-4" value={noteTitle} disabled={readOnly} onChange={(event) => setNoteTitle(event.target.value)} placeholder="笔记标题，可选" />

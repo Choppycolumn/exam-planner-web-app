@@ -485,6 +485,16 @@ export interface LibraryNote {
   updatedAt: string;
 }
 
+export interface LibraryBookmark {
+  id: number;
+  bookId: number;
+  pageNumber: number;
+  title: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface LibraryTextChunk {
   id: number;
   bookId: number;
@@ -498,6 +508,7 @@ export interface LibraryTextChunk {
 export interface LibraryBookDetail {
   book: LibraryBook;
   notes: LibraryNote[];
+  bookmarks: LibraryBookmark[];
   chunkCount: number;
   readOnly?: boolean;
 }
@@ -723,6 +734,9 @@ export const serverApi = {
     apiRequest<{ ok: true; updatedAt: string }>('/library/progress', { method: 'POST', body: payload }),
   saveLibraryNote: (payload: { id?: number; bookId: number; locator?: string; title?: string; content: string }) =>
     apiRequest<{ ok: true; id: number }>('/library/notes/save', { method: 'POST', body: payload }),
+  saveLibraryBookmark: (payload: { id?: number; bookId: number; pageNumber: number; title?: string; note?: string }) =>
+    apiRequest<{ ok: true; id: number }>('/library/bookmarks/save', { method: 'POST', body: payload }),
+  removeLibraryBookmark: (id: number) => apiRequest<{ ok: true }>('/library/bookmarks/remove', { method: 'POST', body: { id } }),
   libraryFileUrl: (id: number) => `/api/library/books/${id}/file`,
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

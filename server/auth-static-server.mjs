@@ -477,6 +477,15 @@ CREATE TABLE IF NOT EXISTS library_notes (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS library_bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  page_number INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS library_reading_progress (
   book_id INTEGER PRIMARY KEY,
   locator TEXT NOT NULL DEFAULT '',
@@ -577,6 +586,7 @@ CREATE INDEX IF NOT EXISTS idx_library_books_updated ON library_books(is_archive
 CREATE INDEX IF NOT EXISTS idx_library_books_category ON library_books(category, updated_at);
 CREATE INDEX IF NOT EXISTS idx_library_text_chunks_book ON library_text_chunks(book_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_library_notes_book ON library_notes(book_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_library_bookmarks_book ON library_bookmarks(book_id, page_number, updated_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
@@ -3251,6 +3261,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '10', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 11) {
+    createBackupFile('pre-library-bookmarks', 'automatic backup before library bookmarks migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '11', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -3858,8 +3874,12 @@ function getLibraryBookDetail(id, sessionRole = 'write') {
 FROM library_notes
 WHERE book_id = ${sqlValue(Number(id))}
 ORDER BY updated_at DESC, id DESC;`);
+  const bookmarks = sqliteJson(`SELECT id, book_id AS bookId, page_number AS pageNumber, title, note, created_at AS createdAt, updated_at AS updatedAt
+FROM library_bookmarks
+WHERE book_id = ${sqlValue(Number(id))}
+ORDER BY page_number ASC, updated_at DESC;`);
   const chunkCount = Number(sqliteScalar(`SELECT COUNT(*) FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};`) || 0);
-  return { book, notes, chunkCount, readOnly: sessionRole === 'read' };
+  return { book, notes, bookmarks, chunkCount, readOnly: sessionRole === 'read' };
 }
 
 function stripHtml(value = '') {
@@ -4032,12 +4052,38 @@ updated_at = excluded.updated_at;`);
   return { ok: true, id };
 }
 
+function saveLibraryBookmark(payload) {
+  const bookId = Number(payload.bookId || 0);
+  const pageNumber = Math.max(1, Math.round(Number(payload.pageNumber || 1)));
+  if (!bookId) throw new Error('Missing book id');
+  const timestamp = nowISO();
+  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM library_bookmarks WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
+    ? Number(payload.id)
+    : nextTableId('library_bookmarks');
+  runSqlite(`INSERT INTO library_bookmarks (id, book_id, page_number, title, note, created_at, updated_at)
+VALUES (${sqlValue(id)}, ${sqlValue(bookId)}, ${sqlValue(pageNumber)}, ${sqlString(payload.title || '')}, ${sqlString(payload.note || '')}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
+ON CONFLICT(id) DO UPDATE SET
+page_number = excluded.page_number,
+title = excluded.title,
+note = excluded.note,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+  return { ok: true, id };
+}
+
+function deleteLibraryBookmark(id) {
+  runSqlite(`DELETE FROM library_bookmarks WHERE id = ${sqlValue(Number(id))};`);
+  tableChanged();
+  return { ok: true };
+}
+
 function deleteLibraryBook(id) {
   const filePath = getLibraryStoragePath(id);
   runSqlite(`BEGIN;
 DELETE FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};
 DELETE FROM library_text_fts WHERE book_id = ${sqlValue(Number(id))};
 DELETE FROM library_notes WHERE book_id = ${sqlValue(Number(id))};
+DELETE FROM library_bookmarks WHERE book_id = ${sqlValue(Number(id))};
 DELETE FROM library_reading_progress WHERE book_id = ${sqlValue(Number(id))};
 DELETE FROM library_books WHERE id = ${sqlValue(Number(id))};
 COMMIT;`);
@@ -5207,6 +5253,17 @@ ORDER BY project_id;`);
 
     if (pathname === '/api/library/notes/save' && req.method === 'POST') {
       sendJson(res, saveLibraryNote(await readJsonBody(req)));
+      return;
+    }
+
+    if (pathname === '/api/library/bookmarks/save' && req.method === 'POST') {
+      sendJson(res, saveLibraryBookmark(await readJsonBody(req)));
+      return;
+    }
+
+    if (pathname === '/api/library/bookmarks/remove' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      sendJson(res, deleteLibraryBookmark(body.id));
       return;
     }
   }
