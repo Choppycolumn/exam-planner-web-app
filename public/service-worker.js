@@ -1,4 +1,4 @@
-const CACHE_NAME = 'exam-planner-shell-v1';
+const CACHE_NAME = 'exam-planner-shell-v2';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {

@@ -2,16 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, ChevronLeft, ChevronRight, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { notifyDataChanged, serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { getCachedLibraryFile, getCachedLibraryText, libraryCacheVersion, putCachedLibraryFile, putCachedLibraryText } from '../features/library/cache';
-
-GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B';
@@ -94,16 +92,22 @@ export function LibraryReaderPage() {
   useEffect(() => {
     if (!book) return;
     let revokedUrl = '';
+    let cancelled = false;
     const version = libraryCacheVersion(book);
     getCachedLibraryFile(book.id, version)
       .then(async (blob) => {
+        if (cancelled) return;
+        setPdfDoc(null);
+        setPdfError('');
+        setPdfData(null);
         if (!blob) {
           setCachedSource(false);
           setObjectUrl('');
           if (book.fileType === 'pdf') {
-            const response = await fetch(serverFileUrl, { credentials: 'include' });
+            const response = await fetch(serverFileUrl, { credentials: 'include', cache: 'no-store' });
             if (!response.ok) throw new Error('PDF fetch failed');
-            setPdfData(await response.arrayBuffer());
+            const buffer = await response.arrayBuffer();
+            if (!cancelled) setPdfData(buffer);
           } else {
             setPdfData(null);
           }
@@ -111,18 +115,26 @@ export function LibraryReaderPage() {
         }
         const url = URL.createObjectURL(blob);
         revokedUrl = url;
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         setCachedSource(true);
         setObjectUrl(url);
-        setPdfData(book.fileType === 'pdf' ? await blob.arrayBuffer() : null);
+        const buffer = book.fileType === 'pdf' ? await blob.arrayBuffer() : null;
+        if (!cancelled) setPdfData(buffer);
       })
-      .catch(() => {
+      .catch((error) => {
+        if (cancelled) return;
         setCachedSource(false);
         setObjectUrl('');
         setPdfData(null);
-        if (book.fileType === 'pdf') setPdfError('PDF 文件读取失败，请刷新后重试或打开原文件。');
+        const reason = error instanceof Error ? error.message : '未知原因';
+        if (book.fileType === 'pdf') setPdfError(`PDF 文件读取失败：${reason}。已自动切换为浏览器原生阅读器。`);
       });
     void getCachedLibraryText(book.id, version).then(setCachedChunks).catch(() => setCachedChunks(null));
     return () => {
+      cancelled = true;
       if (revokedUrl) URL.revokeObjectURL(revokedUrl);
     };
   }, [book, serverFileUrl]);
@@ -136,23 +148,30 @@ export function LibraryReaderPage() {
   useEffect(() => {
     if (!book || book.fileType !== 'pdf' || !pdfData) return;
     let cancelled = false;
-    const task = getDocument({ data: new Uint8Array(pdfData.slice(0)) });
-    task.promise
+    let task: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
+    void import('pdfjs-dist/legacy/build/pdf.mjs')
+      .then(({ getDocument, GlobalWorkerOptions }) => {
+        if (cancelled) return null;
+        GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+        task = getDocument({ data: new Uint8Array(pdfData.slice(0)), useSystemFonts: true });
+        return task.promise;
+      })
       .then((document) => {
-        if (!cancelled) {
+        if (!cancelled && document) {
           setPdfError('');
           setPdfDoc(document);
         }
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) {
           setPdfDoc(null);
-          setPdfError('PDF 阅读器加载失败，请使用“打开原文件”查看。');
+          const reason = error instanceof Error ? error.message : '未知原因';
+          setPdfError(`PDF 阅读器加载失败：${reason}。已自动切换为浏览器原生阅读器。`);
         }
       });
     return () => {
       cancelled = true;
-      void task.destroy();
+      void task?.destroy();
     };
   }, [book, pdfData]);
 
@@ -165,7 +184,10 @@ export function LibraryReaderPage() {
         setPdfRendering(true);
         const canvas = canvasRef.current;
         const context = canvas?.getContext('2d');
-        if (!canvas || !context) return;
+        if (!canvas || !context) {
+          setPdfRendering(false);
+          return;
+        }
         const viewport = page.getViewport({ scale });
         const outputScale = window.devicePixelRatio || 1;
         canvas.width = Math.floor(viewport.width * outputScale);
@@ -176,10 +198,11 @@ export function LibraryReaderPage() {
         await page.render({ canvas, canvasContext: context, viewport }).promise;
         if (!cancelled) setPdfRendering(false);
       })
-      .catch(() => {
+      .catch((error) => {
         if (!cancelled) {
           setPdfRendering(false);
-          setPdfError('当前页渲染失败，请尝试刷新或打开原文件。');
+          const reason = error instanceof Error ? error.message : '未知原因';
+          setPdfError(`当前页渲染失败：${reason}。已自动切换为浏览器原生阅读器。`);
         }
       });
     return () => {
@@ -263,6 +286,7 @@ export function LibraryReaderPage() {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       const url = URL.createObjectURL(blob);
       setObjectUrl(url);
+      setPdfData(book.fileType === 'pdf' ? await blob.arrayBuffer() : null);
       setCachedSource(true);
       showToast('已缓存到这台浏览器');
     } catch {
@@ -357,13 +381,25 @@ export function LibraryReaderPage() {
                     {pdfRendering ? '页面渲染中...' : pdfError || `第 ${currentPage} 页`}
                   </div>
                   <div className="flex gap-2">
-                    <button className="btn btn-soft" onClick={() => setScale((value) => Math.max(0.8, Math.round((value - 0.1) * 10) / 10))}>缩小</button>
-                    <button className="btn btn-soft" onClick={() => setScale((value) => Math.min(2.2, Math.round((value + 0.1) * 10) / 10))}>放大</button>
+                    <button className="btn btn-soft" disabled={Boolean(pdfError)} onClick={() => setScale((value) => Math.max(0.8, Math.round((value - 0.1) * 10) / 10))}>缩小</button>
+                    <button className="btn btn-soft" disabled={Boolean(pdfError)} onClick={() => setScale((value) => Math.min(2.2, Math.round((value + 0.1) * 10) / 10))}>放大</button>
                   </div>
                 </div>
                 <div className="max-h-[78vh] overflow-auto rounded bg-slate-100 p-4">
-                  {pdfError ? <EmptyState title="PDF 阅读器加载失败" description="可以先点击上方“打开原文件”查看。" /> : null}
-                  <canvas ref={canvasRef} className="mx-auto bg-white shadow-sm" />
+                  {!pdfError && !pdfDoc ? <EmptyState title="PDF 阅读器加载中" description="正在准备第一页，如果文件较大可能需要几秒。" /> : null}
+                  {pdfError ? (
+                    <div className="space-y-4">
+                      <EmptyState title="已切换到浏览器原生阅读器" description={pdfError} />
+                      <iframe
+                        key={readerUrl}
+                        className="h-[74vh] w-full rounded bg-white shadow-sm"
+                        src={readerUrl}
+                        title={`${book.title} 原生 PDF 阅读器`}
+                      />
+                    </div>
+                  ) : (
+                    <canvas ref={canvasRef} className="mx-auto bg-white shadow-sm" />
+                  )}
                 </div>
               </div>
             ) : null}
