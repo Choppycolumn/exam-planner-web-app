@@ -53,6 +53,7 @@ export function LibraryReaderPage() {
   const params = useParams();
   const bookId = Number(params.id || 0);
   const [objectUrl, setObjectUrl] = useState('');
+  const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
   const [pageDraft, setPageDraft] = useState<{ bookId: number; value: string } | null>(null);
@@ -95,26 +96,36 @@ export function LibraryReaderPage() {
     let revokedUrl = '';
     const version = libraryCacheVersion(book);
     getCachedLibraryFile(book.id, version)
-      .then((blob) => {
+      .then(async (blob) => {
         if (!blob) {
           setCachedSource(false);
           setObjectUrl('');
+          if (book.fileType === 'pdf') {
+            const response = await fetch(serverFileUrl, { credentials: 'include' });
+            if (!response.ok) throw new Error('PDF fetch failed');
+            setPdfData(await response.arrayBuffer());
+          } else {
+            setPdfData(null);
+          }
           return;
         }
         const url = URL.createObjectURL(blob);
         revokedUrl = url;
         setCachedSource(true);
         setObjectUrl(url);
+        setPdfData(book.fileType === 'pdf' ? await blob.arrayBuffer() : null);
       })
       .catch(() => {
         setCachedSource(false);
         setObjectUrl('');
+        setPdfData(null);
+        if (book.fileType === 'pdf') setPdfError('PDF 文件读取失败，请刷新后重试或打开原文件。');
       });
     void getCachedLibraryText(book.id, version).then(setCachedChunks).catch(() => setCachedChunks(null));
     return () => {
       if (revokedUrl) URL.revokeObjectURL(revokedUrl);
     };
-  }, [book]);
+  }, [book, serverFileUrl]);
 
   useEffect(() => {
     if (book && textQuery.data?.chunks?.length) {
@@ -123,9 +134,9 @@ export function LibraryReaderPage() {
   }, [book, textQuery.data?.chunks]);
 
   useEffect(() => {
-    if (!book || book.fileType !== 'pdf' || !pdfSourceUrl) return;
+    if (!book || book.fileType !== 'pdf' || !pdfData) return;
     let cancelled = false;
-    const task = getDocument({ url: pdfSourceUrl });
+    const task = getDocument({ data: new Uint8Array(pdfData.slice(0)) });
     task.promise
       .then((document) => {
         if (!cancelled) {
@@ -143,7 +154,7 @@ export function LibraryReaderPage() {
       cancelled = true;
       void task.destroy();
     };
-  }, [book, pdfSourceUrl]);
+  }, [book, pdfData]);
 
   useEffect(() => {
     if (!pdfDoc || book?.fileType !== 'pdf') return;
@@ -398,7 +409,7 @@ export function LibraryReaderPage() {
                     <button className="w-full text-left" onClick={() => goToPage(item.pageNumber)}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
-                        <span className="text-xs text-slate-500">P{item.pageNumber}</span>
+                        <span className="text-xs font-semibold text-blue-600">跳转 P{item.pageNumber}</span>
                       </div>
                     </button>
                     <div className="mt-2 flex justify-end">
