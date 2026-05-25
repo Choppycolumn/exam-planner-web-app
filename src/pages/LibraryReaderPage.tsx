@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, ChevronLeft, ChevronRight, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
-import type { PDFDocumentProxy } from 'pdfjs-dist';
-import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
@@ -51,20 +49,14 @@ export function LibraryReaderPage() {
   const params = useParams();
   const bookId = Number(params.id || 0);
   const [objectUrl, setObjectUrl] = useState('');
-  const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
   const [pageDraft, setPageDraft] = useState<{ bookId: number; value: string } | null>(null);
-  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null);
-  const [pdfRendering, setPdfRendering] = useState(false);
-  const [pdfError, setPdfError] = useState('');
-  const [scale, setScale] = useState(1.2);
   const [bookmarkTitle, setBookmarkTitle] = useState('');
   const [note, setNote] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.libraryBook(bookId),
@@ -82,7 +74,7 @@ export function LibraryReaderPage() {
 
   const textChunks = textQuery.data?.chunks?.length ? textQuery.data.chunks : cachedChunks ?? [];
   const serverFileUrl = book ? serverApi.libraryFileUrl(book.id) : '';
-  const totalPages = book?.pageCount || pdfDoc?.numPages || null;
+  const totalPages = book?.pageCount || null;
   const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
   const pageInputValue = pageDraft?.bookId === bookId ? pageDraft.value : String(savedPage);
   const currentPage = clampPage(pageInputValue || savedPage, totalPages);
@@ -95,22 +87,11 @@ export function LibraryReaderPage() {
     let cancelled = false;
     const version = libraryCacheVersion(book);
     getCachedLibraryFile(book.id, version)
-      .then(async (blob) => {
+      .then((blob) => {
         if (cancelled) return;
-        setPdfDoc(null);
-        setPdfError('');
-        setPdfData(null);
         if (!blob) {
           setCachedSource(false);
           setObjectUrl('');
-          if (book.fileType === 'pdf') {
-            const response = await fetch(serverFileUrl, { credentials: 'include', cache: 'no-store' });
-            if (!response.ok) throw new Error('PDF fetch failed');
-            const buffer = await response.arrayBuffer();
-            if (!cancelled) setPdfData(buffer);
-          } else {
-            setPdfData(null);
-          }
           return;
         }
         const url = URL.createObjectURL(blob);
@@ -121,16 +102,11 @@ export function LibraryReaderPage() {
         }
         setCachedSource(true);
         setObjectUrl(url);
-        const buffer = book.fileType === 'pdf' ? await blob.arrayBuffer() : null;
-        if (!cancelled) setPdfData(buffer);
       })
-      .catch((error) => {
+      .catch(() => {
         if (cancelled) return;
         setCachedSource(false);
         setObjectUrl('');
-        setPdfData(null);
-        const reason = error instanceof Error ? error.message : '未知原因';
-        if (book.fileType === 'pdf') setPdfError(`PDF 文件读取失败：${reason}。已自动切换为浏览器原生阅读器。`);
       });
     void getCachedLibraryText(book.id, version).then(setCachedChunks).catch(() => setCachedChunks(null));
     return () => {
@@ -144,71 +120,6 @@ export function LibraryReaderPage() {
       void putCachedLibraryText(book.id, libraryCacheVersion(book), textQuery.data.chunks, book.title);
     }
   }, [book, textQuery.data?.chunks]);
-
-  useEffect(() => {
-    if (!book || book.fileType !== 'pdf' || !pdfData) return;
-    let cancelled = false;
-    let task: { promise: Promise<PDFDocumentProxy>; destroy: () => Promise<void> } | null = null;
-    void import('pdfjs-dist/legacy/build/pdf.mjs')
-      .then(({ getDocument, GlobalWorkerOptions }) => {
-        if (cancelled) return null;
-        GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-        task = getDocument({ data: new Uint8Array(pdfData.slice(0)), useSystemFonts: true });
-        return task.promise;
-      })
-      .then((document) => {
-        if (!cancelled && document) {
-          setPdfError('');
-          setPdfDoc(document);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setPdfDoc(null);
-          const reason = error instanceof Error ? error.message : '未知原因';
-          setPdfError(`PDF 阅读器加载失败：${reason}。已自动切换为浏览器原生阅读器。`);
-        }
-      });
-    return () => {
-      cancelled = true;
-      void task?.destroy();
-    };
-  }, [book, pdfData]);
-
-  useEffect(() => {
-    if (!pdfDoc || book?.fileType !== 'pdf') return;
-    let cancelled = false;
-    pdfDoc.getPage(currentPage)
-      .then(async (page) => {
-        if (cancelled) return;
-        setPdfRendering(true);
-        const canvas = canvasRef.current;
-        const context = canvas?.getContext('2d');
-        if (!canvas || !context) {
-          setPdfRendering(false);
-          return;
-        }
-        const viewport = page.getViewport({ scale });
-        const outputScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * outputScale);
-        canvas.height = Math.floor(viewport.height * outputScale);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-        context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
-        await page.render({ canvas, canvasContext: context, viewport }).promise;
-        if (!cancelled) setPdfRendering(false);
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setPdfRendering(false);
-          const reason = error instanceof Error ? error.message : '未知原因';
-          setPdfError(`当前页渲染失败：${reason}。已自动切换为浏览器原生阅读器。`);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [book?.fileType, currentPage, pdfDoc, scale]);
 
   const showToast = (message: string) => {
     setToast(message);
@@ -286,7 +197,6 @@ export function LibraryReaderPage() {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       const url = URL.createObjectURL(blob);
       setObjectUrl(url);
-      setPdfData(book.fileType === 'pdf' ? await blob.arrayBuffer() : null);
       setCachedSource(true);
       showToast('已缓存到这台浏览器');
     } catch {
@@ -358,13 +268,18 @@ export function LibraryReaderPage() {
                   min={1}
                   max={totalPages ?? undefined}
                   value={pageInputValue}
-                  disabled={readOnly}
                   onChange={(event) => setPageDraft({ bookId: book.id, value: event.target.value })}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') void saveCurrentPage();
+                    if (event.key === 'Enter') {
+                      goToPage(clampPage(event.currentTarget.value, totalPages));
+                      if (!readOnly) void saveCurrentPage();
+                    }
                   }}
                 />
                 {totalPages ? <span className="text-sm text-slate-500">/ {totalPages} 页</span> : null}
+                <button className="btn btn-soft" onClick={() => goToPage(currentPage)}>
+                  跳转
+                </button>
                 <button className="btn btn-soft" disabled={Boolean(totalPages && currentPage >= totalPages)} onClick={() => goToPage(currentPage + 1)}>
                   下一页<ChevronRight size={16} />
                 </button>
@@ -378,28 +293,17 @@ export function LibraryReaderPage() {
               <div className="card overflow-hidden p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-slate-500">
-                    {pdfRendering ? '页面渲染中...' : pdfError || `第 ${currentPage} 页`}
+                    系统 PDF 阅读器 · 第 {currentPage} 页
                   </div>
-                  <div className="flex gap-2">
-                    <button className="btn btn-soft" disabled={Boolean(pdfError)} onClick={() => setScale((value) => Math.max(0.8, Math.round((value - 0.1) * 10) / 10))}>缩小</button>
-                    <button className="btn btn-soft" disabled={Boolean(pdfError)} onClick={() => setScale((value) => Math.min(2.2, Math.round((value + 0.1) * 10) / 10))}>放大</button>
-                  </div>
+                  <span className="text-xs text-slate-400">页码和书签只负责单向跳转；在 PDF 内滚动不会反向同步</span>
                 </div>
-                <div className="max-h-[78vh] overflow-auto rounded bg-slate-100 p-4">
-                  {!pdfError && !pdfDoc ? <EmptyState title="PDF 阅读器加载中" description="正在准备第一页，如果文件较大可能需要几秒。" /> : null}
-                  {pdfError ? (
-                    <div className="space-y-4">
-                      <EmptyState title="已切换到浏览器原生阅读器" description={pdfError} />
-                      <iframe
-                        key={readerUrl}
-                        className="h-[74vh] w-full rounded bg-white shadow-sm"
-                        src={readerUrl}
-                        title={`${book.title} 原生 PDF 阅读器`}
-                      />
-                    </div>
-                  ) : (
-                    <canvas ref={canvasRef} className="mx-auto bg-white shadow-sm" />
-                  )}
+                <div className="rounded bg-slate-100 p-3">
+                  <iframe
+                    key={readerUrl}
+                    className="h-[78vh] w-full rounded bg-white shadow-sm"
+                    src={readerUrl}
+                    title={`${book.title} 系统 PDF 阅读器`}
+                  />
                 </div>
               </div>
             ) : null}
