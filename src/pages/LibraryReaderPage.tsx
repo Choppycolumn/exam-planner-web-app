@@ -54,6 +54,7 @@ export function LibraryReaderPage() {
   const [viewerTarget, setViewerTarget] = useState<{ bookId: number; page: number; nonce: number } | null>(null);
   const [bookmarkPage, setBookmarkPage] = useState('');
   const [bookmarkTitle, setBookmarkTitle] = useState('');
+  const [bookmarkSaving, setBookmarkSaving] = useState(false);
   const [note, setNote] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [saving, setSaving] = useState(false);
@@ -174,26 +175,38 @@ export function LibraryReaderPage() {
     setBookmarkPage(String(nextPage));
   };
 
-  const addBookmark = async () => {
+  const jumpToBookmark = (page: number) => {
+    goToPage(page);
+  };
+
+  const saveBookmark = async () => {
     if (!book || readOnly) return;
-    const page = clampPage(bookmarkPage, totalPages);
+    if (bookmarkSaving) return;
     if (!bookmarkPage.trim()) {
       showToast('请先输入页数');
       return;
     }
+    const page = clampPage(bookmarkPage, totalPages);
+    if (!Number.isFinite(Number(bookmarkPage)) || Number(bookmarkPage) < 1) {
+      showToast('请先输入页数');
+      return;
+    }
+    setBookmarkSaving(true);
     try {
       await serverApi.saveLibraryBookmark({
         bookId: book.id,
         pageNumber: page,
         title: bookmarkTitle.trim() || `第 ${page} 页`,
       });
-      goToPage(page);
       setBookmarkTitle('');
-      setBookmarkPage(String(page));
+      setBookmarkPage('');
       await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
+      await queryClient.refetchQueries({ queryKey: queryKeys.libraryBook(book.id), type: 'active' });
       showToast('书签已添加');
     } catch {
       showToast('书签添加失败');
+    } finally {
+      setBookmarkSaving(false);
     }
   };
 
@@ -327,7 +340,7 @@ export function LibraryReaderPage() {
                   disabled={readOnly}
                   onChange={(event) => setBookmarkPage(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') void addBookmark();
+                    if (event.key === 'Enter') void saveBookmark();
                   }}
                   placeholder="页数"
                 />
@@ -337,25 +350,25 @@ export function LibraryReaderPage() {
                   disabled={readOnly}
                   onChange={(event) => setBookmarkTitle(event.target.value)}
                   onKeyDown={(event) => {
-                    if (event.key === 'Enter') void addBookmark();
+                    if (event.key === 'Enter') void saveBookmark();
                   }}
                   placeholder="标题"
                 />
-                <button className="btn btn-primary shrink-0" disabled={readOnly} onClick={() => void addBookmark()}>
-                  <BookmarkPlus size={16} />
+                <button type="button" className="btn btn-primary shrink-0" disabled={readOnly || bookmarkSaving} onClick={() => void saveBookmark()}>
+                  <BookmarkPlus size={16} />保存
                 </button>
               </div>
               <div className="mt-4 space-y-2">
                 {detailQuery.data?.bookmarks?.length ? detailQuery.data.bookmarks.map((item) => (
                   <article key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <button className="w-full text-left" onClick={() => goToPage(item.pageNumber)}>
+                    <button type="button" className="w-full text-left" onClick={() => jumpToBookmark(item.pageNumber)}>
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-semibold text-slate-800">{item.title || `第 ${item.pageNumber} 页`}</span>
                         <span className="text-xs font-semibold text-blue-600">跳转 P{item.pageNumber}</span>
                       </div>
                     </button>
                     <div className="mt-2 flex justify-end">
-                      <button className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={readOnly} onClick={() => void removeBookmark(item.id)} title="删除书签">
+                      <button type="button" className="rounded p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" disabled={readOnly} onClick={() => void removeBookmark(item.id)} title="删除书签">
                         <Trash2 size={15} />
                       </button>
                     </div>

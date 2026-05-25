@@ -722,7 +722,7 @@ export const serverApi = {
     const suffix = query.toString();
     return cachedApiRequest<LibraryBooksResponse>(`/library/books${suffix ? `?${suffix}` : ''}`, 45_000);
   },
-  getLibraryBook: (id: number) => cachedApiRequest<LibraryBookDetail>(`/library/books/${id}`, 45_000),
+  getLibraryBook: (id: number) => apiRequest<LibraryBookDetail>(`/library/books/${id}`),
   getLibraryText: (id: number, offset = 0, limit = 120) =>
     cachedApiRequest<LibraryTextResponse>(`/library/books/${id}/text?offset=${offset}&limit=${limit}`, 90_000),
   searchLibrary: (query: string) => cachedApiRequest<LibrarySearchResponse>(`/library/search?q=${encodeURIComponent(query)}`, 45_000),

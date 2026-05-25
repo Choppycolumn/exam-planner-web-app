@@ -4057,6 +4057,7 @@ function saveLibraryBookmark(payload) {
   const bookId = Number(payload.bookId || 0);
   const pageNumber = Math.max(1, Math.round(Number(payload.pageNumber || 1)));
   if (!bookId) throw new Error('Missing book id');
+  if (!getLibraryBookById(bookId)) throw new Error('Book not found');
   const timestamp = nowISO();
   const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM library_bookmarks WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
     ? Number(payload.id)
