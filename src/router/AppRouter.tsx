@@ -16,6 +16,8 @@ const NotificationsPage = lazy(() => routeLoaders.notifications().then((module) 
 const TaskCenterPage = lazy(() => routeLoaders.taskCenter().then((module) => ({ default: module.TaskCenterPage })));
 const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ default: module.MockExamsPage })));
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
+const LibraryPage = lazy(() => routeLoaders.library().then((module) => ({ default: module.LibraryPage })));
+const LibraryReaderPage = lazy(() => routeLoaders.libraryReader().then((module) => ({ default: module.LibraryReaderPage })));
 const SettingsPage = lazy(() => routeLoaders.settings().then((module) => ({ default: module.SettingsPage })));
 const MigrateLocalDataPage = lazy(() => routeLoaders.migrateLocalData().then((module) => ({ default: module.MigrateLocalDataPage })));
 
@@ -47,6 +49,8 @@ export const router = createBrowserRouter([
       { path: 'task-center', element: lazyElement(<TaskCenterPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
       { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },
+      { path: 'library', element: lazyElement(<LibraryPage />) },
+      { path: 'library/:id/read', element: lazyElement(<LibraryReaderPage />) },
       { path: 'settings', element: lazyElement(<SettingsPage />) },
       { path: 'migrate-local-data', element: lazyElement(<MigrateLocalDataPage />) },
     ],

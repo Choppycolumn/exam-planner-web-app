@@ -451,6 +451,75 @@ export interface ErrorThemeDetail {
   readOnly?: boolean;
 }
 
+export interface LibraryBook {
+  id: number;
+  title: string;
+  author: string;
+  category: string;
+  tags: string[];
+  originalFileName: string;
+  fileType: 'pdf' | 'epub' | 'txt' | 'md' | string;
+  mimeType: string;
+  fileSize: number;
+  textStatus: 'pending' | 'processing' | 'ready' | 'empty' | 'failed' | string;
+  textError: string;
+  pageCount: number | null;
+  chapterCount: number | null;
+  progressPercent: number;
+  lastLocator: string;
+  lastOpenedAt: string | null;
+  isFavorite: boolean;
+  isArchived: boolean;
+  schemaVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LibraryNote {
+  id: number;
+  bookId: number;
+  locator: string;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LibraryTextChunk {
+  id: number;
+  bookId: number;
+  chunkIndex: number;
+  locator: string;
+  title: string;
+  text: string;
+  createdAt: string;
+}
+
+export interface LibraryBookDetail {
+  book: LibraryBook;
+  notes: LibraryNote[];
+  chunkCount: number;
+  readOnly?: boolean;
+}
+
+export interface LibraryBooksResponse {
+  items: LibraryBook[];
+  categories: Array<{ category: string; count: number }>;
+  readOnly?: boolean;
+}
+
+export interface LibraryTextResponse {
+  chunks: LibraryTextChunk[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LibrarySearchResponse {
+  results: Array<{ book: LibraryBook; matchType: 'metadata' | 'text' | 'note' | string; snippet: string; locator: string }>;
+  readOnly?: boolean;
+}
+
 type ApiOptions = {
   method?: string;
   body?: unknown;
@@ -514,6 +583,30 @@ function cachedDashboard() {
     return data;
   });
   return dashboardPromise;
+}
+
+function uploadLibraryBook(formData: FormData, onProgress?: (percent: number) => void) {
+  return new Promise<{ ok: true; detail: LibraryBookDetail }>((resolveUpload, rejectUpload) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/library/upload');
+    request.withCredentials = true;
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        try {
+          resolveUpload(JSON.parse(request.responseText) as { ok: true; detail: LibraryBookDetail });
+        } catch (error) {
+          rejectUpload(error);
+        }
+        return;
+      }
+      rejectUpload(new Error(request.responseText || `Upload failed: ${request.status}`));
+    };
+    request.onerror = () => rejectUpload(new Error('Upload failed'));
+    request.send(formData);
+  });
 }
 
 export const serverApi = {
@@ -609,5 +702,27 @@ export const serverApi = {
     from?: string;
     to?: string;
   }) => apiRequest<{ ok: true; analysis: ErrorThemeAnalysis }>('/error-themes/corrections/save', { method: 'POST', body }),
+  getLibraryBooks: (params?: { search?: string; category?: string; sort?: string; archived?: boolean }) => {
+    const query = new URLSearchParams();
+    if (params?.search) query.set('search', params.search);
+    if (params?.category) query.set('category', params.category);
+    if (params?.sort) query.set('sort', params.sort);
+    if (params?.archived) query.set('archived', '1');
+    const suffix = query.toString();
+    return cachedApiRequest<LibraryBooksResponse>(`/library/books${suffix ? `?${suffix}` : ''}`, 45_000);
+  },
+  getLibraryBook: (id: number) => cachedApiRequest<LibraryBookDetail>(`/library/books/${id}`, 45_000),
+  getLibraryText: (id: number, offset = 0, limit = 120) =>
+    cachedApiRequest<LibraryTextResponse>(`/library/books/${id}/text?offset=${offset}&limit=${limit}`, 90_000),
+  searchLibrary: (query: string) => cachedApiRequest<LibrarySearchResponse>(`/library/search?q=${encodeURIComponent(query)}`, 45_000),
+  uploadLibraryBook,
+  saveLibraryBook: (book: Partial<LibraryBook> & { id: number }) =>
+    apiRequest<{ ok: true; book: LibraryBook }>('/library/books/save', { method: 'POST', body: book }),
+  removeLibraryBook: (id: number) => apiRequest<{ ok: true }>('/library/books/remove', { method: 'POST', body: { id } }),
+  saveLibraryProgress: (payload: { bookId: number; locator?: string; progressPercent?: number }) =>
+    apiRequest<{ ok: true; updatedAt: string }>('/library/progress', { method: 'POST', body: payload }),
+  saveLibraryNote: (payload: { id?: number; bookId: number; locator?: string; title?: string; content: string }) =>
+    apiRequest<{ ok: true; id: number }>('/library/notes/save', { method: 'POST', body: payload }),
+  libraryFileUrl: (id: number) => `/api/library/books/${id}/file`,
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

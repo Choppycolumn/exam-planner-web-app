@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
@@ -14,6 +14,8 @@ const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
 const legacyDataFile = join(dataDir, 'db.json');
 const sqliteFile = join(dataDir, 'exam-planner.sqlite');
 const backupsDir = join(dataDir, 'backups');
+const libraryDir = join(dataDir, 'library');
+const libraryFilesDir = join(libraryDir, 'files');
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
@@ -52,6 +54,10 @@ const mimeTypes = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.epub': 'application/epub+zip',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
 };
 
 const projectColors = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
@@ -427,6 +433,56 @@ CREATE TABLE IF NOT EXISTS precomputed_cache (
   source_updated_at TEXT,
   computed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS library_books (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  author TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '未分类',
+  tags_json TEXT NOT NULL DEFAULT '[]',
+  original_file_name TEXT NOT NULL,
+  file_type TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL DEFAULT 0,
+  storage_path TEXT NOT NULL,
+  text_status TEXT NOT NULL DEFAULT 'pending',
+  text_error TEXT NOT NULL DEFAULT '',
+  page_count INTEGER,
+  chapter_count INTEGER,
+  progress_percent REAL NOT NULL DEFAULT 0,
+  last_locator TEXT NOT NULL DEFAULT '',
+  last_opened_at TEXT,
+  is_favorite INTEGER NOT NULL DEFAULT 0,
+  is_archived INTEGER NOT NULL DEFAULT 0,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS library_text_chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  chunk_index INTEGER NOT NULL,
+  locator TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(book_id, chunk_index)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS library_text_fts USING fts5(book_id UNINDEXED, chunk_id UNINDEXED, title, text);
+CREATE TABLE IF NOT EXISTS library_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,
+  locator TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS library_reading_progress (
+  book_id INTEGER PRIMARY KEY,
+  locator TEXT NOT NULL DEFAULT '',
+  progress_percent REAL NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS error_theme_batches (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source TEXT NOT NULL DEFAULT 'local-model-batch',
@@ -517,6 +573,10 @@ CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_precomputed_cache_computed_at ON precomputed_cache(computed_at);
+CREATE INDEX IF NOT EXISTS idx_library_books_updated ON library_books(is_archived, updated_at);
+CREATE INDEX IF NOT EXISTS idx_library_books_category ON library_books(category, updated_at);
+CREATE INDEX IF NOT EXISTS idx_library_text_chunks_book ON library_text_chunks(book_id, chunk_index);
+CREATE INDEX IF NOT EXISTS idx_library_notes_book ON library_notes(book_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_batches_period ON error_theme_batches(period_start, period_end, created_at);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_date ON error_theme_occurrences(date);
 CREATE INDEX IF NOT EXISTS idx_error_theme_occurrences_theme_date ON error_theme_occurrences(theme_id, date);
@@ -2781,9 +2841,17 @@ function createBackupFile(kind = 'manual', note = '') {
   mkdirSync(backupsDir, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
   const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
+  let libraryArchivePath = null;
   runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
   if (existsSync(filePath)) unlinkSync(filePath);
   runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
+  if (existsSync(libraryFilesDir)) {
+    libraryArchivePath = join(backupsDir, `exam-planner-${kind}-${timestamp}-library.tar.gz`);
+    const archiveResult = spawnSync('tar', ['-czf', libraryArchivePath, '-C', libraryDir, 'files'], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
+    if (archiveResult.status !== 0) {
+      libraryArchivePath = null;
+    }
+  }
   runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
   if (kind === 'weekly') {
@@ -2791,7 +2859,7 @@ VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString
 VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
-  return { kind, filePath, createdAt: nowISO() };
+  return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
 }
 
 function backupFileToRecord(fileName) {
@@ -2830,6 +2898,15 @@ function restoreBackupFile(fileName) {
   const safetyBackup = createBackupFile('pre-restore', `automatic safety backup before restoring ${fileName}`);
   runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
   copyFileSync(sourceFile, sqliteFile);
+  const libraryArchivePath = join(backupsDir, fileName.replace(/\.sqlite$/, '-library.tar.gz'));
+  if (existsSync(libraryArchivePath) && libraryArchivePath.startsWith(backupsDir)) {
+    if (existsSync(libraryFilesDir)) rmSync(libraryFilesDir, { recursive: true, force: true });
+    mkdirSync(libraryDir, { recursive: true });
+    const restoreArchive = spawnSync('tar', ['-xzf', libraryArchivePath, '-C', libraryDir], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
+    if (restoreArchive.status !== 0) {
+      throw new Error(`Library archive restore failed: ${restoreArchive.stderr || restoreArchive.stdout}`);
+    }
+  }
   for (const suffix of ['-wal', '-shm']) {
     const sidecar = `${sqliteFile}${suffix}`;
     if (existsSync(sidecar)) unlinkSync(sidecar);
@@ -3062,6 +3139,7 @@ function ensureSqliteStore() {
   if (sqliteReady) return;
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
+  mkdirSync(libraryFilesDir, { recursive: true });
   const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
   if (versionCheck.error || versionCheck.status !== 0) {
     throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
@@ -3165,6 +3243,12 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     createBackupFile('pre-precomputed-cache', 'automatic backup before precomputed cache migration');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', '9', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 10) {
+    createBackupFile('pre-library', 'automatic backup before library migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '10', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
 
@@ -3656,6 +3740,361 @@ SET status = 'resolved', updated_at = ${sqlString(timestamp)}, resolved_at = ${s
 WHERE date = ${sqlString(date)} AND status = 'open';`);
   tableChanged();
   return { ok: true, resolvedAt: timestamp };
+}
+
+function parseTags(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value || '')
+    .split(/[,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function safeFileName(value = 'book') {
+  return String(value)
+    .normalize('NFKC')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160) || 'book';
+}
+
+function libraryFileType(fileName = '') {
+  const ext = extname(fileName).toLowerCase();
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.epub') return 'epub';
+  if (ext === '.txt') return 'txt';
+  if (ext === '.md' || ext === '.markdown') return 'md';
+  return '';
+}
+
+function libraryMimeType(fileType) {
+  if (fileType === 'pdf') return 'application/pdf';
+  if (fileType === 'epub') return 'application/epub+zip';
+  if (fileType === 'md') return 'text/markdown; charset=utf-8';
+  return 'text/plain; charset=utf-8';
+}
+
+function libraryBookRowToObject(row) {
+  let tags = [];
+  try {
+    tags = JSON.parse(row.tagsJson || '[]');
+  } catch {
+    tags = [];
+  }
+  return {
+    id: Number(row.id),
+    title: row.title,
+    author: row.author || '',
+    category: row.category || '未分类',
+    tags,
+    originalFileName: row.originalFileName,
+    fileType: row.fileType,
+    mimeType: row.mimeType,
+    fileSize: Number(row.fileSize || 0),
+    textStatus: row.textStatus,
+    textError: row.textError || '',
+    pageCount: row.pageCount === null || row.pageCount === undefined ? null : Number(row.pageCount),
+    chapterCount: row.chapterCount === null || row.chapterCount === undefined ? null : Number(row.chapterCount),
+    progressPercent: Number(row.progressPercent || 0),
+    lastLocator: row.lastLocator || '',
+    lastOpenedAt: row.lastOpenedAt || null,
+    isFavorite: Boolean(row.isFavorite),
+    isArchived: Boolean(row.isArchived),
+    schemaVersion: Number(row.schemaVersion || entitySchemaVersion),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function getLibraryBookById(id) {
+  const row = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
+file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
+page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
+last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
+created_at AS createdAt, updated_at AS updatedAt
+FROM library_books WHERE id = ${sqlValue(Number(id))} LIMIT 1;`)[0];
+  return row ? libraryBookRowToObject(row) : null;
+}
+
+function getLibraryStoragePath(id) {
+  const row = sqliteJson(`SELECT storage_path AS storagePath FROM library_books WHERE id = ${sqlValue(Number(id))} LIMIT 1;`)[0];
+  if (!row?.storagePath) return '';
+  const resolved = resolve(row.storagePath);
+  return resolved.startsWith(resolve(libraryFilesDir)) ? resolved : '';
+}
+
+function listLibraryBooks({ search = '', category = '', sort = 'recent', includeArchived = false } = {}, sessionRole = 'write') {
+  const clauses = includeArchived ? ['1=1'] : ['is_archived = 0'];
+  if (category) clauses.push(`category = ${sqlString(category)}`);
+  if (search) {
+    const like = `%${String(search).replace(/[%_]/g, '')}%`;
+    clauses.push(`(title LIKE ${sqlString(like)} OR author LIKE ${sqlString(like)} OR original_file_name LIKE ${sqlString(like)} OR tags_json LIKE ${sqlString(like)})`);
+  }
+  const orderBy = sort === 'title'
+    ? 'title COLLATE NOCASE ASC'
+    : sort === 'uploaded'
+      ? 'created_at DESC, id DESC'
+      : sort === 'progress'
+        ? 'progress_percent DESC, updated_at DESC'
+        : 'COALESCE(last_opened_at, updated_at) DESC, updated_at DESC';
+  const items = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
+file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
+page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
+last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
+created_at AS createdAt, updated_at AS updatedAt
+FROM library_books
+WHERE ${clauses.join(' AND ')}
+ORDER BY ${orderBy};`).map(libraryBookRowToObject);
+  const categories = sqliteJson(`SELECT category, COUNT(*) AS count FROM library_books WHERE is_archived = 0 GROUP BY category ORDER BY category;`)
+    .map((item) => ({ category: item.category || '未分类', count: Number(item.count || 0) }));
+  return { items, categories, readOnly: sessionRole === 'read' };
+}
+
+function getLibraryBookDetail(id, sessionRole = 'write') {
+  const book = getLibraryBookById(id);
+  if (!book) return null;
+  const notes = sqliteJson(`SELECT id, book_id AS bookId, locator, title, content, created_at AS createdAt, updated_at AS updatedAt
+FROM library_notes
+WHERE book_id = ${sqlValue(Number(id))}
+ORDER BY updated_at DESC, id DESC;`);
+  const chunkCount = Number(sqliteScalar(`SELECT COUNT(*) FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};`) || 0);
+  return { book, notes, chunkCount, readOnly: sessionRole === 'read' };
+}
+
+function stripHtml(value = '') {
+  return String(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitTextChunks(text, chunkSize = 3000) {
+  const clean = String(text || '').replace(/\r\n/g, '\n').replace(/\n{4,}/g, '\n\n').trim();
+  if (!clean) return [];
+  const chunks = [];
+  for (let index = 0; index < clean.length && chunks.length < 3000; index += chunkSize) {
+    chunks.push(clean.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+function extractPdfText(filePath) {
+  const textResult = spawnSync('pdftotext', ['-layout', filePath, '-'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120000 });
+  if (textResult.status !== 0 || !textResult.stdout?.trim()) {
+    throw new Error(textResult.stderr || 'pdftotext unavailable or empty');
+  }
+  let pageCount = null;
+  const infoResult = spawnSync('pdfinfo', [filePath], { encoding: 'utf8', timeout: 15000 });
+  const match = infoResult.stdout?.match(/^Pages:\s+(\d+)/m);
+  if (match) pageCount = Number(match[1]);
+  return { text: textResult.stdout, pageCount, chapterCount: null };
+}
+
+function extractEpubText(filePath) {
+  const listResult = spawnSync('unzip', ['-Z1', filePath], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 30000 });
+  if (listResult.status !== 0) throw new Error(listResult.stderr || 'unzip unavailable');
+  const entries = listResult.stdout.split(/\r?\n/)
+    .filter((name) => /\.(xhtml|html|htm|txt)$/i.test(name))
+    .filter((name) => !/META-INF/i.test(name))
+    .slice(0, 800);
+  const texts = [];
+  for (const entry of entries) {
+    const result = spawnSync('unzip', ['-p', filePath, entry], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 30000 });
+    if (result.status === 0 && result.stdout) texts.push(stripHtml(result.stdout));
+  }
+  return { text: texts.join('\n\n'), pageCount: null, chapterCount: entries.length };
+}
+
+function extractLibraryText(filePath, fileType) {
+  if (fileType === 'txt' || fileType === 'md') {
+    return { text: readFileSync(filePath, 'utf8'), pageCount: null, chapterCount: null };
+  }
+  if (fileType === 'pdf') return extractPdfText(filePath);
+  if (fileType === 'epub') return extractEpubText(filePath);
+  return { text: '', pageCount: null, chapterCount: null };
+}
+
+function indexLibraryBookText(bookId) {
+  const book = getLibraryBookById(bookId);
+  const filePath = getLibraryStoragePath(bookId);
+  if (!book || !filePath || !existsSync(filePath)) return;
+  const timestamp = nowISO();
+  try {
+    runSqlite(`UPDATE library_books SET text_status = 'processing', text_error = '', updated_at = ${sqlString(timestamp)} WHERE id = ${sqlValue(bookId)};`);
+    const extracted = extractLibraryText(filePath, book.fileType);
+    const chunks = splitTextChunks(extracted.text);
+    const statements = [
+      'BEGIN;',
+      `DELETE FROM library_text_chunks WHERE book_id = ${sqlValue(bookId)};`,
+      `DELETE FROM library_text_fts WHERE book_id = ${sqlValue(bookId)};`,
+    ];
+    chunks.forEach((text, index) => {
+      const locator = book.fileType === 'pdf' ? `chunk:${index + 1}` : `section:${index + 1}`;
+      statements.push(`INSERT INTO library_text_chunks (book_id, chunk_index, locator, title, text, created_at)
+VALUES (${sqlValue(bookId)}, ${sqlValue(index)}, ${sqlString(locator)}, ${sqlString(`片段 ${index + 1}`)}, ${sqlString(text)}, ${sqlString(timestamp)});`);
+    });
+    statements.push('COMMIT;');
+    runSqlite(statements.join('\n'), { maxBuffer: 128 * 1024 * 1024 });
+    const rows = sqliteJson(`SELECT id, chunk_index AS chunkIndex, title, text FROM library_text_chunks WHERE book_id = ${sqlValue(bookId)} ORDER BY chunk_index;`);
+    const ftsStatements = ['BEGIN;'];
+    rows.forEach((row) => {
+      ftsStatements.push(`INSERT INTO library_text_fts (book_id, chunk_id, title, text)
+VALUES (${sqlValue(bookId)}, ${sqlValue(Number(row.id))}, ${sqlString(row.title || '')}, ${sqlString(row.text || '')});`);
+    });
+    ftsStatements.push('COMMIT;');
+    runSqlite(ftsStatements.join('\n'), { maxBuffer: 128 * 1024 * 1024 });
+    runSqlite(`UPDATE library_books
+SET text_status = ${sqlString(chunks.length ? 'ready' : 'empty')},
+    text_error = '',
+    page_count = ${sqlValue(extracted.pageCount)},
+    chapter_count = ${sqlValue(extracted.chapterCount)},
+    updated_at = ${sqlString(nowISO())}
+WHERE id = ${sqlValue(bookId)};`);
+  } catch (error) {
+    runSqlite(`UPDATE library_books
+SET text_status = 'failed',
+    text_error = ${sqlString(error instanceof Error ? error.message : String(error))},
+    updated_at = ${sqlString(nowISO())}
+WHERE id = ${sqlValue(bookId)};`);
+  }
+}
+
+function getLibraryText(bookId, { offset = 0, limit = 80 } = {}) {
+  const rows = sqliteJson(`SELECT id, book_id AS bookId, chunk_index AS chunkIndex, locator, title, text, created_at AS createdAt
+FROM library_text_chunks
+WHERE book_id = ${sqlValue(Number(bookId))}
+ORDER BY chunk_index
+LIMIT ${Math.max(1, Math.min(300, Number(limit) || 80))} OFFSET ${Math.max(0, Number(offset) || 0)};`);
+  const total = Number(sqliteScalar(`SELECT COUNT(*) FROM library_text_chunks WHERE book_id = ${sqlValue(Number(bookId))};`) || 0);
+  return { chunks: rows, total, limit: Math.max(1, Math.min(300, Number(limit) || 80)), offset: Math.max(0, Number(offset) || 0) };
+}
+
+function saveLibraryMetadata(payload) {
+  const book = getLibraryBookById(payload.id);
+  if (!book) throw new Error('Library book not found');
+  const timestamp = nowISO();
+  runSqlite(`UPDATE library_books SET
+title = ${sqlString(String(payload.title || book.title).trim() || book.title)},
+author = ${sqlString(String(payload.author ?? book.author).trim())},
+category = ${sqlString(String(payload.category || book.category || '未分类').trim())},
+tags_json = ${sqlString(JSON.stringify(parseTags(payload.tags ?? book.tags)))},
+is_favorite = ${sqlValue(Boolean(payload.isFavorite))},
+is_archived = ${sqlValue(Boolean(payload.isArchived))},
+updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(Number(payload.id))};`);
+  tableChanged();
+  return getLibraryBookById(payload.id);
+}
+
+function saveLibraryProgress(payload) {
+  const bookId = Number(payload.bookId || payload.id || 0);
+  if (!bookId) throw new Error('Missing book id');
+  const locator = String(payload.locator || '');
+  const percent = Math.max(0, Math.min(100, Number(payload.progressPercent || 0)));
+  const timestamp = nowISO();
+  runSqlite(`INSERT INTO library_reading_progress (book_id, locator, progress_percent, updated_at)
+VALUES (${sqlValue(bookId)}, ${sqlString(locator)}, ${sqlValue(percent)}, ${sqlString(timestamp)})
+ON CONFLICT(book_id) DO UPDATE SET locator = excluded.locator, progress_percent = excluded.progress_percent, updated_at = excluded.updated_at;
+UPDATE library_books
+SET last_locator = ${sqlString(locator)},
+    progress_percent = ${sqlValue(percent)},
+    last_opened_at = ${sqlString(timestamp)},
+    updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(bookId)};`);
+  tableChanged();
+  return { ok: true, updatedAt: timestamp };
+}
+
+function saveLibraryNote(payload) {
+  const bookId = Number(payload.bookId || 0);
+  const content = String(payload.content || '').trim();
+  if (!bookId || !content) throw new Error('Missing note content');
+  const timestamp = nowISO();
+  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM library_notes WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
+    ? Number(payload.id)
+    : nextTableId('library_notes');
+  runSqlite(`INSERT INTO library_notes (id, book_id, locator, title, content, created_at, updated_at)
+VALUES (${sqlValue(id)}, ${sqlValue(bookId)}, ${sqlString(payload.locator || '')}, ${sqlString(payload.title || '')}, ${sqlString(content)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
+ON CONFLICT(id) DO UPDATE SET
+locator = excluded.locator,
+title = excluded.title,
+content = excluded.content,
+updated_at = excluded.updated_at;`);
+  tableChanged();
+  return { ok: true, id };
+}
+
+function deleteLibraryBook(id) {
+  const filePath = getLibraryStoragePath(id);
+  runSqlite(`BEGIN;
+DELETE FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};
+DELETE FROM library_text_fts WHERE book_id = ${sqlValue(Number(id))};
+DELETE FROM library_notes WHERE book_id = ${sqlValue(Number(id))};
+DELETE FROM library_reading_progress WHERE book_id = ${sqlValue(Number(id))};
+DELETE FROM library_books WHERE id = ${sqlValue(Number(id))};
+COMMIT;`);
+  if (filePath && existsSync(filePath)) {
+    try { unlinkSync(filePath); } catch { /* keep DB delete from being blocked by file cleanup */ }
+  }
+  tableChanged();
+}
+
+function searchLibrary(query, sessionRole = 'write') {
+  const q = String(query || '').trim();
+  if (!q) return { results: [], readOnly: sessionRole === 'read' };
+  const like = `%${q.replace(/[%_]/g, '')}%`;
+  const byMeta = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
+file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
+page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
+last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
+created_at AS createdAt, updated_at AS updatedAt,
+'metadata' AS matchType, '' AS snippet, '' AS locator
+FROM library_books
+WHERE is_archived = 0 AND (title LIKE ${sqlString(like)} OR author LIKE ${sqlString(like)} OR original_file_name LIKE ${sqlString(like)} OR tags_json LIKE ${sqlString(like)})
+LIMIT 30;`);
+  const escapedFts = q.replace(/"/g, '""');
+  let byText = [];
+  try {
+    byText = sqliteJson(`SELECT b.id, b.title, b.author, b.category, b.tags_json AS tagsJson, b.original_file_name AS originalFileName,
+b.file_type AS fileType, b.mime_type AS mimeType, b.file_size AS fileSize, b.text_status AS textStatus, b.text_error AS textError,
+b.page_count AS pageCount, b.chapter_count AS chapterCount, b.progress_percent AS progressPercent, b.last_locator AS lastLocator,
+b.last_opened_at AS lastOpenedAt, b.is_favorite AS isFavorite, b.is_archived AS isArchived, b.schema_version AS schemaVersion,
+b.created_at AS createdAt, b.updated_at AS updatedAt,
+'text' AS matchType, snippet(library_text_fts, 3, '[', ']', '...', 24) AS snippet, c.locator
+FROM library_text_fts
+JOIN library_text_chunks c ON c.id = library_text_fts.chunk_id
+JOIN library_books b ON b.id = library_text_fts.book_id
+WHERE library_text_fts MATCH ${sqlString(`"${escapedFts}"`)} AND b.is_archived = 0
+LIMIT 50;`);
+  } catch {
+    byText = [];
+  }
+  const byNotes = sqliteJson(`SELECT b.id, b.title, b.author, b.category, b.tags_json AS tagsJson, b.original_file_name AS originalFileName,
+b.file_type AS fileType, b.mime_type AS mimeType, b.file_size AS fileSize, b.text_status AS textStatus, b.text_error AS textError,
+b.page_count AS pageCount, b.chapter_count AS chapterCount, b.progress_percent AS progressPercent, b.last_locator AS lastLocator,
+b.last_opened_at AS lastOpenedAt, b.is_favorite AS isFavorite, b.is_archived AS isArchived, b.schema_version AS schemaVersion,
+b.created_at AS createdAt, b.updated_at AS updatedAt,
+'note' AS matchType, n.content AS snippet, n.locator
+FROM library_notes n
+JOIN library_books b ON b.id = n.book_id
+WHERE b.is_archived = 0 AND (n.content LIKE ${sqlString(like)} OR n.title LIKE ${sqlString(like)})
+LIMIT 30;`);
+  const seen = new Set();
+  const results = [...byMeta, ...byText, ...byNotes].filter((row) => {
+    const key = `${row.id}-${row.matchType}-${row.locator}-${row.snippet}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).map((row) => ({ book: libraryBookRowToObject(row), matchType: row.matchType, snippet: row.snippet || '', locator: row.locator || '' }));
+  return { results, readOnly: sessionRole === 'read' };
 }
 
 function getStudyTargetMinutes() {
@@ -4203,6 +4642,160 @@ async function readJsonBody(req) {
   }
 }
 
+function readRawBody(req, maxBytes = 350 * 1024 * 1024) {
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks = [];
+    let size = 0;
+    let rejected = false;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        rejected = true;
+        const error = new Error('Uploaded file is too large');
+        error.statusCode = 413;
+        rejectBody(error);
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('error', (error) => {
+      if (!rejected) rejectBody(error);
+    });
+    req.on('end', () => {
+      if (!rejected) resolveBody(Buffer.concat(chunks, size));
+    });
+  });
+}
+
+function parseMultipartForm(buffer, contentType = '') {
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) {
+    const error = new Error('Missing multipart boundary');
+    error.statusCode = 400;
+    throw error;
+  }
+  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`);
+  const fields = {};
+  const files = {};
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    const boundaryIndex = buffer.indexOf(boundary, cursor);
+    if (boundaryIndex < 0) break;
+    cursor = boundaryIndex + boundary.length;
+    if (buffer[cursor] === 45 && buffer[cursor + 1] === 45) break;
+    if (buffer[cursor] === 13 && buffer[cursor + 1] === 10) cursor += 2;
+
+    const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'), cursor);
+    if (headerEnd < 0) break;
+    const headerText = buffer.slice(cursor, headerEnd).toString('utf8');
+    const disposition = headerText.match(/content-disposition:\s*form-data;([^\r\n]+)/i)?.[1] || '';
+    const name = disposition.match(/name="([^"]+)"/i)?.[1] || '';
+    const filename = disposition.match(/filename="([^"]*)"/i)?.[1] || '';
+    const partContentType = headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || 'application/octet-stream';
+    const partStart = headerEnd + 4;
+    const nextBoundary = buffer.indexOf(boundary, partStart);
+    if (!name || nextBoundary < 0) break;
+    let partEnd = nextBoundary;
+    if (buffer[partEnd - 2] === 13 && buffer[partEnd - 1] === 10) partEnd -= 2;
+    const data = buffer.slice(partStart, partEnd);
+    if (filename) {
+      files[name] = { filename, contentType: partContentType, data };
+    } else {
+      fields[name] = data.toString('utf8');
+    }
+    cursor = nextBoundary;
+  }
+
+  return { fields, files };
+}
+
+function uploadLibraryBookFromMultipart(fields, files) {
+  const file = files.file || files.book || Object.values(files)[0];
+  if (!file?.data?.length) {
+    const error = new Error('Missing upload file');
+    error.statusCode = 400;
+    throw error;
+  }
+  const fileType = libraryFileType(file.filename);
+  if (!fileType) {
+    const error = new Error('Only pdf, epub, txt and md files are supported');
+    error.statusCode = 400;
+    throw error;
+  }
+  ensureSqliteStore();
+  const timestamp = nowISO();
+  const id = nextTableId('library_books');
+  const originalFileName = safeFileName(file.filename || `book.${fileType}`);
+  const title = String(fields.title || originalFileName.replace(/\.[^.]+$/, '') || '未命名资料').trim();
+  const author = String(fields.author || '').trim();
+  const category = String(fields.category || '未分类').trim() || '未分类';
+  const tags = parseTags(fields.tags || '');
+  const mimeType = file.contentType && file.contentType !== 'application/octet-stream' ? file.contentType : libraryMimeType(fileType);
+  const bookDir = join(libraryFilesDir, `book-${id}`);
+  mkdirSync(bookDir, { recursive: true });
+  const storagePath = join(bookDir, `original.${fileType}`);
+  writeFileSync(storagePath, file.data);
+  runSqlite(`INSERT INTO library_books (
+  id, title, author, category, tags_json, original_file_name, file_type, mime_type, file_size, storage_path,
+  text_status, text_error, progress_percent, last_locator, is_favorite, is_archived, schema_version, created_at, updated_at
+) VALUES (
+  ${sqlValue(id)}, ${sqlString(title)}, ${sqlString(author)}, ${sqlString(category)}, ${sqlString(JSON.stringify(tags))},
+  ${sqlString(originalFileName)}, ${sqlString(fileType)}, ${sqlString(mimeType)}, ${sqlValue(file.data.length)},
+  ${sqlString(storagePath)}, 'pending', '', 0, '', 0, 0, ${sqlValue(entitySchemaVersion)}, ${sqlString(timestamp)}, ${sqlString(timestamp)}
+);`);
+  tableChanged();
+  const timer = setTimeout(() => indexLibraryBookText(id), 80);
+  if (typeof timer.unref === 'function') timer.unref();
+  return getLibraryBookDetail(id);
+}
+
+function serveLibraryFile(req, res, id, sessionRole = 'write') {
+  ensureSqliteStore();
+  const book = getLibraryBookById(id);
+  const filePath = getLibraryStoragePath(id);
+  if (!book || !filePath || !existsSync(filePath)) {
+    res.writeHead(404);
+    res.end('Not found');
+    return;
+  }
+  if (sessionRole !== 'read') {
+    saveLibraryProgress({ bookId: id, locator: book.lastLocator || '', progressPercent: book.progressPercent || 0 });
+  }
+  const stat = statSync(filePath);
+  const range = req.headers.range;
+  const headers = {
+    'content-type': book.mimeType || libraryMimeType(book.fileType),
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, max-age=3600',
+  };
+  if (range) {
+    const match = String(range).match(/bytes=(\d*)-(\d*)/);
+    if (!match) {
+      res.writeHead(416, { ...headers, 'content-range': `bytes */${stat.size}` });
+      res.end();
+      return;
+    }
+    const start = match[1] ? Number(match[1]) : 0;
+    const end = match[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
+    if (start >= stat.size || end < start) {
+      res.writeHead(416, { ...headers, 'content-range': `bytes */${stat.size}` });
+      res.end();
+      return;
+    }
+    res.writeHead(206, {
+      ...headers,
+      'content-length': end - start + 1,
+      'content-range': `bytes ${start}-${end}/${stat.size}`,
+    });
+    createReadStream(filePath, { start, end }).pipe(res);
+    return;
+  }
+  res.writeHead(200, { ...headers, 'content-length': stat.size });
+  createReadStream(filePath).pipe(res);
+}
+
 function sendHtml(res, html, status = 200) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -4540,6 +5133,82 @@ ORDER BY project_id;`);
     ensureSqliteStore();
     sendJson(res, { reports: listLearningReports() });
     return;
+  }
+
+  if (req.url?.startsWith('/api/library')) {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const pathname = requestUrl.pathname;
+
+    if (pathname === '/api/library/books' && req.method === 'GET') {
+      sendJson(res, listLibraryBooks({
+        search: requestUrl.searchParams.get('search') || '',
+        category: requestUrl.searchParams.get('category') || '',
+        sort: requestUrl.searchParams.get('sort') || 'recent',
+        includeArchived: requestUrl.searchParams.get('archived') === '1',
+      }, sessionRole));
+      return;
+    }
+
+    if (pathname === '/api/library/search' && req.method === 'GET') {
+      sendJson(res, searchLibrary(requestUrl.searchParams.get('q') || '', sessionRole));
+      return;
+    }
+
+    const textMatch = pathname.match(/^\/api\/library\/books\/(\d+)\/text$/);
+    if (textMatch && req.method === 'GET') {
+      sendJson(res, getLibraryText(Number(textMatch[1]), {
+        offset: requestUrl.searchParams.get('offset') || 0,
+        limit: requestUrl.searchParams.get('limit') || 80,
+      }));
+      return;
+    }
+
+    const fileMatch = pathname.match(/^\/api\/library\/books\/(\d+)\/file$/);
+    if (fileMatch && req.method === 'GET') {
+      serveLibraryFile(req, res, Number(fileMatch[1]), sessionRole);
+      return;
+    }
+
+    const detailMatch = pathname.match(/^\/api\/library\/books\/(\d+)$/);
+    if (detailMatch && req.method === 'GET') {
+      const detail = getLibraryBookDetail(Number(detailMatch[1]), sessionRole);
+      if (!detail) {
+        sendJson(res, { error: 'Not found' }, 404);
+        return;
+      }
+      sendJson(res, detail);
+      return;
+    }
+
+    if (pathname === '/api/library/upload' && req.method === 'POST') {
+      const rawBody = await readRawBody(req);
+      const form = parseMultipartForm(rawBody, String(req.headers['content-type'] || ''));
+      sendJson(res, { ok: true, detail: uploadLibraryBookFromMultipart(form.fields, form.files) });
+      return;
+    }
+
+    if (pathname === '/api/library/books/save' && req.method === 'POST') {
+      sendJson(res, { ok: true, book: saveLibraryMetadata(await readJsonBody(req)) });
+      return;
+    }
+
+    if (pathname === '/api/library/books/remove' && req.method === 'POST') {
+      const body = await readJsonBody(req);
+      deleteLibraryBook(body.id);
+      sendJson(res, { ok: true });
+      return;
+    }
+
+    if (pathname === '/api/library/progress' && req.method === 'POST') {
+      sendJson(res, saveLibraryProgress(await readJsonBody(req)));
+      return;
+    }
+
+    if (pathname === '/api/library/notes/save' && req.method === 'POST') {
+      sendJson(res, saveLibraryNote(await readJsonBody(req)));
+      return;
+    }
   }
 
   if (req.url === '/api/reports/generate' && req.method === 'POST') {

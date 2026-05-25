@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Activity, BarChart3, Bell, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, Settings } from 'lucide-react';
+import { Activity, BarChart3, Bell, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, LibraryBig, Settings } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -16,6 +16,7 @@ const navItems = [
   { to: '/notifications', label: '通知中心', icon: Bell },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
+  { to: '/library', label: '资料图书馆', icon: LibraryBig },
   { to: '/settings', label: '设置', icon: Settings },
   { to: '/task-center', label: '任务中心', icon: Cpu },
 ];
