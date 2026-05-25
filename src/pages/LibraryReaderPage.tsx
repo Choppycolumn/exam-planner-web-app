@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, ChevronLeft, ChevronRight, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, Bookmark, BookmarkPlus, Download, FileText, HardDriveDownload, NotebookPen, Save, Trash2 } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
-import { notifyDataChanged, serverApi } from '../api/client';
+import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { getCachedLibraryFile, getCachedLibraryText, libraryCacheVersion, putCachedLibraryFile, putCachedLibraryText } from '../features/library/cache';
 
@@ -35,14 +35,13 @@ function clampPage(value: string | number, totalPages?: number | null) {
   return totalPages ? Math.min(parsed, totalPages) : parsed;
 }
 
-function pageProgressPercent(page: number, totalPages?: number | null) {
-  if (!totalPages) return 0;
-  return Math.max(0, Math.min(100, Math.round((page / totalPages) * 1000) / 10));
-}
+const LEAVE_BOOKMARK_TITLE = '上次离开';
 
-function withPdfPage(url: string, page: number) {
+function withPdfPage(url: string, page: number, nonce: number) {
   if (!url) return '';
-  return `${url.split('#')[0]}#page=${page}`;
+  const base = url.split('#')[0];
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}pdfPage=${page}&pdfJump=${nonce}#page=${page}`;
 }
 
 export function LibraryReaderPage() {
@@ -51,12 +50,15 @@ export function LibraryReaderPage() {
   const [objectUrl, setObjectUrl] = useState('');
   const [cachedSource, setCachedSource] = useState(false);
   const [cachedChunks, setCachedChunks] = useState<Awaited<ReturnType<typeof getCachedLibraryText>>>(null);
-  const [pageDraft, setPageDraft] = useState<{ bookId: number; value: string } | null>(null);
+  const [viewerTarget, setViewerTarget] = useState<{ bookId: number; page: number; nonce: number } | null>(null);
+  const [bookmarkPage, setBookmarkPage] = useState('');
   const [bookmarkTitle, setBookmarkTitle] = useState('');
   const [note, setNote] = useState('');
   const [noteTitle, setNoteTitle] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
+  const currentPageRef = useRef(1);
+  const leaveBookmarkIdRef = useRef<number | null>(null);
 
   const detailQuery = useQuery({
     queryKey: queryKeys.libraryBook(bookId),
@@ -76,10 +78,9 @@ export function LibraryReaderPage() {
   const serverFileUrl = book ? serverApi.libraryFileUrl(book.id) : '';
   const totalPages = book?.pageCount || null;
   const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
-  const pageInputValue = pageDraft?.bookId === bookId ? pageDraft.value : String(savedPage);
-  const currentPage = clampPage(pageInputValue || savedPage, totalPages);
-  const pdfSourceUrl = objectUrl || serverFileUrl;
-  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(pdfSourceUrl, currentPage) : pdfSourceUrl;
+  const currentPage = viewerTarget?.bookId === bookId ? viewerTarget.page : savedPage;
+  const jumpNonce = viewerTarget?.bookId === bookId ? viewerTarget.nonce : 0;
+  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(serverFileUrl, currentPage, jumpNonce) : serverFileUrl;
 
   useEffect(() => {
     if (!book) return;
@@ -121,54 +122,71 @@ export function LibraryReaderPage() {
     }
   }, [book, textQuery.data?.chunks]);
 
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  useEffect(() => {
+    const leaveBookmark = detailQuery.data?.bookmarks?.find((item) => item.title === LEAVE_BOOKMARK_TITLE);
+    leaveBookmarkIdRef.current = leaveBookmark?.id ?? null;
+  }, [detailQuery.data?.bookmarks]);
+
+  useEffect(() => {
+    if (!book?.id || readOnly) return undefined;
+    const targetBookId = book.id;
+    return () => {
+      const page = currentPageRef.current;
+      const payload = {
+        id: leaveBookmarkIdRef.current ?? undefined,
+        bookId: targetBookId,
+        pageNumber: page,
+        title: LEAVE_BOOKMARK_TITLE,
+      };
+      const body = JSON.stringify(payload);
+      const sent = navigator.sendBeacon?.('/api/library/bookmarks/save', new Blob([body], { type: 'application/json' }));
+      if (!sent) {
+        void fetch('/api/library/bookmarks/save', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          keepalive: true,
+        }).catch(() => undefined);
+      }
+    };
+  }, [book?.id, readOnly]);
+
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(''), 1800);
   };
 
-  const saveCurrentPage = async () => {
-    if (!book || readOnly) return;
-    const page = clampPage(pageInputValue, totalPages);
-    try {
-      await serverApi.saveLibraryProgress({
-        bookId: book.id,
-        progressPercent: pageProgressPercent(page, totalPages),
-        locator: `page:${page}`,
-      });
-      setPageDraft({ bookId: book.id, value: String(page) });
-      notifyDataChanged();
-      await queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
-      showToast(`已保存到第 ${page} 页`);
-    } catch {
-      showToast('页码保存失败');
-    }
-  };
-
   const goToPage = (page: number) => {
     if (!book) return;
     const nextPage = clampPage(page, totalPages);
-    setPageDraft({ bookId: book.id, value: String(nextPage) });
-    if (!readOnly) {
-      void serverApi.saveLibraryProgress({
-        bookId: book.id,
-        progressPercent: pageProgressPercent(nextPage, totalPages),
-        locator: `page:${nextPage}`,
-      }).then(() => {
-        notifyDataChanged();
-        void queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
-      }).catch(() => undefined);
-    }
+    setViewerTarget((previous) => ({
+      bookId: book.id,
+      page: nextPage,
+      nonce: previous?.bookId === book.id ? previous.nonce + 1 : 1,
+    }));
+    setBookmarkPage(String(nextPage));
   };
 
   const addBookmark = async () => {
     if (!book || readOnly) return;
+    const page = clampPage(bookmarkPage, totalPages);
+    if (!bookmarkPage.trim()) {
+      showToast('请先输入页数');
+      return;
+    }
     try {
       await serverApi.saveLibraryBookmark({
         bookId: book.id,
-        pageNumber: currentPage,
-        title: bookmarkTitle.trim() || `第 ${currentPage} 页`,
+        pageNumber: page,
+        title: bookmarkTitle.trim() || `第 ${page} 页`,
       });
+      goToPage(page);
       setBookmarkTitle('');
+      setBookmarkPage(String(page));
       await queryClient.invalidateQueries({ queryKey: queryKeys.libraryBook(book.id) });
       showToast('书签已添加');
     } catch {
@@ -248,54 +266,13 @@ export function LibraryReaderPage() {
       {book ? (
         <div className="grid gap-5 xl:grid-cols-[1fr_320px]">
           <section className="space-y-5">
-            <div className="card p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">当前页码</p>
-                  <p className="mt-1 text-sm text-slate-500">{cachedSource ? '当前使用本浏览器缓存文件' : '当前读取服务器文件'}</p>
-                </div>
-                <span className="text-2xl font-semibold text-slate-950">
-                  {book.pageCount ? `${currentPage}/${book.pageCount}` : `第 ${currentPage} 页`}
-                </span>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <button className="btn btn-soft" disabled={currentPage <= 1} onClick={() => goToPage(currentPage - 1)}>
-                  <ChevronLeft size={16} />上一页
-                </button>
-                <input
-                  className="field max-w-40"
-                  type="number"
-                  min={1}
-                  max={totalPages ?? undefined}
-                  value={pageInputValue}
-                  onChange={(event) => setPageDraft({ bookId: book.id, value: event.target.value })}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      goToPage(clampPage(event.currentTarget.value, totalPages));
-                      if (!readOnly) void saveCurrentPage();
-                    }
-                  }}
-                />
-                {totalPages ? <span className="text-sm text-slate-500">/ {totalPages} 页</span> : null}
-                <button className="btn btn-soft" onClick={() => goToPage(currentPage)}>
-                  跳转
-                </button>
-                <button className="btn btn-soft" disabled={Boolean(totalPages && currentPage >= totalPages)} onClick={() => goToPage(currentPage + 1)}>
-                  下一页<ChevronRight size={16} />
-                </button>
-                <button className="btn btn-primary" disabled={readOnly} onClick={() => void saveCurrentPage()}>
-                  <Save size={16} />保存页码
-                </button>
-              </div>
-            </div>
-
             {book.fileType === 'pdf' ? (
               <div className="card overflow-hidden p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-slate-500">
-                    系统 PDF 阅读器 · 第 {currentPage} 页
+                    系统 PDF 阅读器
                   </div>
-                  <span className="text-xs text-slate-400">页码和书签只负责单向跳转；在 PDF 内滚动不会反向同步</span>
+                  <span className="text-xs text-slate-400">{cachedSource ? '本机已缓存文件' : '正在读取服务器文件'}</span>
                 </div>
                 <div className="rounded bg-slate-100 p-3">
                   <iframe
@@ -331,13 +308,29 @@ export function LibraryReaderPage() {
           <aside className="space-y-5">
             <div className="card p-5">
               <h2 className="flex items-center gap-2 text-base font-semibold text-slate-950"><Bookmark size={18} />书签</h2>
-              <div className="mt-4 flex gap-2">
+              <div className="mt-4 grid gap-2 sm:grid-cols-[96px_1fr_auto]">
+                <input
+                  className="field"
+                  type="number"
+                  min={1}
+                  max={totalPages ?? undefined}
+                  value={bookmarkPage}
+                  disabled={readOnly}
+                  onChange={(event) => setBookmarkPage(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void addBookmark();
+                  }}
+                  placeholder="页数"
+                />
                 <input
                   className="field"
                   value={bookmarkTitle}
                   disabled={readOnly}
                   onChange={(event) => setBookmarkTitle(event.target.value)}
-                  placeholder={`第 ${currentPage} 页`}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void addBookmark();
+                  }}
+                  placeholder="标题"
                 />
                 <button className="btn btn-primary shrink-0" disabled={readOnly} onClick={() => void addBookmark()}>
                   <BookmarkPlus size={16} />
