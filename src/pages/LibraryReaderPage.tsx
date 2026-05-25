@@ -40,6 +40,7 @@ const LEAVE_BOOKMARK_TITLE = '上次离开';
 function withPdfPage(url: string, page: number, nonce: number) {
   if (!url) return '';
   const base = url.split('#')[0];
+  if (base.startsWith('blob:')) return `${base}#page=${page}`;
   const separator = base.includes('?') ? '&' : '?';
   return `${base}${separator}pdfPage=${page}&pdfJump=${nonce}#page=${page}`;
 }
@@ -80,7 +81,9 @@ export function LibraryReaderPage() {
   const savedPage = book ? parsePageLocator(book.lastLocator) : 1;
   const currentPage = viewerTarget?.bookId === bookId ? viewerTarget.page : savedPage;
   const jumpNonce = viewerTarget?.bookId === bookId ? viewerTarget.nonce : 0;
-  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(serverFileUrl, currentPage, jumpNonce) : serverFileUrl;
+  const fileSourceUrl = objectUrl || serverFileUrl;
+  const readerUrl = book?.fileType === 'pdf' ? withPdfPage(fileSourceUrl, currentPage, jumpNonce) : fileSourceUrl;
+  const readerKey = `${bookId}:${cachedSource ? 'cache' : 'server'}:${currentPage}:${jumpNonce}:${fileSourceUrl}`;
 
   useEffect(() => {
     if (!book) return;
@@ -208,14 +211,20 @@ export function LibraryReaderPage() {
   const cacheCurrentFile = async () => {
     if (!book) return;
     try {
-      const response = await fetch(serverFileUrl);
+      const response = await fetch(serverFileUrl, { credentials: 'include', cache: 'no-store' });
       if (!response.ok) throw new Error('Fetch failed');
       const blob = await response.blob();
+      if (!blob.size) throw new Error('Empty file');
       await putCachedLibraryFile(book.id, libraryCacheVersion(book), blob, book.title);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       const url = URL.createObjectURL(blob);
       setObjectUrl(url);
       setCachedSource(true);
+      setViewerTarget((previous) => ({
+        bookId: book.id,
+        page: currentPage,
+        nonce: previous?.bookId === book.id ? previous.nonce + 1 : 1,
+      }));
       showToast('已缓存到这台浏览器');
     } catch {
       showToast('缓存失败，请稍后再试');
@@ -276,7 +285,7 @@ export function LibraryReaderPage() {
                 </div>
                 <div className="rounded bg-slate-100 p-3">
                   <iframe
-                    key={readerUrl}
+                    key={readerKey}
                     className="h-[78vh] w-full rounded bg-white shadow-sm"
                     src={readerUrl}
                     title={`${book.title} 系统 PDF 阅读器`}
