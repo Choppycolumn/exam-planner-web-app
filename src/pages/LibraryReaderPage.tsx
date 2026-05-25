@@ -7,7 +7,7 @@ import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { notifyDataChanged, serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
-import { getCachedLibraryFile, getCachedLibraryText, putCachedLibraryFile, putCachedLibraryText } from '../features/library/cache';
+import { getCachedLibraryFile, getCachedLibraryText, libraryCacheVersion, putCachedLibraryFile, putCachedLibraryText } from '../features/library/cache';
 
 function formatBytes(bytes: number) {
   if (!bytes) return '0 B';
@@ -20,7 +20,7 @@ function formatBytes(bytes: number) {
 function textStatusHint(status?: string, error?: string) {
   if (status === 'ready') return '正文索引已完成，可以全文阅读和检索。';
   if (status === 'processing' || status === 'pending') return '服务器正在提取正文，稍后刷新即可看到文本版。';
-  if (status === 'empty') return '这份资料没有提取到可读文本，可以使用原文件阅读。';
+  if (status === 'empty') return '这份资料没有可直接提取的文字，通常是扫描版或图片版 PDF，可以使用原文件阅读。';
   if (status === 'failed') return `正文提取失败：${error || '未知原因'}。原文件仍可阅读。`;
   return '';
 }
@@ -60,7 +60,8 @@ export function LibraryReaderPage() {
   useEffect(() => {
     if (!book) return;
     let revokedUrl = '';
-    getCachedLibraryFile(book.id, book.updatedAt)
+    const version = libraryCacheVersion(book);
+    getCachedLibraryFile(book.id, version)
       .then((blob) => {
         if (!blob) {
           setCachedSource(false);
@@ -76,7 +77,7 @@ export function LibraryReaderPage() {
         setCachedSource(false);
         setObjectUrl('');
       });
-    void getCachedLibraryText(book.id, book.updatedAt).then(setCachedChunks).catch(() => setCachedChunks(null));
+    void getCachedLibraryText(book.id, version).then(setCachedChunks).catch(() => setCachedChunks(null));
     return () => {
       if (revokedUrl) URL.revokeObjectURL(revokedUrl);
     };
@@ -84,7 +85,7 @@ export function LibraryReaderPage() {
 
   useEffect(() => {
     if (book && textQuery.data?.chunks?.length) {
-      void putCachedLibraryText(book.id, book.updatedAt, textQuery.data.chunks, book.title);
+      void putCachedLibraryText(book.id, libraryCacheVersion(book), textQuery.data.chunks, book.title);
     }
   }, [book, textQuery.data?.chunks]);
 
@@ -112,7 +113,7 @@ export function LibraryReaderPage() {
       const response = await fetch(serverFileUrl);
       if (!response.ok) throw new Error('Fetch failed');
       const blob = await response.blob();
-      await putCachedLibraryFile(book.id, book.updatedAt, blob, book.title);
+      await putCachedLibraryFile(book.id, libraryCacheVersion(book), blob, book.title);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       const url = URL.createObjectURL(blob);
       setObjectUrl(url);

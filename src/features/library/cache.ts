@@ -1,4 +1,5 @@
 import type { LibraryTextChunk } from '../../api/client';
+import type { LibraryBook } from '../../api/client';
 
 const DB_NAME = 'examPlanner.libraryCache.v1';
 const DB_VERSION = 1;
@@ -20,6 +21,10 @@ type CachedText = CachedMeta & { chunks: LibraryTextChunk[] };
 
 function cacheKey(bookId: number, version: string) {
   return `${bookId}:${version || 'v1'}`;
+}
+
+export function libraryCacheVersion(book: Pick<LibraryBook, 'originalFileName' | 'fileSize' | 'createdAt'>) {
+  return `${book.originalFileName}:${book.fileSize}:${book.createdAt}`;
 }
 
 function openCacheDb(): Promise<IDBDatabase> {

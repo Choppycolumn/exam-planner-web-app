@@ -3887,14 +3887,14 @@ function splitTextChunks(text, chunkSize = 3000) {
 }
 
 function extractPdfText(filePath) {
-  const textResult = spawnSync('pdftotext', ['-layout', filePath, '-'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120000 });
-  if (textResult.status !== 0 || !textResult.stdout?.trim()) {
-    throw new Error(textResult.stderr || 'pdftotext unavailable or empty');
-  }
   let pageCount = null;
   const infoResult = spawnSync('pdfinfo', [filePath], { encoding: 'utf8', timeout: 15000 });
   const match = infoResult.stdout?.match(/^Pages:\s+(\d+)/m);
   if (match) pageCount = Number(match[1]);
+  const textResult = spawnSync('pdftotext', ['-layout', filePath, '-'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120000 });
+  if (textResult.status !== 0) {
+    throw new Error(textResult.stderr || 'pdftotext failed');
+  }
   return { text: textResult.stdout, pageCount, chapterCount: null };
 }
 

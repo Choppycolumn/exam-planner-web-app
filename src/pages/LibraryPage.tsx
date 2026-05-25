@@ -8,7 +8,7 @@ import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
 import { notifyDataChanged, serverApi, type LibraryBook } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
-import { clearLibraryCache, getLibraryCacheSummary } from '../features/library/cache';
+import { clearLibraryCache, getLibraryCacheSummary, libraryCacheVersion, putCachedLibraryFile } from '../features/library/cache';
 
 type BookDraft = {
   title: string;
@@ -31,7 +31,7 @@ function statusText(status: string) {
   if (status === 'ready') return '已索引';
   if (status === 'processing') return '索引中';
   if (status === 'pending') return '等待索引';
-  if (status === 'empty') return '无可检索文本';
+  if (status === 'empty') return '图片版/无文本';
   if (status === 'failed') return '索引失败';
   return status || '未知';
 }
@@ -116,7 +116,9 @@ export function LibraryPage() {
     setUploading(true);
     setUploadProgress(0);
     try {
-      await serverApi.uploadLibraryBook(formData, setUploadProgress);
+      const uploaded = await serverApi.uploadLibraryBook(formData, setUploadProgress);
+      const uploadedBook = uploaded.detail.book;
+      await putCachedLibraryFile(uploadedBook.id, libraryCacheVersion(uploadedBook), file, uploadedBook.title);
       setFile(null);
       setTitle('');
       setAuthor('');
@@ -125,7 +127,8 @@ export function LibraryPage() {
       setUploadProgress(0);
       notifyDataChanged();
       await queryClient.invalidateQueries({ queryKey: ['server', 'library'] });
-      showToast('资料已上传，后台正在建立检索索引');
+      await refreshCacheSummary();
+      showToast('资料已上传，并已缓存到这台浏览器');
     } catch {
       showToast('上传失败，请检查文件格式或稍后重试');
     } finally {
@@ -300,6 +303,7 @@ export function LibraryPage() {
                 </div>
 
                 {book.textStatus === 'failed' ? <p className="mt-3 text-sm text-rose-600">索引失败：{book.textError || '服务器未能提取文本，但仍可打开原文件阅读。'}</p> : null}
+                {book.textStatus === 'empty' ? <p className="mt-3 text-sm text-amber-700">这份 PDF 没有可直接提取的文字，通常是扫描版或图片版；可以正常阅读原文件，但暂不能全文检索。</p> : null}
                 {book.isArchived ? <p className="mt-3 flex items-center gap-2 text-sm text-slate-500"><Archive size={15} />这本资料已归档</p> : null}
               </article>
             );
