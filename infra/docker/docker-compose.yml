@@ -1,0 +1,34 @@
+services:
+  exam-planner:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../../.env
+    volumes:
+      - exam-planner-data:/opt/exam-planner/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["optional-cache"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+
+  postgres:
+    image: postgres:17-alpine
+    profiles: ["optional-postgres"]
+    environment:
+      POSTGRES_DB: exam_planner
+      POSTGRES_USER: exam_planner
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  exam-planner-data:
+  redis-data:
+  postgres-data:

@@ -11,6 +11,14 @@
   --line: #e5e7eb;
 }
 
+:root[data-theme='dark'] {
+  color: #e5e7eb;
+  background: #0f172a;
+  color-scheme: dark;
+  --surface: #111827;
+  --line: #334155;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -95,6 +103,82 @@ select {
   border-color: #fecaca;
   background: #fff1f2;
   color: #be123c;
+}
+
+:root[data-theme='dark'] body,
+:root[data-theme='dark'] .bg-\[\#f7f8fb\] {
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
+:root[data-theme='dark'] .card,
+:root[data-theme='dark'] .bg-white,
+:root[data-theme='dark'] .bg-white\/85,
+:root[data-theme='dark'] .bg-white\/90 {
+  border-color: #334155;
+  background: rgba(15, 23, 42, 0.94);
+  color: #e5e7eb;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .bg-slate-50,
+:root[data-theme='dark'] .bg-slate-100,
+:root[data-theme='dark'] .hover\:bg-slate-100:hover {
+  background: #111827;
+}
+
+:root[data-theme='dark'] .bg-blue-50,
+:root[data-theme='dark'] .bg-emerald-50,
+:root[data-theme='dark'] .bg-amber-50,
+:root[data-theme='dark'] .bg-rose-50,
+:root[data-theme='dark'] .bg-rose-50\/60 {
+  background: rgba(30, 41, 59, 0.92);
+}
+
+:root[data-theme='dark'] .border-slate-100,
+:root[data-theme='dark'] .border-slate-200,
+:root[data-theme='dark'] .border-slate-300,
+:root[data-theme='dark'] .border-blue-200,
+:root[data-theme='dark'] .border-emerald-100,
+:root[data-theme='dark'] .border-amber-200,
+:root[data-theme='dark'] .border-rose-100,
+:root[data-theme='dark'] .border-rose-200 {
+  border-color: #334155;
+}
+
+:root[data-theme='dark'] .text-slate-950,
+:root[data-theme='dark'] .text-slate-900,
+:root[data-theme='dark'] .text-slate-800,
+:root[data-theme='dark'] .text-slate-700,
+:root[data-theme='dark'] .hover\:text-slate-950:hover {
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] .text-slate-600,
+:root[data-theme='dark'] .text-slate-500 {
+  color: #cbd5e1;
+}
+
+:root[data-theme='dark'] .text-blue-700 {
+  color: #93c5fd;
+}
+
+:root[data-theme='dark'] .btn-soft {
+  border-color: #475569;
+  background: #111827;
+  color: #f8fafc;
+}
+
+:root[data-theme='dark'] .btn-danger {
+  border-color: #7f1d1d;
+  background: #451a1a;
+  color: #fecaca;
+}
+
+:root[data-theme='dark'] .field {
+  border-color: #475569;
+  background: #0f172a;
+  color: #f8fafc;
 }
 
 @keyframes water-hold-fill {

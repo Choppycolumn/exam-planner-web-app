@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+﻿import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
@@ -8,6 +8,14 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
 import { setDefaultResultOrder } from 'node:dns';
+import { createSqliteRepository } from './modules/sqlite-repository.mjs';
+import { createTaskRunsRepository } from './modules/task-runs-repository.mjs';
+import { createOpsRepository } from './modules/ops-repository.mjs';
+import { createNotificationRepository } from './modules/notification-repository.mjs';
+import { createCalendarRepository } from './modules/calendar-repository.mjs';
+import { notificationChannelReadiness } from './modules/notification-dispatcher.mjs';
+import { runSqlMigrations } from './modules/migration-runner.mjs';
+import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
 
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
@@ -16,6 +24,7 @@ const sqliteFile = join(dataDir, 'exam-planner.sqlite');
 const backupsDir = join(dataDir, 'backups');
 const libraryDir = join(dataDir, 'library');
 const libraryFilesDir = join(libraryDir, 'files');
+const migrationsDir = resolve(fileURLToPath(new URL('./migrations', import.meta.url)));
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
@@ -27,6 +36,19 @@ const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
 const cookieName = 'exam_planner_session';
+const corsOrigin = process.env.CORS_ORIGIN || '*';
+const secureCookie = process.env.COOKIE_SECURE === '1';
+const clawbotSecret = process.env.CLAWBOT_SECRET || '';
+const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
+const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
+const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
+const openClawAccountId = process.env.OPENCLAW_CLAWBOT_ACCOUNT || process.env.OPENCLAW_WEIXIN_ACCOUNT_ID || '';
+const openClawTarget = process.env.OPENCLAW_CLAWBOT_TARGET || '';
+const openClawCli = process.env.OPENCLAW_CLI || (existsSync('/opt/node22/bin/openclaw') ? '/opt/node22/bin/openclaw' : 'openclaw');
+const requestLogSlowMs = Number(process.env.REQUEST_LOG_SLOW_MS || 1500);
+const jsonBodyMaxBytes = Number(process.env.JSON_BODY_MAX_BYTES || 10 * 1024 * 1024);
+const libraryUploadMaxBytes = Number(process.env.LIBRARY_UPLOAD_MAX_BYTES || 350 * 1024 * 1024);
+const minFreeDiskBytes = Number(process.env.MIN_FREE_DISK_BYTES || 512 * 1024 * 1024);
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
@@ -34,6 +56,11 @@ const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
+const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
+const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
+const opsRepository = createOpsRepository(sqliteRepository);
+const notificationRepository = createNotificationRepository(sqliteRepository);
+const calendarRepository = createCalendarRepository(sqliteRepository);
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -72,6 +99,7 @@ let dailyBriefTimerStarted = false;
 let maintenanceTimerStarted = false;
 let dailyBriefTimer = null;
 let errorThemeBatchJob = null;
+let shuttingDown = false;
 let nextNightlyErrorThemeAt = null;
 let nextDailyBriefAt = null;
 let nextMaintenanceAt = null;
@@ -261,6 +289,62 @@ function sqliteJson(sql) {
   return output ? JSON.parse(output) : [];
 }
 
+function runSqliteTransaction(statements = []) {
+  const body = Array.isArray(statements) ? statements.join('\n') : String(statements || '');
+  return runSqlite(`BEGIN IMMEDIATE;\n${body}\nCOMMIT;`);
+}
+
+function getAppConfigSnapshot() {
+  return {
+    port,
+    dataDir,
+    sqliteFile,
+    backupsDir,
+    libraryDir,
+    requestLogSlowMs,
+    jsonBodyMaxBytes,
+    libraryUploadMaxBytes,
+    minFreeDiskBytes,
+    corsOrigin,
+    secureCookie,
+    embeddingCacheDir,
+    smallEmbeddingModelName,
+    largeEmbeddingModelName,
+  };
+}
+
+function validateStartupConfig() {
+  const problems = [];
+  if (readOnlyPassword === '123') problems.push('READONLY_PASSWORD is using the unsafe default value');
+  if (!cookieSecret || cookieSecret.length < 32) problems.push('COOKIE_SECRET should be at least 32 characters');
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) problems.push('PORT must be a valid TCP port');
+  if (!Number.isFinite(jsonBodyMaxBytes) || jsonBodyMaxBytes < 1024) problems.push('JSON_BODY_MAX_BYTES is too small');
+  if (!Number.isFinite(libraryUploadMaxBytes) || libraryUploadMaxBytes < jsonBodyMaxBytes) problems.push('LIBRARY_UPLOAD_MAX_BYTES should be >= JSON_BODY_MAX_BYTES');
+  if (!Number.isFinite(minFreeDiskBytes) || minFreeDiskBytes < 0) problems.push('MIN_FREE_DISK_BYTES must be non-negative');
+  if (problems.length) {
+    console.warn(JSON.stringify({ level: 'warn', event: 'startup_config_warnings', problems }));
+  }
+  return problems;
+}
+
+function assertDiskSpace(minBytes = minFreeDiskBytes) {
+  const disk = getDiskStatus();
+  if (disk && disk.availableBytes < minBytes) {
+    const error = new Error(`Insufficient disk space: ${disk.availableBytes} bytes available`);
+    error.statusCode = 507;
+    throw error;
+  }
+  return disk;
+}
+
+function redactSecretText(value = '') {
+  return String(value)
+    .replace(/(password|passwd|token|secret|cookie|authorization)(=|:)\s*[^,\s;]+/gi, '$1$2 [redacted]')
+    .replace(/exam_planner_session=[^;\s]+/gi, 'exam_planner_session=[redacted]')
+    .replace(/APP_PASSWORD=[^,\s;]+/gi, 'APP_PASSWORD=[redacted]')
+    .slice(0, 1000);
+}
+
 function writeStateToSqlite(state) {
   const tempFile = join(dataDir, `.state-write-${process.pid}-${Date.now()}.json`);
   writeFileSync(tempFile, JSON.stringify(normalizeState(state), null, 2), 'utf8');
@@ -428,6 +512,44 @@ CREATE TABLE IF NOT EXISTS problem_inbox_items (
   updated_at TEXT NOT NULL,
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS visit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path TEXT NOT NULL,
+  method TEXT NOT NULL DEFAULT 'GET',
+  role TEXT NOT NULL DEFAULT '',
+  client_hash TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_name TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  duration_ms INTEGER,
+  error TEXT NOT NULL DEFAULT '',
+  metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,
+  actor_role TEXT NOT NULL DEFAULT '',
+  client_hash TEXT NOT NULL DEFAULT '',
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_request_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  status_code INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  role TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS precomputed_cache (
   cache_key TEXT PRIMARY KEY,
   payload_json TEXT NOT NULL,
@@ -582,6 +704,12 @@ CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind,
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_visit_events_created_at ON visit_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_visit_events_path_created_at ON visit_events(path, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_runs_name_started ON task_runs(task_name, started_at);
+CREATE INDEX IF NOT EXISTS idx_task_runs_status_started ON task_runs(status, started_at);
+CREATE INDEX IF NOT EXISTS idx_audit_events_action_created ON audit_events(action, created_at);
+CREATE INDEX IF NOT EXISTS idx_api_request_log_path_created ON api_request_log(path, created_at);
 CREATE INDEX IF NOT EXISTS idx_precomputed_cache_computed_at ON precomputed_cache(computed_at);
 CREATE INDEX IF NOT EXISTS idx_library_books_updated ON library_books(is_archived, updated_at);
 CREATE INDEX IF NOT EXISTS idx_library_books_category ON library_books(category, updated_at);
@@ -1582,8 +1710,12 @@ function startErrorThemeBatchJob({ periodStart = '1900-01-01', periodEnd = today
     if (!errorThemeBatchJob || errorThemeBatchJob.id !== jobId) return;
     errorThemeBatchJob = { ...errorThemeBatchJob, status: 'running' };
     try {
-      const result = await runErrorThemeBatch(periodStart, periodEnd, { mode, modelProfile: selectedProfile, trigger });
-      refreshCurrentReportsAfterBatch(trigger === 'nightly' ? 'auto' : 'manual');
+      const task = await runExclusiveTask('error-theme-batch', trigger, async () => {
+        const batchResult = await runErrorThemeBatch(periodStart, periodEnd, { mode, modelProfile: selectedProfile, trigger });
+        refreshCurrentReportsAfterBatch(trigger === 'nightly' ? 'auto' : 'manual');
+        return batchResult;
+      }, { timeoutMs: 45 * 60 * 1000, metadata: { periodStart, periodEnd, mode, modelProfile: selectedProfile } });
+      const result = task.result;
       errorThemeBatchJob = {
         ...errorThemeBatchJob,
         status: 'completed',
@@ -1644,11 +1776,14 @@ function scheduleNightlyErrorThemeBatch() {
 function defaultDailyBriefSettings() {
   return {
     enabled: true,
-    generateTime: '07:00',
+    generateTime: '08:00',
     cityName: '北京',
     latitude: 39.9042,
     longitude: 116.4074,
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
+    wechat: {
+      enabled: true,
+    },
     email: {
       enabled: false,
       host: '',
@@ -1667,6 +1802,8 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
   const defaults = defaultDailyBriefSettings();
   const previousEmail = previous?.email || {};
   const emailInput = input.email || {};
+  const previousWechat = previous?.wechat || {};
+  const wechatInput = input.wechat || {};
   const requestedPassword = typeof emailInput.password === 'string' ? emailInput.password : '';
   const preservedPassword = requestedPassword.trim() ? requestedPassword : previousEmail.password || '';
   const secureMode = ['ssl', 'starttls', 'none'].includes(emailInput.secureMode) ? emailInput.secureMode : defaults.email.secureMode;
@@ -1677,6 +1814,9 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
     latitude: Number.isFinite(Number(input.latitude)) ? Number(input.latitude) : defaults.latitude,
     longitude: Number.isFinite(Number(input.longitude)) ? Number(input.longitude) : defaults.longitude,
     marketSymbolsText: String(input.marketSymbolsText ?? defaults.marketSymbolsText),
+    wechat: {
+      enabled: Boolean(wechatInput.enabled ?? previousWechat.enabled ?? defaults.wechat.enabled),
+    },
     email: {
       enabled: Boolean(emailInput.enabled),
       host: String(emailInput.host || previousEmail.host || '').trim(),
@@ -1800,6 +1940,230 @@ async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function fetchTextWithCurl(url, timeoutSeconds = 9) {
+  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-finance/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    encoding: 'utf8',
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
+  return result.stdout;
+}
+
+async function fetchTextWithFallback(url, timeoutMs = 9000, headers = {}) {
+  const errors = [];
+  try {
+    return await fetchTextWithTimeout(url, timeoutMs, headers);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  try {
+    return fetchTextWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
+  } catch (error) {
+    errors.push(`curl fallback: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  throw new Error(errors.join('; '));
+}
+
+function parsePublicFundF10(code, text) {
+  const rowMatch = String(text).match(/<tbody><tr><td>(\d{4}-\d{2}-\d{2})<\/td><td class='tor bold'>([0-9.]+)<\/td><td class='tor bold'>([0-9.]*)<\/td>/);
+  if (!rowMatch) throw new Error('EastMoney F10 returned no net-value row');
+  const price = Number(rowMatch[2]);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('EastMoney F10 returned invalid price');
+  return {
+    code,
+    price,
+    priceDate: rowMatch[1],
+    source: '东方财富 F10 历史净值',
+    provider: 'eastmoney-fund',
+    raw: { cumulativeNetValue: rowMatch[3] || '', sourceKind: 'eastmoney-f10' },
+  };
+}
+
+function dateBefore(dateText, days) {
+  const date = new Date(`${dateText}T00:00:00+08:00`);
+  if (Number.isNaN(date.getTime())) return '';
+  date.setDate(date.getDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
+function parsePublicFundGz(code, text) {
+  const match = String(text).match(/jsonpgz\((.*)\);?$/);
+  if (!match || !match[1]) throw new Error('fundgz returned invalid JSONP');
+  const payload = JSON.parse(match[1]);
+  const price = Number(payload.dwjz || payload.gsz || 0);
+  if (!payload.fundcode || !Number.isFinite(price) || price <= 0) throw new Error('fundgz returned no net value');
+  return {
+    code,
+    name: payload.name || '',
+    price,
+    priceDate: payload.jzrq || String(payload.gztime || '').slice(0, 10) || todayISO(),
+    source: '天天基金公开净值',
+    provider: 'eastmoney-fund',
+    raw: { ...payload, sourceKind: 'fundgz' },
+  };
+}
+
+function parsePublicFundSearchProfile(code, payload) {
+  const rows = Array.isArray(payload?.Datas) ? payload.Datas : [];
+  const row = rows.find((item) => String(item?.CODE || item?._id || item?.BACKCODE || '') === code) ?? rows[0];
+  if (!row) throw new Error('fund search returned no match');
+  const base = row.FundBaseInfo && typeof row.FundBaseInfo === 'object' ? row.FundBaseInfo : {};
+  const price = Number(base.DWJZ || 0);
+  const minSubscription = Number(base.MINSG);
+  return {
+    code,
+    name: String(row.NAME || base.SHORTNAME || ''),
+    fundCompany: String(base.JJGS || ''),
+    fundType: String(base.FTYPE || ''),
+    minSubscription: Number.isFinite(minSubscription) ? minSubscription : null,
+    isBuy: base.ISBUY == null ? null : String(base.ISBUY),
+    price: Number.isFinite(price) && price > 0 ? price : null,
+    priceDate: String(base.FSRQ || ''),
+    source: '东方财富基金搜索公开资料',
+    provider: 'eastmoney-fund',
+    raw: {
+      sourceKind: 'eastmoney-fund-search',
+      category: row.CATEGORYDESC || row.CATEGORY || '',
+      fundBaseInfo: base,
+    },
+  };
+}
+
+async function getPublicFundProfile(code) {
+  const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx?m=1&key=${encodeURIComponent(code)}`;
+  return parsePublicFundSearchProfile(code, await fetchJsonWithTimeout(url, 4500));
+}
+
+function mergePublicFundProfile(quote, profile) {
+  if (!profile) return quote;
+  return {
+    ...quote,
+    name: quote.name || profile.name || '',
+    fundCompany: profile.fundCompany || quote.fundCompany || '',
+    fundType: profile.fundType || quote.fundType || '',
+    minSubscription: profile.minSubscription ?? quote.minSubscription ?? null,
+    isBuy: profile.isBuy ?? quote.isBuy ?? null,
+    raw: { ...(quote.raw || {}), profile: profile.raw || profile },
+  };
+}
+
+function quoteFromPublicFundProfile(profile) {
+  if (!profile?.price) throw new Error('fund search returned no usable net value');
+  return {
+    code: profile.code,
+    name: profile.name || '',
+    fundCompany: profile.fundCompany || '',
+    fundType: profile.fundType || '',
+    minSubscription: profile.minSubscription ?? null,
+    isBuy: profile.isBuy ?? null,
+    price: profile.price,
+    priceDate: profile.priceDate || todayISO(),
+    source: profile.source,
+    provider: 'eastmoney-fund',
+    raw: profile.raw,
+  };
+}
+
+async function getPublicFundQuote(code, dateText = '', includeProfile = false) {
+  const normalizedCode = String(code || '').trim();
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    const error = new Error('Invalid fund code');
+    error.statusCode = 400;
+    throw error;
+  }
+  const normalizedDate = String(dateText || '').trim();
+  if (normalizedDate && !/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    const error = new Error('Invalid fund quote date');
+    error.statusCode = 400;
+    throw error;
+  }
+  const errors = [];
+  let profile = null;
+  if (includeProfile) {
+    try {
+      profile = await getPublicFundProfile(normalizedCode);
+    } catch (error) {
+      errors.push(`profile: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const sdate = normalizedDate ? dateBefore(normalizedDate, 20) : '';
+  const edate = normalizedDate || '';
+  const f10Url = `https://fundf10.eastmoney.com/F10DataApi.aspx?type=lsjz&code=${encodeURIComponent(normalizedCode)}&page=1&per=${normalizedDate ? 20 : 1}&sdate=${encodeURIComponent(sdate)}&edate=${encodeURIComponent(edate)}&rt=${Date.now()}`;
+  try {
+    const quote = parsePublicFundF10(normalizedCode, await fetchTextWithFallback(f10Url, 7000, { referer: 'https://fundf10.eastmoney.com/' }));
+    try {
+      const gzUrl = `https://fundgz.1234567.com.cn/js/${encodeURIComponent(normalizedCode)}.js?rt=${Date.now()}`;
+      const gz = parsePublicFundGz(normalizedCode, await fetchTextWithFallback(gzUrl, 3500, { referer: 'https://fund.eastmoney.com/' }));
+      return mergePublicFundProfile({ ...quote, name: gz.name || quote.name || '', raw: { ...quote.raw, latestPublicName: gz.name || '' } }, profile);
+    } catch {
+      return mergePublicFundProfile(quote, profile);
+    }
+  } catch (error) {
+    errors.push(`F10: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const gzUrl = `https://fundgz.1234567.com.cn/js/${encodeURIComponent(normalizedCode)}.js?rt=${Date.now()}`;
+  try {
+    return mergePublicFundProfile(parsePublicFundGz(normalizedCode, await fetchTextWithFallback(gzUrl, 7000, { referer: 'https://fund.eastmoney.com/' })), profile);
+  } catch (error) {
+    errors.push(`fundgz: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!profile) {
+    try {
+      profile = await getPublicFundProfile(normalizedCode);
+    } catch (error) {
+      errors.push(`profile: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (profile?.price) return quoteFromPublicFundProfile(profile);
+  const error = new Error(errors.join('; '));
+  error.statusCode = 502;
+  throw error;
+}
+
+async function getPublicUsdCnyQuote() {
+  const data = await fetchJsonWithFallback('https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY', 7000);
+  const rate = Number(data?.rates?.CNY || 0);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error('USD/CNY rate is empty');
+  return {
+    rate,
+    source: 'Frankfurter / ECB reference rates',
+    provider: 'frankfurter-fx',
+    asOfDate: data.date || todayISO(),
+  };
+}
+
+async function getPublicStablecoinRates() {
+  let source = 'CoinGecko Simple Price';
+  let usdtCny = 0;
+  let usdcCny = 0;
+  try {
+    const data = await fetchJsonWithTimeout('https://api.coingecko.com/api/v3/simple/price?ids=tether,usd-coin&vs_currencies=usd,cny', 3500);
+    usdtCny = Number(data?.tether?.cny || 0);
+    usdcCny = Number(data?.['usd-coin']?.cny || 0);
+  } catch (error) {
+    const usdCny = await getPublicUsdCnyQuote();
+    usdtCny = usdCny.rate;
+    usdcCny = usdCny.rate;
+    source = `USD/CNY fallback for stablecoins (CoinGecko unavailable: ${error instanceof Error ? error.message : String(error)})`;
+  }
+  if (!Number.isFinite(usdtCny) || usdtCny <= 0 || !Number.isFinite(usdcCny) || usdcCny <= 0) {
+    const usdCny = await getPublicUsdCnyQuote();
+    usdtCny = usdCny.rate;
+    usdcCny = usdCny.rate;
+    source = 'USD/CNY fallback for stablecoins';
+  }
+  return {
+    rates: {
+      'USDT/CNY': usdtCny,
+      'USDC/CNY': usdcCny,
+    },
+    source,
+    provider: 'coingecko-stablecoin',
+    asOfDate: todayISO(),
+  };
 }
 
 function weatherCodeText(code) {
@@ -2295,13 +2659,18 @@ email_error AS emailError, generated_at AS generatedAt, updated_at AS updatedAt
 FROM daily_briefs ORDER BY date DESC, id DESC LIMIT ${Math.max(1, Math.min(100, Number(limit) || 30))};`).map(dailyBriefRowToObject);
 }
 
-async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendEmail = false } = {}) {
+async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendEmail = false, sendWechat = false } = {}) {
   const settings = getDailyBriefSettings({ includeSecret: true });
   const generatedAt = nowISO();
   const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
-  const [weather, markets] = await Promise.all([
+  const [weather, markets, finance] = await Promise.all([
     getBriefWeather(settings),
     Promise.all(marketSymbols.map(getBriefMarket)),
+    updateFinanceForDailyBrief().catch((error) => ({
+      ok: false,
+      skipped: false,
+      message: `理财自动更新失败：${error instanceof Error ? error.message : String(error)}`,
+    })),
   ]);
   const payload = {
     date,
@@ -2310,6 +2679,7 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     trigger,
     weather,
     markets,
+    finance,
     learning: getDailyBriefLearningSummary(date),
   };
 
@@ -2327,6 +2697,8 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
       }
     }
   }
+  let wechatDelivery = null;
+  let wechatError = '';
 
   runSqlite(`INSERT INTO daily_briefs (date, title, payload_json, status, emailed_at, email_error, generated_at, updated_at)
 VALUES (${sqlString(date)}, ${sqlString(payload.title)}, ${sqlString(JSON.stringify(payload))}, 'completed', ${sqlValue(emailedAt)}, ${sqlString(emailError)}, ${sqlString(generatedAt)}, ${sqlString(nowISO())})
@@ -2339,7 +2711,22 @@ ON CONFLICT(date) DO UPDATE SET
   generated_at = excluded.generated_at,
   updated_at = excluded.updated_at;`);
   tableChanged();
-  return getDailyBriefByDate(date);
+  const brief = getDailyBriefByDate(date);
+  if (sendWechat || (trigger === 'auto' && settings.wechat.enabled)) {
+    const digest = buildClawbotDailyDigest(date);
+    wechatDelivery = await sendClawbotPushText(digest.text);
+    if (!wechatDelivery.ok) wechatError = wechatDelivery.error || '微信推送失败';
+  }
+  const warningText = [emailError ? `邮件推送失败：${emailError}` : '', wechatError ? `微信推送失败：${wechatError}` : ''].filter(Boolean).join('；');
+  notifyEvent({
+    eventKey: `brief:${date}`,
+    source: 'brief',
+    severity: warningText ? 'warning' : 'info',
+    title: payload.title,
+    content: warningText ? `每日简报已生成，但${warningText}` : '每日简报已生成，可在通知中心查看。',
+    payload: { date, trigger, emailedAt, emailError, wechatPushed: Boolean(wechatDelivery?.ok), wechatError },
+  });
+  return brief;
 }
 
 function nextChinaWallClockDelay(timeText = '07:00') {
@@ -2370,10 +2757,10 @@ function scheduleDailyBrief() {
   dailyBriefTimer = setTimeout(async () => {
     try {
       if (getDailyBriefSettings({ includeSecret: true }).enabled) {
-        await generateDailyBrief({ date: todayISO(), trigger: 'auto', sendEmail: true });
+        await runExclusiveTask('daily-brief', 'auto', () => generateDailyBrief({ date: todayISO(), trigger: 'auto', sendEmail: true, sendWechat: true }), { timeoutMs: 4 * 60 * 1000 });
       }
     } catch (error) {
-      console.error('[daily-brief] automatic brief failed:', error);
+      logStructured('error', 'daily_brief_failed', { error: redactSecretText(error.message || String(error)) });
     } finally {
       scheduleDailyBrief();
     }
@@ -2419,10 +2806,35 @@ function dailyBriefStudyPushHtml(learning = {}) {
   return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
+function financePnlColor(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return '#334155';
+  return value > 0 ? '#dc2626' : '#16a34a';
+}
+
+function dailyBriefFinanceHtml(finance = null) {
+  if (!finance) return '';
+  if (!finance.ok) {
+    return `<h2>理财盈亏</h2><p style="color:#b45309">${escapeHtml(finance.message || '理财行情未更新。')}</p>`;
+  }
+  const alertItems = (finance.alerts || []).slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+  return `<h2>理财盈亏</h2>
+  <p style="color:#64748b">行情更新时间：${escapeHtml(new Date(finance.latestQuoteFetchedAt || finance.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p>
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0">
+    <tbody>
+      <tr><td>总资产估值</td><td style="text-align:right"><strong>${escapeHtml(financeFormatMoney(finance.totalAssetsCny, 'CNY'))}</strong></td></tr>
+      <tr><td>今日盈亏</td><td style="text-align:right;color:${financePnlColor(finance.todayPnlCny)}">${escapeHtml(financeFormatMoney(finance.todayPnlCny, 'CNY'))}</td></tr>
+      <tr><td>起算后盈亏</td><td style="text-align:right;color:${financePnlColor(finance.cumulativePnlCny)}">${escapeHtml(financeFormatMoney(finance.cumulativePnlCny, 'CNY'))}</td></tr>
+    </tbody>
+  </table>
+  ${alertItems ? `<p><strong>数据提示：</strong></p><ul>${alertItems}</ul>` : '<p style="color:#16a34a">暂无明显数据异常。</p>'}
+  <p style="color:#64748b">说明：这是基于公开行情和手动录入数据的估算，不是实时账户余额；稳定币参考年化不会自动计入收益。</p>`;
+}
+
 function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
   const learning = payload.learning || {};
+  const finance = payload.finance || null;
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
   const studyPush = dailyBriefStudyPushHtml(learning);
@@ -2438,6 +2850,7 @@ function dailyBriefHtml(payload) {
   ${studyPush}
   ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
   ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
+  ${dailyBriefFinanceHtml(finance)}
   <h2>指数与资产</h2>
   <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>名称</th><th>代码</th><th>最新</th><th>涨跌</th></tr></thead><tbody>${marketRows || '<tr><td colspan="4">暂无配置</td></tr>'}</tbody></table>
 </body></html>`;
@@ -2778,6 +3191,14 @@ ON CONFLICT(kind, period_start, period_end) DO UPDATE SET
   payload_json = excluded.payload_json,
   generated_at = excluded.generated_at,
   updated_at = excluded.updated_at;`);
+  notifyEvent({
+    eventKey: `report:${report.kind}:${report.periodStart}:${report.periodEnd}`,
+    source: 'report',
+    severity: 'info',
+    title: report.title,
+    content: `${report.periodStart} 至 ${report.periodEnd} 的${report.kind === 'monthly' ? '月报' : '周报'}已生成。`,
+    payload: { kind: report.kind, periodStart: report.periodStart, periodEnd: report.periodEnd, trigger: report.trigger },
+  });
   return report;
 }
 
@@ -2850,12 +3271,22 @@ LIMIT 24;`);
 
 function createBackupFile(kind = 'manual', note = '') {
   mkdirSync(backupsDir, { recursive: true });
+  assertDiskSpace();
   const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
   const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
   let libraryArchivePath = null;
   runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
   if (existsSync(filePath)) unlinkSync(filePath);
   runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
+  const integrity = runSqliteFile(filePath, 'PRAGMA integrity_check;').trim();
+  if (integrity !== 'ok') {
+    try {
+      unlinkSync(filePath);
+    } catch {
+      // Ignore cleanup failure; the integrity error below is the useful signal.
+    }
+    throw new Error(`Backup integrity check failed: ${integrity}`);
+  }
   if (existsSync(libraryFilesDir)) {
     libraryArchivePath = join(backupsDir, `exam-planner-${kind}-${timestamp}-library.tar.gz`);
     const archiveResult = spawnSync('tar', ['-czf', libraryArchivePath, '-C', libraryDir, 'files'], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
@@ -3008,6 +3439,7 @@ function runSqliteMaintenance(kind = 'manual') {
   ensureSqliteStore();
   const ranAt = nowISO();
   try {
+    runSqlite(`DELETE FROM visit_events WHERE substr(created_at, 1, 10) < ${sqlString(addDaysISO(todayISO(), -180))};`);
     runSqlite('PRAGMA optimize;\nANALYZE;');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_sqlite_maintenance_at', ${sqlString(ranAt)}, datetime('now'))
@@ -3033,13 +3465,16 @@ function scheduleDailyMaintenance() {
   nextMaintenanceAt = nextAt;
   setTimeout(async () => {
     try {
-      ensureWeeklyBackup();
-      await precomputeNightlyArtifacts('nightly');
-      runSqliteMaintenance('nightly');
-      getDashboardPayload('write');
-      getStatisticsSummary();
+      await runExclusiveTask('nightly-maintenance', 'nightly', async () => {
+        ensureWeeklyBackup();
+        await precomputeNightlyArtifacts('nightly');
+        runSqliteMaintenance('nightly');
+        getDashboardPayload('write');
+        getStatisticsSummary();
+        return { ok: true };
+      }, { timeoutMs: 30 * 60 * 1000 });
     } catch (error) {
-      console.error('[maintenance] nightly maintenance failed:', error);
+      logStructured('error', 'nightly_maintenance_failed', { error: redactSecretText(error.message || String(error)) });
     } finally {
       scheduleDailyMaintenance();
     }
@@ -3083,6 +3518,43 @@ function getRuntimeStatus() {
   };
 }
 
+function getHealthPayload() {
+  const checks = [];
+  let ok = true;
+  const addCheck = (name, status, detail = {}) => {
+    if (status !== 'ok') ok = false;
+    checks.push({ name, status, ...detail });
+  };
+  try {
+    ensureSqliteStore();
+    const integrity = sqliteScalar('PRAGMA integrity_check;');
+    addCheck('sqlite', integrity === 'ok' ? 'ok' : 'error', { integrity });
+  } catch (error) {
+    addCheck('sqlite', 'error', { error: redactSecretText(error.message || String(error)) });
+  }
+  try {
+    const disk = getDiskStatus();
+    addCheck('disk', !disk || disk.availableBytes >= minFreeDiskBytes ? 'ok' : 'warn', { disk });
+  } catch (error) {
+    addCheck('disk', 'error', { error: redactSecretText(error.message || String(error)) });
+  }
+  try {
+    const backup = getBackupStatus();
+    addCheck('backup', backup.lastBackup ? 'ok' : 'warn', { backupCount: backup.backupCount, lastBackupAt: backup.lastBackup?.createdAt ?? null });
+  } catch (error) {
+    addCheck('backup', 'error', { error: redactSecretText(error.message || String(error)) });
+  }
+  addCheck('tasks', activeTaskLocks.size ? 'warn' : 'ok', { active: Array.from(activeTaskLocks) });
+  return {
+    ok,
+    status: ok ? 'ok' : 'degraded',
+    generatedAt: nowISO(),
+    version: process.env.npm_package_version || '0.0.0',
+    runtime: getRuntimeStatus(),
+    checks,
+  };
+}
+
 function getTaskCenterStatus() {
   ensureSqliteStore();
   const reports = listLearningReports();
@@ -3103,6 +3575,13 @@ LIMIT 1;`)[0] || null;
   const lastPrecomputeAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_at' LIMIT 1;") || null;
   const lastPrecomputeTrigger = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_trigger' LIMIT 1;") || null;
   const lastPrecomputeError = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_precompute_error' LIMIT 1;") || '';
+  const taskMetrics = (() => {
+    try {
+      return taskRunsRepository.getMetrics();
+    } catch {
+      return { total: 0, running: 0, completed: 0, failed: 0, last24h: 0, averageDurationMs: null, maxDurationMs: null, byName: [] };
+    }
+  })();
   return {
     generatedAt: nowISO(),
     backup: {
@@ -3142,8 +3621,143 @@ LIMIT 1;`)[0] || null;
       studyTimeRecords: studyRows,
       revision: dataRevision,
     },
+    tasks: {
+      active: Array.from(activeTaskLocks),
+      latestRuns: lastTaskRuns(12),
+      metrics: taskMetrics,
+    },
     runtime: getRuntimeStatus(),
   };
+}
+
+function runStructuredMigrations() {
+  const currentVersion = Number(sqliteScalar("SELECT value FROM app_metadata WHERE key = 'structured_schema_version' LIMIT 1;") || 0);
+  const applied = runSqlMigrations({
+    sqlite: sqliteRepository,
+    migrationsDir,
+    currentVersion,
+    setVersion: (version) => runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', ${sqlString(String(version))}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`),
+  });
+  if (applied.length) {
+    logStructured('info', 'sqlite_migrations_applied', { applied });
+  }
+}
+
+function notifyEvent(payload) {
+  try {
+    notificationRepository.upsertEvent(payload);
+  } catch (error) {
+    logStructured('warn', 'notification_event_failed', { error: redactSecretText(error.message || String(error)), eventKey: payload?.eventKey });
+  }
+}
+
+function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
+  ensureSqliteStore();
+  const wechatClawbot = resolveOpenClawWechatConfig();
+  const storedChannels = notificationRepository.listChannels();
+  const channels = storedChannels.some((channel) => channel.channelKey === 'clawbot_weixin') ? storedChannels : [
+    ...storedChannels,
+    {
+      id: 0,
+      channelKey: 'clawbot_weixin',
+      type: 'clawbot_weixin',
+      name: '微信 ClawBot',
+      enabled: wechatClawbot.enabled && wechatClawbot.configured,
+      config: { scheduleTime: wechatClawbot.scheduleTime },
+      createdAt: nowISO(),
+      updatedAt: nowISO(),
+    },
+  ];
+  return {
+    generatedAt: nowISO(),
+    channels,
+    channelReadiness: channels.map((channel) => ({
+      channelKey: channel.channelKey,
+      type: channel.type,
+      ...notificationChannelReadiness(channel),
+    })),
+    events: notificationRepository.listEvents({ status, limit: 80 }),
+    deliveries: notificationRepository.listDeliveries(80),
+    metrics: notificationRepository.metrics(),
+    wechatClawbot,
+    readOnly: sessionRole === 'read',
+    channelPlan: {
+      clawbotWeixin: {
+        enabled: wechatClawbot.enabled && wechatClawbot.configured,
+        requiredEnv: ['OPENCLAW_CLAWBOT_CHANNEL', 'OPENCLAW_CLAWBOT_ACCOUNT', 'OPENCLAW_CLAWBOT_TARGET'],
+        method: 'openclaw message send via local OpenClaw gateway',
+      },
+      telegram: {
+        enabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
+        requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+        method: 'POST https://api.telegram.org/bot<token>/sendMessage',
+      },
+      wecomWebhook: {
+        enabled: Boolean(process.env.WECOM_WEBHOOK_URL),
+        requiredEnv: ['WECOM_WEBHOOK_URL'],
+        method: 'POST webhook URL with msgtype text/markdown',
+      },
+      genericWebhook: {
+        enabled: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
+        requiredEnv: ['NOTIFICATION_WEBHOOK_URL'],
+        method: 'POST JSON payload for claw or other relay services',
+      },
+    },
+  };
+}
+
+function getCalendarPayload(sessionRole, { from, to } = {}) {
+  ensureSqliteStore();
+  return {
+    generatedAt: nowISO(),
+    from,
+    to,
+    events: calendarRepository.getEvents({ from, to }),
+    readOnly: sessionRole === 'read',
+  };
+}
+
+function collectOperationalNotifications() {
+  try {
+    const status = getHealthPayload();
+    const disk = status.checks?.find?.((check) => check.name === 'disk')?.detail?.disk;
+    if (disk && disk.availableBytes < minFreeDiskBytes) {
+      notifyEvent({
+        eventKey: `ops:disk:${todayISO()}`,
+        source: 'ops',
+        severity: 'warning',
+        title: '服务器磁盘空间预警',
+        content: `可用空间低于阈值，当前剩余 ${Math.round(disk.availableBytes / 1024 / 1024)} MB。`,
+        payload: { disk },
+      });
+    }
+    const taskMetrics = taskRunsRepository.getMetrics();
+    if (taskMetrics.failed > 0) {
+      notifyEvent({
+        eventKey: `ops:task-failed:${todayISO()}`,
+        source: 'ops',
+        severity: 'warning',
+        title: '后台任务存在失败记录',
+        content: `任务中心累计失败 ${taskMetrics.failed} 次，建议查看后台任务控制台。`,
+        payload: { metrics: taskMetrics },
+      });
+    }
+    const apiMetrics = opsRepository.getApiMetrics?.();
+    if (apiMetrics?.serverErrors > 0) {
+      notifyEvent({
+        eventKey: `ops:api-error:${todayISO()}`,
+        source: 'ops',
+        severity: 'warning',
+        title: '接口错误需要关注',
+        content: `请求日志中存在 ${apiMetrics.serverErrors} 个服务端错误。`,
+        payload: { apiMetrics },
+      });
+    }
+  } catch (error) {
+    logStructured('warn', 'collect_operational_notifications_failed', { error: redactSecretText(error.message || String(error)) });
+  }
 }
 
 function ensureSqliteStore() {
@@ -3165,6 +3779,15 @@ CREATE TABLE IF NOT EXISTS app_metadata (
 CREATE TABLE IF NOT EXISTS app_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS finance_vaults (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  vault_json TEXT NOT NULL,
+  client_updated_at TEXT NOT NULL,
+  device_id TEXT NOT NULL DEFAULT '',
+  byte_size INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dictionary_entries (
@@ -3268,6 +3891,19 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('structured_schema_version', '11', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
+  if (structuredVersion < 12) {
+    createBackupFile('pre-visit-events', 'automatic backup before visit statistics migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '12', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (structuredVersion < 13) {
+    createBackupFile('pre-observability', 'automatic backup before task, audit and request log migration');
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('structured_schema_version', '13', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  runStructuredMigrations();
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -3311,13 +3947,738 @@ function writeState(state) {
 }
 
 function sendJson(res, data, status = 200) {
-  res.writeHead(status, {
+  const headers = {
     'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,x-backup-password',
-  });
+    'access-control-allow-headers': 'content-type,x-backup-password,x-clawbot-secret,authorization',
+  };
+  if (corsOrigin) {
+    headers['access-control-allow-origin'] = corsOrigin;
+    headers.vary = 'Origin';
+  }
+  res.writeHead(status, headers);
   res.end(JSON.stringify(data));
+}
+
+function normalizeFinanceVaultPayload(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    const error = new Error('Invalid finance vault payload');
+    error.statusCode = 400;
+    throw error;
+  }
+  if ('financeData' in input || 'assets' in input || 'transactions' in input) {
+    const error = new Error('Finance vault must be encrypted before upload');
+    error.statusCode = 400;
+    throw error;
+  }
+  const vault = {
+    version: Number(input.version || 1),
+    kdf: String(input.kdf || ''),
+    iterations: Number(input.iterations || 0),
+    salt: String(input.salt || ''),
+    iv: String(input.iv || ''),
+    ciphertext: String(input.ciphertext || ''),
+    updatedAt: String(input.updatedAt || ''),
+  };
+  if (vault.version !== 1 || vault.kdf !== 'PBKDF2-SHA256' || !vault.salt || !vault.iv || !vault.ciphertext || !vault.updatedAt) {
+    const error = new Error('Invalid encrypted finance vault fields');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!Number.isFinite(vault.iterations) || vault.iterations < 100_000) {
+    const error = new Error('Finance vault KDF iterations are too low');
+    error.statusCode = 400;
+    throw error;
+  }
+  const byteSize = Buffer.byteLength(JSON.stringify(vault), 'utf8');
+  if (byteSize > 10 * 1024 * 1024) {
+    const error = new Error('Finance vault is too large');
+    error.statusCode = 413;
+    throw error;
+  }
+  return { vault, byteSize };
+}
+
+function financeVaultRowToPayload(row) {
+  if (!row) return { vault: null, meta: null };
+  const vault = JSON.parse(row.vaultJson);
+  return {
+    vault,
+    meta: {
+      updatedAt: row.updatedAt,
+      clientUpdatedAt: row.clientUpdatedAt,
+      deviceId: row.deviceId || '',
+      byteSize: Number(row.byteSize || 0),
+    },
+  };
+}
+
+function getFinanceVaultPayload() {
+  ensureSqliteStore();
+  const row = sqliteJson(`SELECT vault_json AS vaultJson, client_updated_at AS clientUpdatedAt, device_id AS deviceId, byte_size AS byteSize, updated_at AS updatedAt
+FROM finance_vaults
+WHERE id = 1
+LIMIT 1;`)[0];
+  return financeVaultRowToPayload(row);
+}
+
+function saveFinanceVaultPayload(input, deviceId = '') {
+  ensureSqliteStore();
+  const { vault, byteSize } = normalizeFinanceVaultPayload(input);
+  const timestamp = nowISO();
+  runSqlite(`INSERT INTO finance_vaults (id, vault_json, client_updated_at, device_id, byte_size, created_at, updated_at)
+VALUES (1, ${sqlString(JSON.stringify(vault))}, ${sqlString(vault.updatedAt)}, ${sqlString(String(deviceId || '').slice(0, 120))}, ${sqlValue(byteSize)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
+ON CONFLICT(id) DO UPDATE SET
+  vault_json = excluded.vault_json,
+  client_updated_at = excluded.client_updated_at,
+  device_id = excluded.device_id,
+  byte_size = excluded.byte_size,
+  updated_at = excluded.updated_at;`);
+  tableChanged();
+  return getFinanceVaultPayload();
+}
+
+function deleteFinanceVaultPayload() {
+  ensureSqliteStore();
+  runSqlite('DELETE FROM finance_vaults WHERE id = 1;');
+  tableChanged();
+  return { ok: true, vault: null, meta: null };
+}
+
+function financeServerPassphrase() {
+  return String(process.env.FINANCE_VAULT_PASSPHRASE || '').trim();
+}
+
+function decryptFinanceVaultOnServer(vault, passphrase) {
+  const salt = Buffer.from(String(vault.salt || ''), 'base64');
+  const iv = Buffer.from(String(vault.iv || ''), 'base64');
+  const encrypted = Buffer.from(String(vault.ciphertext || ''), 'base64');
+  if (encrypted.length <= 16) throw new Error('理财密文长度异常');
+  const key = pbkdf2Sync(Buffer.from(passphrase, 'utf8'), salt, Number(vault.iterations || 0), 32, 'sha256');
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(encrypted.subarray(encrypted.length - 16));
+  const plaintext = Buffer.concat([decipher.update(encrypted.subarray(0, encrypted.length - 16)), decipher.final()]);
+  return JSON.parse(plaintext.toString('utf8'));
+}
+
+function encryptFinanceVaultOnServer(data, passphrase) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const iterations = 180_000;
+  const key = pbkdf2Sync(Buffer.from(passphrase, 'utf8'), salt, iterations, 32, 'sha256');
+  const updatedAt = nowISO();
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify({ ...data, updatedAt }), 'utf8'),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]);
+  return {
+    version: 1,
+    kdf: 'PBKDF2-SHA256',
+    iterations,
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    ciphertext: ciphertext.toString('base64'),
+    updatedAt,
+  };
+}
+
+function normalizeServerFinanceData(input = {}) {
+  return {
+    schemaVersion: 1,
+    createdAt: input.createdAt || nowISO(),
+    updatedAt: input.updatedAt || nowISO(),
+    settings: {
+      baseCurrency: 'CNY',
+      displayCurrency: input.settings?.displayCurrency || 'CNY',
+      amountHidden: Boolean(input.settings?.amountHidden),
+      useChinaFundColors: input.settings?.useChinaFundColors !== false,
+      dailyAutoUpdate: input.settings?.dailyAutoUpdate !== false,
+      performanceStartDate: input.settings?.performanceStartDate || todayISO(),
+      lastAutoQuoteUpdateDate: input.settings?.lastAutoQuoteUpdateDate,
+    },
+    assets: Array.isArray(input.assets) ? input.assets : [],
+    transactions: Array.isArray(input.transactions) ? input.transactions : [],
+    plans: Array.isArray(input.plans) ? input.plans : [],
+    targets: Array.isArray(input.targets) ? input.targets : [],
+    quotes: input.quotes && typeof input.quotes === 'object' ? input.quotes : {},
+    exchangeRates: input.exchangeRates && typeof input.exchangeRates === 'object' ? input.exchangeRates : {},
+    quoteLogs: Array.isArray(input.quoteLogs) ? input.quoteLogs : [],
+  };
+}
+
+function financeId(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
+}
+
+function financeRound(value, digits = 2) {
+  if (!Number.isFinite(Number(value))) return 0;
+  const factor = 10 ** digits;
+  return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
+}
+
+function financeFormatMoney(value, currency = 'CNY') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '待补充';
+  return `${financeRound(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
+}
+
+function financeFormatPercent(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '暂无法计算';
+  return `${financeRound(value, 2).toFixed(2)}%`;
+}
+
+function financeIsCash(asset) {
+  return asset?.assetType === 'CASH_CNY' || asset?.assetType === 'CASH_USD';
+}
+
+function financeRateToCny(currency, data) {
+  if (currency === 'CNY') return { rate: 1, warning: '' };
+  const quote = data.exchangeRates?.[`${currency}/CNY`];
+  if (quote?.rate && Number.isFinite(Number(quote.rate)) && Number(quote.rate) > 0) return { rate: Number(quote.rate), warning: '' };
+  return { rate: null, warning: `${currency}/CNY 汇率缺失` };
+}
+
+function financeConvertToCny(value, currency, data) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return { value: null, warning: '' };
+  const rate = financeRateToCny(currency, data);
+  return { value: rate.rate === null ? null : financeRound(value * rate.rate), warning: rate.warning };
+}
+
+function financeComparisonDate(previousDate, currentDate) {
+  const previous = String(previousDate || '').slice(0, 10);
+  const current = String(currentDate || '').slice(0, 10);
+  return previous && current && previous < current ? previous : '';
+}
+
+function financeComparisonQuotePrice(asset, quote) {
+  const currentPrice = financeQuotePriceForAsset(asset, quote);
+  if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice)) return { currentPrice: null, previousPrice: null };
+  const previousPrice = typeof quote?.previousPrice === 'number' && Number.isFinite(quote.previousPrice) ? quote.previousPrice : null;
+  if (previousPrice === null) return { currentPrice, previousPrice: null };
+  if (!quote?.previousPriceDate) return { currentPrice, previousPrice };
+  const previousHistorical = financeComparisonDate(quote.previousPriceDate, quote.priceDate);
+  return { currentPrice, previousPrice: previousHistorical ? previousPrice : null };
+}
+
+function financeComparisonRateToCny(currency, data) {
+  if (currency === 'CNY') return { currentRate: 1, previousRate: 1 };
+  const quote = data.exchangeRates?.[`${currency}/CNY`];
+  const currentRate = typeof quote?.rate === 'number' && Number.isFinite(quote.rate) ? quote.rate : null;
+  const previousRate = typeof quote?.previousRate === 'number' && Number.isFinite(quote.previousRate) ? quote.previousRate : null;
+  if (previousRate === null) return { currentRate, previousRate: null };
+  if (!quote?.previousAsOfDate) return { currentRate, previousRate };
+  return { currentRate, previousRate: financeComparisonDate(quote.previousAsOfDate, quote.asOfDate) ? previousRate : null };
+}
+
+function financeQuotePriceForAsset(asset, quote) {
+  if (typeof quote?.price === 'number' && Number.isFinite(quote.price) && quote.price > 0) return quote.price;
+  if (typeof asset.latestPrice === 'number' && Number.isFinite(asset.latestPrice) && asset.latestPrice > 0) return asset.latestPrice;
+  if (asset.assetType === 'CRYPTO_STABLECOIN' || asset.assetType === 'CRYPTO_STABLECOIN_EARN') return 1;
+  if (asset.quoteProvider === 'manual' && typeof asset.currentAmount === 'number') return 1;
+  return null;
+}
+
+function financeEmptyLedger() {
+  return { units: null, cashBalance: 0, cost: 0, hasCost: false, realizedPnl: 0, issues: [] };
+}
+
+function financeLedger(ledgers, assetId) {
+  if (!ledgers.has(assetId)) ledgers.set(assetId, financeEmptyLedger());
+  return ledgers.get(assetId);
+}
+
+function financeAddUnits(row, units) {
+  if (typeof units !== 'number' || !Number.isFinite(units)) return;
+  row.units = (row.units ?? 0) + units;
+}
+
+function financeAddCost(row, amount, fee = 0) {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return;
+  row.cost += amount + fee;
+  row.hasCost = true;
+}
+
+function financeApplyOpeningPosition(transaction, asset, row, quote) {
+  if (!asset) return;
+  if (financeIsCash(asset)) {
+    row.cashBalance += transaction.amount ?? 0;
+    financeAddCost(row, transaction.amount ?? 0, 0);
+    return;
+  }
+  const openingAmount = transaction.amount ?? asset.trackingBaselineAmount ?? asset.currentAmount ?? null;
+  const openingPrice = transaction.price ?? financeQuotePriceForAsset(asset, quote);
+  const estimatedUnits =
+    transaction.units ??
+    asset.trackingBaselineUnits ??
+    asset.units ??
+    (typeof openingAmount === 'number' && typeof openingPrice === 'number' && openingPrice > 0 ? financeRound(openingAmount / openingPrice, 6) : null);
+  financeAddUnits(row, estimatedUnits);
+  financeAddCost(row, transaction.costAmount ?? asset.trackingBaselineAmount ?? asset.totalCost ?? openingAmount, 0);
+}
+
+function financeSeedTrackingBaseline(asset, row, quote) {
+  const baselineAmount = asset.trackingBaselineAmount ?? asset.currentAmount ?? null;
+  if (financeIsCash(asset)) {
+    if (typeof baselineAmount === 'number' && Number.isFinite(baselineAmount)) {
+      row.cashBalance += baselineAmount;
+      financeAddCost(row, baselineAmount, 0);
+    }
+    return;
+  }
+  const price = financeQuotePriceForAsset(asset, quote);
+  const units =
+    asset.trackingBaselineUnits ??
+    asset.units ??
+    (typeof baselineAmount === 'number' && typeof price === 'number' && price > 0 ? financeRound(baselineAmount / price, 6) : null);
+  financeAddUnits(row, units);
+  financeAddCost(row, asset.totalCost ?? baselineAmount, 0);
+}
+
+function financePendingRelatedFx(transaction, transactionsById) {
+  return Array.isArray(transaction.relatedTransactionIds) && transaction.relatedTransactionIds.some((id) => {
+    const related = transactionsById.get(id);
+    return related?.type === 'FX_CONVERSION' && related.status === 'pending';
+  });
+}
+
+function financeApplySell(transaction, row) {
+  const amount = transaction.amount ?? 0;
+  const fee = transaction.fee ?? 0;
+  const units = transaction.units ?? null;
+  if (typeof units === 'number' && Number.isFinite(units) && row.units && row.units > 0 && row.hasCost) {
+    const costRemoved = row.cost * Math.min(1, Math.max(0, units / row.units));
+    row.units -= units;
+    row.cost -= costRemoved;
+    row.realizedPnl += amount - fee - costRemoved;
+  } else {
+    row.realizedPnl += amount - fee;
+    row.issues.push('卖出记录缺少份额或成本，已实现盈亏只能近似记录。');
+  }
+}
+
+function financeApplyConfirmedTransaction(transaction, assetMap, ledgers, transactionsById, data) {
+  if (transaction.status !== 'confirmed') return;
+  if (transaction.type === 'FX_CONVERSION') {
+    if (!transaction.fromAssetId || !transaction.toAssetId || !transaction.toAmount) return;
+    const fromRow = financeLedger(ledgers, transaction.fromAssetId);
+    const toRow = financeLedger(ledgers, transaction.toAssetId);
+    const fee = transaction.fee ?? 0;
+    const fromAmount = transaction.amount ?? (transaction.fxRate ? transaction.toAmount * transaction.fxRate + fee : null);
+    if (typeof fromAmount !== 'number' || !Number.isFinite(fromAmount)) {
+      fromRow.issues.push('换汇交易缺少成交汇率或扣款金额。');
+      return;
+    }
+    fromRow.cashBalance -= fromAmount;
+    toRow.cashBalance += transaction.toAmount;
+    return;
+  }
+
+  if (!transaction.assetId) return;
+  const asset = assetMap.get(transaction.assetId);
+  const row = financeLedger(ledgers, transaction.assetId);
+  const fee = transaction.fee ?? 0;
+  if (transaction.type === 'OPENING_POSITION') {
+    financeApplyOpeningPosition(transaction, asset, row, asset ? data.quotes?.[asset.id] ?? null : null);
+  } else if (transaction.type === 'CASH_DEPOSIT' || transaction.type === 'TRANSFER_IN') {
+    row.cashBalance += transaction.amount ?? 0;
+  } else if (transaction.type === 'CASH_WITHDRAWAL' || transaction.type === 'TRANSFER_OUT') {
+    row.cashBalance -= transaction.amount ?? 0;
+  } else if (transaction.type === 'BUY') {
+    financeAddUnits(row, transaction.units);
+    financeAddCost(row, transaction.amount, fee);
+    if (transaction.sourceCashAssetId && !financePendingRelatedFx(transaction, transactionsById)) {
+      financeLedger(ledgers, transaction.sourceCashAssetId).cashBalance -= transaction.amount ?? 0;
+    }
+  } else if (transaction.type === 'SELL') {
+    financeApplySell(transaction, row);
+    if (transaction.sourceCashAssetId) financeLedger(ledgers, transaction.sourceCashAssetId).cashBalance += (transaction.amount ?? 0) - fee;
+  } else if (transaction.type === 'INTEREST' || transaction.type === 'REWARD' || transaction.type === 'DIVIDEND') {
+    financeAddUnits(row, transaction.units);
+    if (typeof transaction.units !== 'number' || !Number.isFinite(transaction.units) || transaction.units === 0) {
+      row.realizedPnl += transaction.amount ?? 0;
+    }
+  } else if (transaction.type === 'FEE') {
+    financeAddUnits(row, transaction.units);
+    if (typeof transaction.units !== 'number' || !Number.isFinite(transaction.units) || transaction.units === 0) {
+      row.realizedPnl -= transaction.amount ?? fee;
+    }
+  }
+}
+
+function financeMarketValueFromAsset(asset, row, quote) {
+  if (financeIsCash(asset)) return row.cashBalance || asset.currentAmount || 0;
+  const units = row.units ?? asset.units ?? asset.trackingBaselineUnits ?? null;
+  const price = financeQuotePriceForAsset(asset, quote);
+  if (typeof units === 'number' && Number.isFinite(units) && typeof price === 'number' && Number.isFinite(price)) return financeRound(units * price, 4);
+  if (typeof asset.currentAmount === 'number' && Number.isFinite(asset.currentAmount)) return asset.currentAmount;
+  return null;
+}
+
+function financeBuildPortfolioSnapshot(data) {
+  const activeAssets = data.assets.filter((asset) => asset.status !== 'archived');
+  const assetMap = new Map(activeAssets.map((asset) => [asset.id, asset]));
+  const transactionsById = new Map(data.transactions.map((transaction) => [transaction.id, transaction]));
+  const ledgers = new Map();
+  const hasOpening = new Set(data.transactions.filter((item) => item.status === 'confirmed' && item.type === 'OPENING_POSITION' && item.assetId).map((item) => item.assetId));
+  activeAssets.forEach((asset) => {
+    const row = financeLedger(ledgers, asset.id);
+    if (!hasOpening.has(asset.id)) financeSeedTrackingBaseline(asset, row, data.quotes?.[asset.id] ?? null);
+  });
+  data.transactions.forEach((transaction) => financeApplyConfirmedTransaction(transaction, assetMap, ledgers, transactionsById, data));
+
+  const holdings = activeAssets.map((asset) => {
+    const row = financeLedger(ledgers, asset.id);
+    const quote = data.quotes?.[asset.id] ?? null;
+    const quoteComparison = financeComparisonQuotePrice(asset, quote);
+    const nativeMarketValue = financeMarketValueFromAsset(asset, row, quote);
+    const cny = financeConvertToCny(nativeMarketValue, asset.currency, data);
+    const costNative = row.hasCost ? row.cost : asset.trackingBaselineAmount ?? asset.totalCost ?? asset.currentAmount ?? null;
+    const unrealizedPnlNative = costNative === null || nativeMarketValue === null ? null : financeRound(nativeMarketValue - costNative);
+    const cumulativePnlNative = unrealizedPnlNative === null ? null : financeRound(unrealizedPnlNative + row.realizedPnl);
+    const todayPnlNative =
+      quoteComparison.previousPrice !== null
+      && quoteComparison.currentPrice !== null
+      && row.units !== null
+      && !financeIsCash(asset)
+        ? financeRound((quoteComparison.currentPrice - quoteComparison.previousPrice) * row.units)
+        : null;
+    const rateComparison = financeComparisonRateToCny(asset.currency, data);
+    const previousNativeMarketValue =
+      financeIsCash(asset)
+        ? nativeMarketValue
+        : row.units !== null && quoteComparison.previousPrice !== null
+          ? financeRound(row.units * quoteComparison.previousPrice, 4)
+          : typeof nativeMarketValue === 'number' && Number.isFinite(nativeMarketValue) && rateComparison.previousRate !== null
+            ? nativeMarketValue
+            : null;
+    const previousCnyMarketValue =
+      typeof previousNativeMarketValue === 'number'
+      && Number.isFinite(previousNativeMarketValue)
+      && rateComparison.previousRate !== null
+        ? financeRound(previousNativeMarketValue * rateComparison.previousRate)
+        : null;
+    const issues = [...row.issues];
+    if (cny.warning) issues.push(cny.warning);
+    if (quote?.failed) issues.push(`行情更新失败：${quote.error ?? '未知错误'}`);
+    return {
+      asset,
+      units: row.units ?? asset.units ?? asset.trackingBaselineUnits ?? null,
+      nativeMarketValue,
+      cnyMarketValue: cny.value,
+      costNative,
+      cumulativePnlNative,
+      cumulativePnlCny: financeConvertToCny(cumulativePnlNative, asset.currency, data).value,
+      todayPnlNative,
+      todayPnlCny:
+        typeof cny.value === 'number'
+        && Number.isFinite(cny.value)
+        && typeof previousCnyMarketValue === 'number'
+        && Number.isFinite(previousCnyMarketValue)
+          ? financeRound(cny.value - previousCnyMarketValue)
+          : financeConvertToCny(todayPnlNative, asset.currency, data).value,
+      returnRate: costNative && cumulativePnlNative !== null ? financeRound((cumulativePnlNative / costNative) * 100, 4) : null,
+      quote,
+      issues: Array.from(new Set(issues)),
+    };
+  });
+  const totalAssetsCny = financeRound(holdings.reduce((sum, holding) => sum + (holding.cnyMarketValue ?? 0), 0));
+  const cumulativeValues = holdings.map((holding) => holding.cumulativePnlCny).filter((value) => typeof value === 'number' && Number.isFinite(value));
+  const todayValues = holdings.map((holding) => holding.todayPnlCny).filter((value) => typeof value === 'number' && Number.isFinite(value));
+  const latestQuoteFetchedAt = [
+    ...Object.values(data.quotes || {}).map((quote) => quote?.fetchedAt || ''),
+    ...Object.values(data.exchangeRates || {}).map((rate) => rate?.fetchedAt || ''),
+  ].filter(Boolean).sort().at(-1) || '尚未更新';
+  return {
+    generatedAt: nowISO(),
+    holdings,
+    totalAssetsCny,
+    todayPnlCny: todayValues.length ? financeRound(todayValues.reduce((sum, value) => sum + value, 0)) : null,
+    cumulativePnlCny: cumulativeValues.length ? financeRound(cumulativeValues.reduce((sum, value) => sum + value, 0)) : null,
+    latestQuoteFetchedAt,
+    alerts: holdings.flatMap((holding) => holding.issues.map((issue) => `${holding.asset.name}: ${issue}`)).slice(0, 8),
+  };
+}
+
+function serverFailedFinanceQuote(asset, previous, error) {
+  return {
+    id: financeId('quote'),
+    targetId: asset.id,
+    targetType: 'asset',
+    price: previous?.price ?? asset.latestPrice ?? null,
+    currency: asset.currency,
+    priceDate: previous?.priceDate ?? asset.priceDate ?? todayISO(),
+    fetchedAt: nowISO(),
+    source: previous?.source ?? asset.dataSource ?? asset.quoteProvider,
+    provider: asset.quoteProvider,
+    isManual: asset.quoteProvider === 'manual',
+    failed: true,
+    error: error instanceof Error ? error.message : String(error),
+    previousPrice: previous?.previousPrice ?? null,
+    previousPriceDate: previous?.previousPriceDate,
+  };
+}
+
+function serverFailedFinanceRate(pair, previous, error) {
+  return {
+    pair,
+    rate: previous?.rate ?? null,
+    source: previous?.source ?? '公开行情',
+    provider: previous?.provider ?? 'manual',
+    asOfDate: previous?.asOfDate ?? todayISO(),
+    fetchedAt: nowISO(),
+    isManual: false,
+    failed: true,
+    error: error instanceof Error ? error.message : String(error),
+    previousRate: previous?.previousRate ?? null,
+    previousAsOfDate: previous?.previousAsOfDate,
+  };
+}
+
+function serverQuoteBaseline(previous, nextPriceDate, fallbackPrice = null, fallbackDate = '') {
+  const currentDate = String(nextPriceDate || '').slice(0, 10);
+  const directPrice = typeof previous?.price === 'number' && Number.isFinite(previous.price) ? previous.price : fallbackPrice;
+  const directDate = financeComparisonDate(previous?.priceDate || fallbackDate, currentDate);
+  if (directDate) return { previousPrice: directPrice, previousPriceDate: directDate };
+  const preservedPrice = typeof previous?.previousPrice === 'number' && Number.isFinite(previous.previousPrice) ? previous.previousPrice : null;
+  const preservedDate = financeComparisonDate(previous?.previousPriceDate, currentDate);
+  if (preservedDate) return { previousPrice: preservedPrice, previousPriceDate: preservedDate };
+  return { previousPrice: null, previousPriceDate: '' };
+}
+
+function serverRateBaseline(previous, nextAsOfDate) {
+  const currentDate = String(nextAsOfDate || '').slice(0, 10);
+  const directDate = financeComparisonDate(previous?.asOfDate, currentDate);
+  if (directDate) {
+    return {
+      previousRate: typeof previous?.rate === 'number' && Number.isFinite(previous.rate) ? previous.rate : null,
+      previousAsOfDate: directDate,
+    };
+  }
+  const preservedDate = financeComparisonDate(previous?.previousAsOfDate, currentDate);
+  if (preservedDate) {
+    return {
+      previousRate: typeof previous?.previousRate === 'number' && Number.isFinite(previous.previousRate) ? previous.previousRate : null,
+      previousAsOfDate: preservedDate,
+    };
+  }
+  return { previousRate: null, previousAsOfDate: '' };
+}
+
+async function mapWithLimit(items, limit, mapper) {
+  const results = [];
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+async function updateFinanceQuotesOnServer(data) {
+  const startedAt = nowISO();
+  const next = {
+    ...data,
+    quotes: { ...(data.quotes || {}) },
+    exchangeRates: { ...(data.exchangeRates || {}) },
+    quoteLogs: Array.isArray(data.quoteLogs) ? [...data.quoteLogs] : [],
+    settings: { ...data.settings, lastAutoQuoteUpdateDate: todayISO() },
+    updatedAt: nowISO(),
+  };
+  const messages = [];
+  let ok = true;
+
+  try {
+    const usdCny = await getPublicUsdCnyQuote();
+    const usdBaseline = serverRateBaseline(data.exchangeRates?.['USD/CNY'], usdCny.asOfDate);
+    next.exchangeRates['USD/CNY'] = {
+      pair: 'USD/CNY',
+      rate: usdCny.rate,
+      source: usdCny.source,
+      provider: usdCny.provider,
+      asOfDate: usdCny.asOfDate,
+      fetchedAt: nowISO(),
+      isManual: false,
+      failed: false,
+      previousRate: usdBaseline.previousRate,
+      previousAsOfDate: usdBaseline.previousAsOfDate,
+    };
+    messages.push('USD/CNY 已更新');
+  } catch (error) {
+    ok = false;
+    next.exchangeRates['USD/CNY'] = serverFailedFinanceRate('USD/CNY', data.exchangeRates?.['USD/CNY'], error);
+    messages.push(`USD/CNY 更新失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const stable = await getPublicStablecoinRates();
+    const usdtBaseline = serverRateBaseline(data.exchangeRates?.['USDT/CNY'], stable.asOfDate);
+    const usdcBaseline = serverRateBaseline(data.exchangeRates?.['USDC/CNY'], stable.asOfDate);
+    next.exchangeRates['USDT/CNY'] = {
+      pair: 'USDT/CNY',
+      rate: stable.rates['USDT/CNY'],
+      source: stable.source,
+      provider: stable.provider,
+      asOfDate: stable.asOfDate,
+      fetchedAt: nowISO(),
+      isManual: false,
+      failed: false,
+      previousRate: usdtBaseline.previousRate,
+      previousAsOfDate: usdtBaseline.previousAsOfDate,
+    };
+    next.exchangeRates['USDC/CNY'] = {
+      pair: 'USDC/CNY',
+      rate: stable.rates['USDC/CNY'],
+      source: stable.source,
+      provider: stable.provider,
+      asOfDate: stable.asOfDate,
+      fetchedAt: nowISO(),
+      isManual: false,
+      failed: false,
+      previousRate: usdcBaseline.previousRate,
+      previousAsOfDate: usdcBaseline.previousAsOfDate,
+    };
+    messages.push('USDT/USDC 已更新');
+  } catch (error) {
+    ok = false;
+    next.exchangeRates['USDT/CNY'] = serverFailedFinanceRate('USDT/CNY', data.exchangeRates?.['USDT/CNY'], error);
+    next.exchangeRates['USDC/CNY'] = serverFailedFinanceRate('USDC/CNY', data.exchangeRates?.['USDC/CNY'], error);
+    messages.push(`稳定币价格更新失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const quoteAssets = next.assets.filter((asset) => asset.quoteProvider && asset.quoteProvider !== 'manual');
+  await mapWithLimit(quoteAssets, 4, async (asset) => {
+    const previous = data.quotes?.[asset.id];
+    try {
+      if (asset.quoteProvider === 'eastmoney-fund') {
+        const code = asset.quoteSymbol || asset.symbol;
+        if (!code) throw new Error('缺少基金代码');
+        const payload = await getPublicFundQuote(code, '', true);
+        const price = Number(payload.price || 0);
+        if (!Number.isFinite(price) || price <= 0) throw new Error('基金净值为空');
+        const baseline = serverQuoteBaseline(previous, payload.priceDate || todayISO(), asset.latestPrice ?? null, asset.priceDate);
+        next.quotes[asset.id] = {
+          id: financeId('quote'),
+          targetId: asset.id,
+          targetType: 'asset',
+          price,
+          currency: asset.currency,
+          priceDate: payload.priceDate || todayISO(),
+          fetchedAt: nowISO(),
+          source: [payload.source, payload.fundType, payload.fundCompany].filter(Boolean).join('；') || payload.source,
+          provider: 'eastmoney-fund',
+          isManual: false,
+          failed: false,
+          previousPrice: baseline.previousPrice,
+          previousPriceDate: baseline.previousPriceDate,
+          raw: payload.raw ?? payload,
+        };
+      } else if (asset.quoteProvider === 'coingecko-stablecoin') {
+        const pair = asset.currency === 'USDT' ? 'USDT/CNY' : asset.currency === 'USDC' ? 'USDC/CNY' : null;
+        const rate = pair ? next.exchangeRates[pair] : null;
+        if (!rate?.rate || rate.failed) throw new Error(`${asset.currency} 价格缺失`);
+        const baseline = serverQuoteBaseline(previous, rate.asOfDate, asset.latestPrice ?? 1, asset.priceDate);
+        next.quotes[asset.id] = {
+          id: financeId('quote'),
+          targetId: asset.id,
+          targetType: 'asset',
+          price: 1,
+          currency: asset.currency,
+          priceDate: rate.asOfDate,
+          fetchedAt: nowISO(),
+          source: `${rate.source}；${pair} ${rate.rate}`,
+          provider: 'coingecko-stablecoin',
+          isManual: false,
+          failed: false,
+          previousPrice: baseline.previousPrice,
+          previousPriceDate: baseline.previousPriceDate,
+        };
+      }
+      messages.push(`${asset.name} 已更新`);
+    } catch (error) {
+      ok = false;
+      next.quotes[asset.id] = serverFailedFinanceQuote(asset, previous, error);
+      messages.push(`${asset.name} 更新失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+
+  next.quoteLogs.unshift({
+    id: financeId('quote-log'),
+    startedAt,
+    finishedAt: nowISO(),
+    ok,
+    source: '服务端每日公开行情',
+    message: messages.join(' '),
+  });
+  next.quoteLogs = next.quoteLogs.slice(0, 40);
+  return next;
+}
+
+function financeSnapshotSummary(data, quoteLog = null) {
+  const snapshot = financeBuildPortfolioSnapshot(data);
+  const topHoldings = snapshot.holdings
+    .filter((holding) => typeof holding.cnyMarketValue === 'number' && Number.isFinite(holding.cnyMarketValue))
+    .sort((a, b) => (b.cnyMarketValue ?? 0) - (a.cnyMarketValue ?? 0))
+    .slice(0, 8)
+    .map((holding) => ({
+      name: holding.asset.name,
+      currency: holding.asset.currency,
+      nativeMarketValue: holding.nativeMarketValue,
+      cnyMarketValue: holding.cnyMarketValue,
+      cumulativePnlNative: holding.cumulativePnlNative,
+      cumulativePnlCny: holding.cumulativePnlCny,
+      todayPnlNative: holding.todayPnlNative,
+      todayPnlCny: holding.todayPnlCny,
+      returnRate: holding.returnRate,
+      priceDate: holding.quote?.priceDate ?? holding.asset.priceDate ?? '',
+      source: holding.quote?.source ?? holding.asset.dataSource ?? '手动/待补充',
+      issues: holding.issues,
+    }));
+  return {
+    ok: true,
+    skipped: false,
+    updatedAt: nowISO(),
+    totalAssetsCny: snapshot.totalAssetsCny,
+    todayPnlCny: snapshot.todayPnlCny,
+    cumulativePnlCny: snapshot.cumulativePnlCny,
+    latestQuoteFetchedAt: snapshot.latestQuoteFetchedAt,
+    alerts: snapshot.alerts,
+    topHoldings,
+    quoteLog,
+  };
+}
+
+function readFinanceSnapshotSummaryFromVault() {
+  const passphrase = financeServerPassphrase();
+  if (!passphrase) return null;
+  const cloud = getFinanceVaultPayload();
+  if (!cloud.vault) return null;
+  try {
+    const data = normalizeServerFinanceData(decryptFinanceVaultOnServer(cloud.vault, passphrase));
+    return financeSnapshotSummary(data, data.quoteLogs?.[0] || null);
+  } catch (error) {
+    return {
+      ok: false,
+      skipped: true,
+      message: redactSecretText(error.message || String(error)),
+    };
+  }
+}
+
+async function updateFinanceForDailyBrief() {
+  const passphrase = financeServerPassphrase();
+  if (!passphrase) return { ok: false, skipped: true, message: '服务端未配置理财解密口令，未自动更新理财行情。' };
+  const cloud = getFinanceVaultPayload();
+  if (!cloud.vault) return { ok: false, skipped: true, message: '云端没有理财密文，未自动更新理财行情。' };
+  const data = normalizeServerFinanceData(decryptFinanceVaultOnServer(cloud.vault, passphrase));
+  const updated = await updateFinanceQuotesOnServer(data);
+  const encrypted = encryptFinanceVaultOnServer(updated, passphrase);
+  saveFinanceVaultPayload(encrypted, 'server-daily-finance');
+  return financeSnapshotSummary(updated, updated.quoteLogs[0] || null);
 }
 
 function cleanChineseDefinition(value = '') {
@@ -4434,6 +5795,232 @@ function getStatisticsSummary() {
   return payload;
 }
 
+function getLearningProgressPayload(sessionRole = 'write') {
+  ensureSqliteStore();
+  const today = todayISO();
+  const start30 = addDaysISO(today, -29);
+  const start7 = addDaysISO(today, -6);
+  const previous7Start = addDaysISO(today, -13);
+  const previous7End = addDaysISO(today, -7);
+  const targetMinutes = getStudyTargetMinutes();
+  const dailyRows = sqliteJson(`SELECT s.date, COALESCE(s.total_minutes, 0) AS minutes, r.score AS reviewScore
+FROM study_daily_summaries s
+LEFT JOIN daily_reviews r ON r.date = s.date
+WHERE s.date BETWEEN ${sqlString(start30)} AND ${sqlString(today)}
+ORDER BY s.date ASC;`);
+  const dailyByDate = new Map(dailyRows.map((row) => [row.date, row]));
+  const daily = dateRange(start30, today).map((date) => {
+    const row = dailyByDate.get(date) || {};
+    const minutes = Number(row.minutes || 0);
+    const reviewScore = row.reviewScore === undefined || row.reviewScore === null ? null : Number(row.reviewScore);
+    return { date, minutes, reviewScore, targetMinutes, hitTarget: targetMinutes > 0 && minutes >= targetMinutes };
+  });
+  const current7Minutes = daily.filter((day) => day.date >= start7).reduce((sum, day) => sum + day.minutes, 0);
+  const previous7Minutes = Number(sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date BETWEEN ${sqlString(previous7Start)} AND ${sqlString(previous7End)};`) || 0);
+  const reviewStats = sqliteJson(`SELECT COUNT(*) AS count, AVG(score) AS averageScore FROM daily_reviews WHERE date BETWEEN ${sqlString(start30)} AND ${sqlString(today)};`)[0] || {};
+  const taskStats = sqliteJson(`SELECT COUNT(*) AS total, SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) AS completed
+FROM short_term_tasks
+WHERE due_date BETWEEN ${sqlString(start30)} AND ${sqlString(today)};`)[0] || {};
+  const projectTotals = getProjectTotals(start30, today);
+  let studyStreakDays = 0;
+  for (let offset = 0; offset < 365; offset += 1) {
+    const date = addDaysISO(today, -offset);
+    const minutes = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(date)};`) || 0);
+    if (minutes <= 0) break;
+    studyStreakDays += 1;
+  }
+  const completedTasks = Number(taskStats.completed || 0);
+  const totalTasks = Number(taskStats.total || 0);
+  return {
+    summary: {
+      today,
+      current7Minutes,
+      previous7Minutes,
+      current30Minutes: daily.reduce((sum, day) => sum + day.minutes, 0),
+      studyStreakDays,
+      targetHitDays: daily.filter((day) => day.hitTarget).length,
+      targetDays: daily.length,
+      averageReviewScore: reviewStats.averageScore === null || reviewStats.averageScore === undefined ? null : Math.round(Number(reviewStats.averageScore) * 10) / 10,
+      reviewCount: Number(reviewStats.count || 0),
+      completedTasks,
+      totalTasks,
+      taskCompletionRate: totalTasks ? Math.round((completedTasks / totalTasks) * 100) : null,
+      topProject: projectTotals[0] || null,
+    },
+    daily,
+    projectTotals,
+    reviewTrend: daily.map((day) => ({ date: day.date, score: day.reviewScore })),
+    readOnly: sessionRole === 'read',
+  };
+}
+
+function momentumLabel(current, previous) {
+  if (current > previous * 1.08) return 'up';
+  if (current < previous * 0.92) return 'down';
+  return 'flat';
+}
+
+function getProjectProgressPayload(sessionRole = 'write') {
+  ensureSqliteStore();
+  const today = todayISO();
+  const start30 = addDaysISO(today, -29);
+  const start7 = addDaysISO(today, -6);
+  const previous7Start = addDaysISO(today, -13);
+  const previous7End = addDaysISO(today, -7);
+  const projects = sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder
+FROM study_projects
+ORDER BY is_active DESC, sort_order ASC, id ASC;`);
+  const totals = sqliteJson(`SELECT project_id AS projectId,
+SUM(minutes) AS totalMinutes,
+SUM(CASE WHEN date BETWEEN ${sqlString(start30)} AND ${sqlString(today)} THEN minutes ELSE 0 END) AS last30Minutes,
+SUM(CASE WHEN date BETWEEN ${sqlString(start7)} AND ${sqlString(today)} THEN minutes ELSE 0 END) AS last7Minutes,
+SUM(CASE WHEN date BETWEEN ${sqlString(previous7Start)} AND ${sqlString(previous7End)} THEN minutes ELSE 0 END) AS previous7Minutes,
+MAX(date) AS lastStudiedAt,
+COUNT(*) AS recordCount
+FROM study_time_records
+GROUP BY project_id;`);
+  const totalByProject = new Map(totals.map((row) => [Number(row.projectId), row]));
+  const last30Total = totals.reduce((sum, row) => sum + Number(row.last30Minutes || 0), 0);
+  const items = projects.map((project) => {
+    const row = totalByProject.get(Number(project.id)) || {};
+    const last30Minutes = Number(row.last30Minutes || 0);
+    return {
+      id: Number(project.id),
+      name: project.name,
+      color: project.color,
+      isActive: Boolean(project.isActive),
+      totalMinutes: Number(row.totalMinutes || 0),
+      last30Minutes,
+      last7Minutes: Number(row.last7Minutes || 0),
+      lastStudiedAt: row.lastStudiedAt || null,
+      recordCount: Number(row.recordCount || 0),
+      sharePercent: last30Total ? Math.round((last30Minutes / last30Total) * 100) : 0,
+      momentum: momentumLabel(Number(row.last7Minutes || 0), Number(row.previous7Minutes || 0)),
+    };
+  });
+  const daily = getLastNDaysTotals(30, today);
+  const totalMinutes = items.reduce((sum, item) => sum + item.totalMinutes, 0);
+  const topProject = items.length
+    ? items.map((item) => ({ name: item.name, minutes: item.last30Minutes })).sort((a, b) => b.minutes - a.minutes)[0]
+    : null;
+  return {
+    generatedAt: nowISO(),
+    items,
+    totals: {
+      totalMinutes,
+      activeProjects: items.filter((item) => item.isActive).length,
+      inactiveProjects: items.filter((item) => !item.isActive).length,
+      topProject: topProject && topProject.minutes > 0 ? topProject : null,
+    },
+    daily,
+    readOnly: sessionRole === 'read',
+  };
+}
+
+function shouldRecordVisit(req) {
+  if (req.method !== 'GET') return false;
+  const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+  if (pathname === '/login' || pathname === '/health' || pathname.startsWith('/api/')) return false;
+  if (['/manifest.webmanifest', '/service-worker.js', '/app-icon.svg', '/favicon.svg', '/icons.svg'].includes(pathname)) return false;
+  return !extname(pathname);
+}
+
+function recordVisitEvent(req, role = 'write') {
+  if (!shouldRecordVisit(req)) return;
+  try {
+    ensureSqliteStore();
+    const requestUrl = new URL(req.url || '/', 'http://localhost');
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 240);
+    const clientHash = createHash('sha256').update(`${getClientIp(req)}|${userAgent}`).digest('hex').slice(0, 24);
+    runSqlite(`INSERT INTO visit_events (path, method, role, client_hash, user_agent, created_at)
+VALUES (${sqlString(requestUrl.pathname)}, ${sqlString(req.method || 'GET')}, ${sqlString(role)}, ${sqlString(clientHash)}, ${sqlString(userAgent)}, ${sqlString(nowISO())});`);
+  } catch (error) {
+    console.warn('visit event skipped:', error.message || error);
+  }
+}
+
+function getVisitStatsPayload(sessionRole = 'write') {
+  ensureSqliteStore();
+  const today = todayISO();
+  const start14 = addDaysISO(today, -13);
+  const start7 = addDaysISO(today, -6);
+  const dailyRows = sqliteJson(`SELECT substr(created_at, 1, 10) AS date, COUNT(*) AS visits, COUNT(DISTINCT client_hash) AS uniqueVisitors
+FROM visit_events
+WHERE substr(created_at, 1, 10) BETWEEN ${sqlString(start14)} AND ${sqlString(today)}
+GROUP BY substr(created_at, 1, 10)
+ORDER BY date ASC;`);
+  const byDate = new Map(dailyRows.map((row) => [row.date, row]));
+  const daily = dateRange(start14, today).map((date) => ({
+    date,
+    visits: Number(byDate.get(date)?.visits || 0),
+    uniqueVisitors: Number(byDate.get(date)?.uniqueVisitors || 0),
+  }));
+  const total = Number(sqliteScalar('SELECT COUNT(*) FROM visit_events;') || 0);
+  const todayCount = Number(sqliteScalar(`SELECT COUNT(*) FROM visit_events WHERE substr(created_at, 1, 10) = ${sqlString(today)};`) || 0);
+  const last7 = Number(sqliteScalar(`SELECT COUNT(*) FROM visit_events WHERE substr(created_at, 1, 10) BETWEEN ${sqlString(start7)} AND ${sqlString(today)};`) || 0);
+  const uniqueVisitors7 = Number(sqliteScalar(`SELECT COUNT(DISTINCT client_hash) FROM visit_events WHERE substr(created_at, 1, 10) BETWEEN ${sqlString(start7)} AND ${sqlString(today)};`) || 0);
+  const topPaths = sqliteJson(`SELECT path, COUNT(*) AS visits
+FROM visit_events
+WHERE substr(created_at, 1, 10) BETWEEN ${sqlString(start14)} AND ${sqlString(today)}
+GROUP BY path
+ORDER BY visits DESC, path ASC
+LIMIT 8;`).map((row) => ({ path: row.path, visits: Number(row.visits || 0) }));
+  const latest = sqliteJson(`SELECT path, role, user_agent AS userAgent, created_at AS createdAt
+FROM visit_events
+ORDER BY created_at DESC
+LIMIT 12;`).map((row) => ({ path: row.path, role: row.role, userAgent: compactText(row.userAgent || '', 90), createdAt: row.createdAt }));
+  return { generatedAt: nowISO(), total, today: todayCount, last7, uniqueVisitors7, daily, topPaths, latest, readOnly: sessionRole === 'read' };
+}
+
+function redactLogLine(line = '') {
+  return String(line)
+    .replace(/(password|passwd|token|secret|cookie|authorization)(=|:)\s*[^,\s;]+/gi, '$1$2 [redacted]')
+    .replace(/exam_planner_session=[^;\s]+/gi, 'exam_planner_session=[redacted]')
+    .replace(/APP_PASSWORD=[^,\s;]+/gi, 'APP_PASSWORD=[redacted]')
+    .slice(0, 500);
+}
+
+function summarizeLogLines(name, lines, error = '') {
+  const cleanLines = lines.filter(Boolean).slice(-80).map(redactLogLine);
+  return {
+    name,
+    available: !error,
+    error: error || undefined,
+    lines: cleanLines,
+    errorCount: cleanLines.filter((line) => /error|failed|exception|fatal/i.test(line)).length,
+    warningCount: cleanLines.filter((line) => /warn|warning|deprecated/i.test(line)).length,
+  };
+}
+
+function readTailFile(filePath, maxLines = 80) {
+  if (!existsSync(filePath)) return { lines: [], error: 'file not found' };
+  const text = readFileSync(filePath, 'utf8');
+  return { lines: text.split(/\r?\n/).slice(-maxLines), error: '' };
+}
+
+function getOpsLogSummaryPayload(sessionRole = 'write') {
+  ensureSqliteStore();
+  const sources = [];
+  const journal = spawnSync('journalctl', ['-u', 'exam-planner', '-n', '120', '--no-pager'], { encoding: 'utf8', timeout: 5000, maxBuffer: 512 * 1024 });
+  if (journal.error || journal.status !== 0) {
+    sources.push(summarizeLogLines('systemd:exam-planner', [], journal.error?.message || journal.stderr || 'journalctl unavailable'));
+  } else {
+    sources.push(summarizeLogLines('systemd:exam-planner', journal.stdout.split(/\r?\n/)));
+  }
+  for (const [name, filePath] of [['nginx:access', '/var/log/nginx/access.log'], ['nginx:error', '/var/log/nginx/error.log']]) {
+    try {
+      const result = readTailFile(filePath);
+      sources.push(summarizeLogLines(name, result.lines, result.error));
+    } catch (error) {
+      sources.push(summarizeLogLines(name, [], error.message || String(error)));
+    }
+  }
+  const auditEvents = opsRepository.listAuditEvents(12);
+  const slowApi = opsRepository.listSlowApi(12);
+  const apiMetrics = opsRepository.getApiMetrics();
+  return { generatedAt: nowISO(), sources, auditEvents, slowApi, apiMetrics, readOnly: sessionRole === 'read' };
+}
+
 function queryLimit(searchParams, defaultLimit = 20, maxLimit = 100) {
   const value = searchParams.get('limit');
   if (!value) return null;
@@ -4587,6 +6174,85 @@ function getClientIp(req) {
   return rawIp.replace(/^::ffff:/, '');
 }
 
+function clientHashForRequest(req) {
+  const userAgent = String(req.headers['user-agent'] || '').slice(0, 240);
+  return createHash('sha256').update(`${getClientIp(req)}|${userAgent}`).digest('hex').slice(0, 24);
+}
+
+function logStructured(level, event, fields = {}) {
+  const payload = { level, event, at: nowISO(), ...fields };
+  const line = JSON.stringify(payload);
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
+
+function writeAuditEvent({ action, req = null, actorRole = '', detail = {} }) {
+  try {
+    ensureSqliteStore();
+    runSqlite(`INSERT INTO audit_events (action, actor_role, client_hash, detail_json, created_at)
+VALUES (${sqlString(action)}, ${sqlString(actorRole || (req ? getSessionRole(req.headers.cookie) || '' : 'system'))}, ${sqlString(req ? clientHashForRequest(req) : 'system')}, ${sqlString(JSON.stringify(detail || {}))}, ${sqlString(nowISO())});`);
+  } catch (error) {
+    logStructured('warn', 'audit_write_failed', { action, error: redactSecretText(error.message || String(error)) });
+  }
+}
+
+function writeApiRequestLog({ req, statusCode, durationMs, role = '', error = '' }) {
+  if (durationMs < requestLogSlowMs && statusCode < 500 && !error) return;
+  try {
+    ensureSqliteStore();
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
+    runSqlite(`INSERT INTO api_request_log (method, path, status_code, duration_ms, role, error, created_at)
+VALUES (${sqlString(req.method || 'GET')}, ${sqlString(pathname)}, ${sqlValue(statusCode)}, ${sqlValue(Math.round(durationMs))}, ${sqlString(role || '')}, ${sqlString(redactSecretText(error))}, ${sqlString(nowISO())});`);
+  } catch (logError) {
+    logStructured('warn', 'api_request_log_failed', { error: redactSecretText(logError.message || String(logError)) });
+  }
+}
+
+const activeTaskLocks = new Set();
+
+function lastTaskRuns(limit = 12) {
+  try {
+    return taskRunsRepository.listLatest(limit);
+  } catch {
+    return [];
+  }
+}
+
+async function runExclusiveTask(taskName, trigger, taskFn, { timeoutMs = 15 * 60 * 1000, metadata = {} } = {}) {
+  ensureSqliteStore();
+  if (activeTaskLocks.has(taskName)) {
+    return { ok: false, skipped: true, reason: 'already running', taskName };
+  }
+  activeTaskLocks.add(taskName);
+  const startedAt = nowISO();
+  const startedMs = Date.now();
+  const taskId = Number(sqliteScalar(`INSERT INTO task_runs (task_name, trigger, status, started_at, metadata_json)
+VALUES (${sqlString(taskName)}, ${sqlString(trigger)}, 'running', ${sqlString(startedAt)}, ${sqlString(JSON.stringify(metadata || {}))})
+RETURNING id;`) || 0);
+  let timeoutId;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`${taskName} timed out after ${timeoutMs}ms`)), timeoutMs);
+      timeoutId.unref?.();
+    });
+    const result = await Promise.race([Promise.resolve().then(taskFn), timeout]);
+    const durationMs = Date.now() - startedMs;
+    runSqlite(`UPDATE task_runs SET status = 'completed', finished_at = ${sqlString(nowISO())}, duration_ms = ${sqlValue(durationMs)}, metadata_json = ${sqlString(JSON.stringify({ ...(metadata || {}), result: result ?? null }))}
+WHERE id = ${sqlValue(taskId)};`);
+    return { ok: true, taskName, taskId, durationMs, result };
+  } catch (error) {
+    const durationMs = Date.now() - startedMs;
+    const message = redactSecretText(error.message || String(error));
+    runSqlite(`UPDATE task_runs SET status = 'failed', finished_at = ${sqlString(nowISO())}, duration_ms = ${sqlValue(durationMs)}, error = ${sqlString(message)}
+WHERE id = ${sqlValue(taskId)};`);
+    throw error;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+    activeTaskLocks.delete(taskName);
+  }
+}
+
 function getLoginLock(ip) {
   const now = Date.now();
   const entry = loginAttempts[ip];
@@ -4667,30 +6333,54 @@ function loginPage(error = '') {
 </html>`;
 }
 
-function readBody(req) {
-  return new Promise((resolveBody) => {
+function readBody(req, maxBytes = 10 * 1024 * 1024) {
+  return new Promise((resolveBody, rejectBody) => {
     let body = '';
+    let size = 0;
+    let rejected = false;
     req.on('data', (chunk) => {
-      body += chunk;
-      if (body.length > 1024 * 16) req.destroy();
+      size += chunk.length;
+      if (size > maxBytes) {
+        if (!rejected) {
+          rejected = true;
+          const error = new Error('Request body is too large');
+          error.statusCode = 413;
+          rejectBody(error);
+        }
+        return;
+      }
+      if (!rejected) body += chunk.toString('utf8');
     });
-    req.on('end', () => resolveBody(body));
+    req.on('error', (error) => {
+      if (!rejected) {
+        rejected = true;
+        rejectBody(error);
+      }
+    });
+    req.on('end', () => {
+      if (!rejected) resolveBody(body);
+    });
   });
 }
 
 async function readJsonBody(req) {
-  const body = await readBody(req);
+  const body = await readBody(req, jsonBodyMaxBytes);
   if (!body) return {};
+  let parsed;
   try {
-    return JSON.parse(body);
+    parsed = JSON.parse(body);
   } catch {
     const error = new Error('Invalid JSON body');
     error.statusCode = 400;
     throw error;
   }
+  if (parsed !== null && typeof parsed === 'object') return parsed;
+  const error = new Error('JSON body must be an object or array');
+  error.statusCode = 400;
+  throw error;
 }
 
-function readRawBody(req, maxBytes = 350 * 1024 * 1024) {
+function readRawBody(req, maxBytes = libraryUploadMaxBytes) {
   return new Promise((resolveBody, rejectBody) => {
     const chunks = [];
     let size = 0;
@@ -4844,6 +6534,559 @@ function serveLibraryFile(req, res, id, sessionRole = 'write') {
   createReadStream(filePath).pipe(res);
 }
 
+function headerString(req, name) {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0] || '';
+  return value || '';
+}
+
+function isObjectPayload(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function safeSecretEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right || ''), 'utf8');
+  if (!leftBuffer.length || leftBuffer.length !== rightBuffer.length) return false;
+  return timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function clawbotRequestSecret(req, requestUrl, body = {}) {
+  const auth = headerString(req, 'authorization');
+  const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';
+  return String(
+    headerString(req, 'x-clawbot-secret') ||
+    bearer ||
+    requestUrl.searchParams.get('secret') ||
+    (isObjectPayload(body) ? body.secret || body.token : '') ||
+    '',
+  ).trim();
+}
+
+function validateClawbotAccess(req, requestUrl, body = {}) {
+  if (!clawbotSecret) {
+    return { ok: false, status: 503, error: 'ClawBot adapter is disabled. Set CLAWBOT_SECRET first.' };
+  }
+  if (!safeSecretEqual(clawbotRequestSecret(req, requestUrl, body), clawbotSecret)) {
+    return { ok: false, status: 401, error: 'Unauthorized' };
+  }
+  return { ok: true };
+}
+
+function extractClawbotMessage(body, requestUrl) {
+  const queryMessage = requestUrl.searchParams.get('text') || requestUrl.searchParams.get('message') || '';
+  if (queryMessage) return queryMessage;
+  if (typeof body === 'string') return body;
+  if (!isObjectPayload(body)) return '';
+  for (const key of ['text', 'content', 'message', 'msg', 'rawMessage']) {
+    if (typeof body[key] === 'string' && body[key].trim()) return body[key];
+  }
+  for (const key of ['data', 'event', 'payload']) {
+    const nested = body[key];
+    if (!isObjectPayload(nested)) continue;
+    for (const nestedKey of ['text', 'content', 'message', 'msg', 'rawMessage']) {
+      if (typeof nested[nestedKey] === 'string' && nested[nestedKey].trim()) return nested[nestedKey];
+    }
+  }
+  return '';
+}
+
+function normalizeClawbotDate(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : todayISO();
+}
+
+function clawbotMinutesText(minutes) {
+  const value = Math.max(0, Number(minutes || 0));
+  const hours = Math.floor(value / 60);
+  const rest = value % 60;
+  if (hours && rest) return `${hours} 小时 ${rest} 分钟`;
+  if (hours) return `${hours} 小时`;
+  return `${rest} 分钟`;
+}
+
+function normalizeClawbotTask(row) {
+  return {
+    id: Number(row.id),
+    title: row.title,
+    dueDate: row.dueDate,
+    urgency: row.urgency || 'medium',
+    isCompleted: Boolean(row.isCompleted),
+    completedAt: row.completedAt || null,
+    note: row.note || '',
+  };
+}
+
+function clawbotUrgencyLabel(urgency) {
+  if (urgency === 'high') return '高';
+  if (urgency === 'low') return '低';
+  return '中';
+}
+
+function formatClawbotTask(task, index = 0) {
+  const prefix = index ? `${index}. ` : '';
+  const status = task.isCompleted ? '已完成' : task.dueDate < todayISO() ? '逾期' : '未完成';
+  return `${prefix}${task.title}｜${task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}｜${status}`;
+}
+
+function taskSearchPattern(keyword) {
+  const cleaned = String(keyword || '').replace(/[%_]/g, '').trim().slice(0, 80);
+  return cleaned ? `%${cleaned}%` : '';
+}
+
+function listClawbotTasks({ range = 'today', date = todayISO(), limit = 30 } = {}) {
+  ensureSqliteStore();
+  const endDate = range === 'week' ? endOfWeekISO(date) : date;
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, note
+FROM short_term_tasks
+WHERE is_completed = 0 AND due_date <= ${sqlString(endDate)}
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+LIMIT ${Math.max(1, Math.min(50, Number(limit) || 30))};`).map(normalizeClawbotTask);
+}
+
+function findClawbotTasks(keyword, { includeCompleted = false, limit = 6 } = {}) {
+  ensureSqliteStore();
+  const text = String(keyword || '').trim();
+  if (!text) return [];
+  const statusClause = includeCompleted ? '' : 'AND is_completed = 0';
+  const id = text.match(/^#?(\d+)$/)?.[1];
+  if (id) {
+    return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, note
+FROM short_term_tasks
+WHERE id = ${sqlValue(Number(id))} ${statusClause}
+LIMIT 1;`).map(normalizeClawbotTask);
+  }
+  const pattern = taskSearchPattern(text);
+  if (!pattern) return [];
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, note
+FROM short_term_tasks
+WHERE title LIKE ${sqlString(pattern)} ${statusClause}
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+LIMIT ${Math.max(1, Math.min(20, Number(limit) || 6))};`).map(normalizeClawbotTask);
+}
+
+function buildClawbotTaskListReply(range, tasks) {
+  const title = range === 'week' ? '本周未完成待办' : '今日未完成待办';
+  if (!tasks.length) return `${title}：暂无。`;
+  return `${title}：\n${tasks.map((task, index) => formatClawbotTask(task, index + 1)).join('\n')}`;
+}
+
+function clawbotSignedMoney(value, currency = 'CNY') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '待补充';
+  const formatted = financeFormatMoney(Math.abs(value), currency);
+  if (value > 0) return `+${formatted}`;
+  if (value < 0) return `-${formatted}`;
+  return financeFormatMoney(0, currency);
+}
+
+function clawbotSection(title, lines = []) {
+  const items = lines.filter(Boolean);
+  return items.length ? [`【${title}】`, ...items] : [];
+}
+
+function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings: 0, critical: 0 }) {
+  if (!brief?.payload) return '简报：暂未生成。';
+  const payload = brief.payload;
+  const weather = payload.weather || {};
+  const learning = payload.learning || {};
+  const markets = Array.isArray(payload.markets) ? payload.markets : [];
+  const finance = payload.finance || null;
+  const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
+  const weatherLine = weather.ok
+    ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
+    : `天气获取失败：${weather.error || '未知错误'}`;
+  const learningLines = [
+    `昨日学习：${clawbotMinutesText(learning.yesterdayMinutes || 0)}`,
+    `近 7 天累计：${clawbotMinutesText(learning.last7Minutes || 0)}`,
+    learning.activeGoal ? `目标：${learning.activeGoal.name}，剩余 ${learning.activeGoal.daysLeft} 天` : '目标：暂无启用中的长期目标',
+    learning.yesterdayReview?.problems ? `昨日问题：${compactText(learning.yesterdayReview.problems, 120)}` : '',
+  ];
+  const taskLines = tasks.length
+    ? tasks.map((task, index) => `${index + 1}. ${task.title}｜${task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}`)
+    : ['今天没有到期待办。'];
+  const financeLines = !finance
+    ? ['暂无理财摘要。']
+    : finance.ok
+      ? [
+          `总资产：${financeFormatMoney(finance.totalAssetsCny, 'CNY')}`,
+          `今日盈亏：${clawbotSignedMoney(finance.todayPnlCny, 'CNY')}`,
+          `起算后盈亏：${clawbotSignedMoney(finance.cumulativePnlCny, 'CNY')}`,
+          `行情时间：${finance.latestQuoteFetchedAt ? new Date(finance.latestQuoteFetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '待补充'}`,
+          ...(Array.isArray(finance.alerts) && finance.alerts.length ? ['数据提示：', ...finance.alerts.slice(0, 5).map((item) => `- ${compactText(item, 120)}`)] : []),
+        ]
+      : [finance.message || '理财行情未更新。'];
+  const marketLines = markets.length
+    ? markets.map((item) => item.ok
+      ? `- ${item.name}：${item.price}（${item.changePercent ?? 0}%）`
+      : `- ${item.name}：更新失败 ${item.error || ''}`)
+    : ['暂无指数配置。'];
+  const notificationLines = notificationMetrics.open
+    ? [`待处理 ${notificationMetrics.open} 条，其中 warning ${notificationMetrics.warnings}，critical ${notificationMetrics.critical}`]
+    : ['暂无待处理通知。'];
+  const lines = [
+    `${payload.title}`,
+    `生成时间：${new Date(payload.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+    '',
+    ...clawbotSection('天气', [weatherLine]),
+    '',
+    ...clawbotSection('学习', learningLines),
+    '',
+    ...clawbotSection('今日待办', taskLines),
+    '',
+    ...clawbotSection('理财', financeLines),
+    '',
+    ...clawbotSection('指数', marketLines),
+    '',
+    ...clawbotSection('通知', notificationLines),
+    '',
+    '可回复：待办 明天 高 背单词 / 完成 背单词 / 今日待办 / 帮助',
+  ];
+  return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function buildClawbotDailyDigest(date = todayISO()) {
+  ensureSqliteStore();
+  const taskList = listClawbotTasks({ range: 'today', date, limit: 8 });
+  const latestBrief = getDailyBriefByDate(date) || getLatestDailyBriefSummary();
+  const notificationMetrics = notificationRepository.metrics();
+  let brief = latestBrief;
+  if (brief?.payload && date === todayISO()) {
+    const liveFinance = readFinanceSnapshotSummaryFromVault();
+    brief = {
+      ...brief,
+      payload: {
+        ...brief.payload,
+        finance: liveFinance?.ok ? liveFinance : brief.payload.finance,
+        learning: {
+          ...(brief.payload.learning || {}),
+          todayTasks: taskList.map((task) => ({
+            id: task.id,
+            title: task.title,
+            dueDate: task.dueDate,
+            urgency: task.urgency,
+            isCompleted: Boolean(task.isCompleted),
+          })),
+        },
+      },
+    };
+  }
+  const text = brief ? buildClawbotBriefReply(brief, notificationMetrics) : '简报：暂未生成。';
+  return { date, text, tasks: taskList, notificationMetrics, brief };
+}
+
+function ambiguousClawbotReply(action, matches) {
+  return `找到多个可${action}的待办，请说得更具体，或使用 #ID：\n${matches.map((task) => `#${task.id} ${formatClawbotTask(task)}`).join('\n')}`;
+}
+
+async function executeClawbotCommand(command, req) {
+  if (command.type === 'help') return { ok: true, reply: clawbotHelpText, command };
+  if (command.type === 'unknown') return { ok: false, reply: `${command.help}\n\n未识别原因：${command.reason}`, command };
+  if (command.type === 'daily_digest') {
+    const digest = buildClawbotDailyDigest(todayISO());
+    return { ok: true, reply: digest.text, digest, command };
+  }
+  if (command.type === 'list_tasks') {
+    const tasks = listClawbotTasks({ range: command.range, date: todayISO() });
+    return { ok: true, reply: buildClawbotTaskListReply(command.range, tasks), tasks, command };
+  }
+  if (command.type === 'create_task') {
+    const id = saveTaskSql({
+      title: command.title,
+      dueDate: command.dueDate,
+      urgency: command.urgency,
+      note: 'Created by ClawBot rule command',
+      isCompleted: false,
+    });
+    writeAuditEvent({ action: 'clawbot_task_create', req, actorRole: 'clawbot', detail: { id, dueDate: command.dueDate, urgency: command.urgency } });
+    return {
+      ok: true,
+      reply: `已添加待办：#${id} ${command.title}｜${command.dueDate}｜${clawbotUrgencyLabel(command.urgency)}`,
+      task: { id, title: command.title, dueDate: command.dueDate, urgency: command.urgency },
+      command,
+    };
+  }
+  if (command.type === 'complete_task') {
+    const matches = findClawbotTasks(command.keyword);
+    if (!matches.length) return { ok: false, reply: `没有找到未完成待办：${command.keyword}`, command };
+    if (matches.length > 1) return { ok: false, reply: ambiguousClawbotReply('完成', matches), matches, command };
+    const task = matches[0];
+    const timestamp = nowISO();
+    runSqlite(`UPDATE short_term_tasks
+SET is_completed = 1, completed_at = ${sqlString(timestamp)}, updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(task.id)};`);
+    tableChanged();
+    writeAuditEvent({ action: 'clawbot_task_complete', req, actorRole: 'clawbot', detail: { id: task.id } });
+    return { ok: true, reply: `已完成待办：#${task.id} ${task.title}`, task: { ...task, isCompleted: true, completedAt: timestamp }, command };
+  }
+  if (command.type === 'delete_task') {
+    const matches = findClawbotTasks(command.keyword, { includeCompleted: true });
+    if (!matches.length) return { ok: false, reply: `没有找到待办：${command.keyword}`, command };
+    if (matches.length > 1) return { ok: false, reply: ambiguousClawbotReply('删除', matches), matches, command };
+    const task = matches[0];
+    runSqlite(`DELETE FROM short_term_tasks WHERE id = ${sqlValue(task.id)};`);
+    tableChanged();
+    writeAuditEvent({ action: 'clawbot_task_delete', req, actorRole: 'clawbot', detail: { id: task.id } });
+    return { ok: true, reply: `已删除待办：#${task.id} ${task.title}`, task, command };
+  }
+  return { ok: false, reply: clawbotHelpText, command };
+}
+
+function readJsonFileSafe(filePath, fallback = null) {
+  try {
+    if (!filePath || !existsSync(filePath)) return fallback;
+    return JSON.parse(readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function findNestedStringByKey(value, preferredKeys) {
+  if (!value || typeof value !== 'object') return '';
+  const normalizedKeys = new Set(preferredKeys.map((key) => key.toLowerCase()));
+  for (const [key, nested] of Object.entries(value)) {
+    if (normalizedKeys.has(key.toLowerCase()) && typeof nested === 'string' && nested.trim()) {
+      return nested.trim();
+    }
+  }
+  for (const nested of Object.values(value)) {
+    if (nested && typeof nested === 'object') {
+      const result = findNestedStringByKey(nested, preferredKeys);
+      if (result) return result;
+    }
+  }
+  return '';
+}
+
+function detectOpenClawAccountId() {
+  if (openClawAccountId) return openClawAccountId;
+  try {
+    if (!existsSync(openClawAccountDir)) return '';
+    const files = readdirSync(openClawAccountDir)
+      .filter((file) => file.endsWith('.json') && !file.includes('context-token'))
+      .sort((left, right) => Number(right.includes('-im-bot')) - Number(left.includes('-im-bot')) || left.localeCompare(right));
+    return files[0]?.replace(/\.json$/i, '') || '';
+  } catch {
+    return '';
+  }
+}
+
+function resolveOpenClawWechatConfig({ includeSecret = false } = {}) {
+  const accountId = detectOpenClawAccountId();
+  const accountPath = accountId ? join(openClawAccountDir, `${accountId}.json`) : '';
+  const contextPath = accountId ? join(openClawAccountDir, `${accountId}.context-tokens.json`) : '';
+  const account = readJsonFileSafe(accountPath, {});
+  const contextTokens = readJsonFileSafe(contextPath, {});
+  const contextKeys = contextTokens && typeof contextTokens === 'object' && !Array.isArray(contextTokens) ? Object.keys(contextTokens) : [];
+  const target = openClawTarget
+    || findNestedStringByKey(account, ['userId', 'wxid', 'openId', 'openid', 'target', 'fromUserName', 'userName', 'username'])
+    || contextKeys.find((key) => key && !key.startsWith('_')) || '';
+  const contextEntry = target && isObjectPayload(contextTokens) ? contextTokens[target] : null;
+  const contextToken = (typeof contextEntry === 'string' ? contextEntry : '')
+    || findNestedStringByKey(contextEntry, ['contextToken', 'token'])
+    || findNestedStringByKey(contextTokens, ['contextToken']);
+  const status = {
+    enabled: Boolean(getDailyBriefSettings({ includeSecret: true }).wechat.enabled),
+    configured: Boolean(accountId && target && contextToken),
+    channel: openClawChannel,
+    accountId,
+    accountDirExists: existsSync(openClawAccountDir),
+    accountFileExists: Boolean(accountPath && existsSync(accountPath)),
+    targetConfigured: Boolean(target),
+    hasContextToken: Boolean(contextToken),
+    cli: openClawCli,
+    nextPushAt: nextDailyBriefAt,
+    scheduleTime: getDailyBriefSettings({ includeSecret: true }).generateTime,
+  };
+  return includeSecret ? { ...status, target, contextToken } : status;
+}
+
+function runOpenClawCli(args, { timeoutMs = 15000 } = {}) {
+  return new Promise((resolveCli) => {
+    const child = spawn(openClawCli, args, {
+      env: {
+        ...process.env,
+        PATH: `/opt/node22/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}`,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveCli({
+        ...result,
+        stdout: redactSecretText(stdout).slice(0, 2000),
+        stderr: redactSecretText(stderr).slice(0, 2000),
+      });
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish({ ok: false, code: -1, error: 'openclaw message send timed out' });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+      if (stdout.length > 1024 * 1024) stdout = stdout.slice(-1024 * 1024);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+      if (stderr.length > 1024 * 1024) stderr = stderr.slice(-1024 * 1024);
+    });
+    child.on('error', (error) => finish({ ok: false, code: -1, error: redactSecretText(error.message || String(error)) }));
+    child.on('close', (code) => finish({ ok: code === 0, code, error: code === 0 ? '' : redactSecretText(stderr || stdout || `openclaw exited with code ${code}`) }));
+  });
+}
+
+async function sendOpenClawWechatMessage(text) {
+  const config = resolveOpenClawWechatConfig({ includeSecret: true });
+  if (!config.configured) {
+    return {
+      ok: false,
+      method: 'openclaw-weixin',
+      error: 'OpenClaw Weixin account, target or context token is not available',
+      status: {
+        accountId: config.accountId,
+        accountDirExists: config.accountDirExists,
+        accountFileExists: config.accountFileExists,
+        targetConfigured: config.targetConfigured,
+        hasContextToken: config.hasContextToken,
+      },
+    };
+  }
+  const delivery = { contextToken: config.contextToken };
+  const result = await runOpenClawCli([
+    'message',
+    'send',
+    '--channel',
+    config.channel,
+    '--account',
+    config.accountId,
+    '--target',
+    config.target,
+    '--message',
+    String(text || '').slice(0, 3500),
+    '--delivery',
+    JSON.stringify(delivery),
+    '--json',
+  ]);
+  let parsed = null;
+  try {
+    parsed = result.stdout ? JSON.parse(result.stdout) : null;
+  } catch {
+    parsed = null;
+  }
+  return {
+    ok: result.ok,
+    method: 'openclaw-weixin',
+    channel: config.channel,
+    accountId: config.accountId,
+    messageId: parsed?.messageId || parsed?.id || parsed?.data?.messageId || null,
+    response: parsed ? {
+      action: parsed.action || null,
+      channel: parsed.channel || config.channel,
+      dryRun: Boolean(parsed.dryRun),
+      handledBy: parsed.handledBy || null,
+      messageId: parsed.messageId || parsed.id || parsed.data?.messageId || null,
+    } : null,
+    error: result.ok ? '' : result.error,
+  };
+}
+
+async function sendClawbotPushText(text) {
+  const openClawStatus = resolveOpenClawWechatConfig({ includeSecret: true });
+  if (openClawStatus.configured) return sendOpenClawWechatMessage(text);
+  if (clawbotWebhookUrl) return postClawbotWebhook(text);
+  return { ok: false, method: 'none', error: 'No ClawBot push channel is configured', status: resolveOpenClawWechatConfig() };
+}
+
+async function postClawbotWebhook(text) {
+  if (!clawbotWebhookUrl) {
+    return { ok: false, error: 'CLAWBOT_WEBHOOK_URL is not configured' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(clawbotWebhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        source: 'exam-planner-clawbot',
+        text,
+        content: text,
+        message: text,
+      }),
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    if (!response.ok) throw new Error(`Webhook returned ${response.status}: ${responseText.slice(0, 300)}`);
+    return { ok: true, status: response.status, response: responseText.slice(0, 500) };
+  } catch (error) {
+    return { ok: false, error: redactSecretText(error.message || String(error)) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleClawbotApi(req, res) {
+  const requestUrl = new URL(req.url || '/', 'http://localhost');
+  const body = req.method === 'GET' ? {} : await readJsonBody(req);
+  const access = validateClawbotAccess(req, requestUrl, body);
+  if (!access.ok) {
+    sendJson(res, { ok: false, error: access.error }, access.status);
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/clawbot/status' && req.method === 'GET') {
+    const openClawStatus = resolveOpenClawWechatConfig();
+    sendJson(res, {
+      ok: true,
+      enabled: true,
+      webhookConfigured: Boolean(clawbotWebhookUrl),
+      openClawConfigured: openClawStatus.configured,
+      pushConfigured: Boolean(clawbotWebhookUrl || openClawStatus.configured),
+      openClaw: openClawStatus,
+      commands: ['待办', '完成', '删除待办', '今日待办', '本周待办', '每日简报', '帮助'],
+    });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/clawbot/help' && ['GET', 'POST'].includes(req.method || 'GET')) {
+    sendJson(res, { ok: true, reply: clawbotHelpText });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/clawbot/daily-digest' && ['GET', 'POST'].includes(req.method || 'GET')) {
+    const date = normalizeClawbotDate(requestUrl.searchParams.get('date') || (isObjectPayload(body) ? body.date : ''));
+    const digest = buildClawbotDailyDigest(date);
+    sendJson(res, { ok: true, reply: digest.text, digest });
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/clawbot/push-daily' && req.method === 'POST') {
+    const date = normalizeClawbotDate(isObjectPayload(body) ? body.date : '');
+    const digest = buildClawbotDailyDigest(date);
+    const delivery = await sendClawbotPushText(digest.text);
+    writeAuditEvent({ action: 'clawbot_daily_push', req, actorRole: 'clawbot', detail: { date, ok: delivery.ok } });
+    sendJson(res, { ok: delivery.ok, reply: digest.text, digest, delivery }, delivery.ok ? 200 : 502);
+    return;
+  }
+
+  if (requestUrl.pathname === '/api/clawbot/message' && req.method === 'POST') {
+    const message = extractClawbotMessage(body, requestUrl);
+    const command = parseClawbotCommand(message, { today: todayISO() });
+    const result = await executeClawbotCommand(command, req);
+    sendJson(res, result, result.ok ? 200 : 400);
+    return;
+  }
+
+  sendJson(res, { ok: false, error: 'Not found' }, 404);
+}
+
 function sendHtml(res, html, status = 200) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -4901,6 +7144,7 @@ async function handleApi(req, res) {
       confusingWordsBackup: imported.confusingWordsBackup || null,
     };
     writeState(next);
+    writeAuditEvent({ action: 'state_import', req, actorRole: 'password-import', detail: { goals: next.goals.length, reviews: next.dailyReviews.length } });
     sendJson(res, { ok: true });
     return;
   }
@@ -4952,6 +7196,11 @@ async function handleApi(req, res) {
     }
   }
 
+  if (req.url?.startsWith('/api/clawbot/')) {
+    await handleClawbotApi(req, res);
+    return;
+  }
+
   const sessionRole = getSessionRole(req.headers.cookie);
   if (!sessionRole) {
     sendJson(res, { error: 'Unauthorized' }, 401);
@@ -4962,27 +7211,162 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url?.startsWith('/api/finance-public/') && req.method === 'GET') {
+    const requestUrl = new URL(req.url, 'http://localhost');
+    if (requestUrl.pathname === '/api/finance-public/fund') {
+      sendJson(res, await getPublicFundQuote(requestUrl.searchParams.get('code') || '', requestUrl.searchParams.get('date') || '', requestUrl.searchParams.get('profile') === '1'));
+      return;
+    }
+    if (requestUrl.pathname === '/api/finance-public/usd-cny') {
+      sendJson(res, await getPublicUsdCnyQuote());
+      return;
+    }
+    if (requestUrl.pathname === '/api/finance-public/stablecoin-rates') {
+      sendJson(res, await getPublicStablecoinRates());
+      return;
+    }
+  }
+
+  if (req.url === '/api/finance-vault' && req.method === 'GET') {
+    if (sessionRole !== 'write') {
+      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      return;
+    }
+    sendJson(res, getFinanceVaultPayload());
+    return;
+  }
+
+  if (req.url === '/api/finance-vault' && req.method === 'POST') {
+    if (sessionRole !== 'write') {
+      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const saved = saveFinanceVaultPayload(body.vault, body.deviceId);
+    writeAuditEvent({ action: 'finance_vault_save', req, actorRole: sessionRole, detail: { byteSize: saved.meta?.byteSize ?? 0 } });
+    sendJson(res, saved);
+    return;
+  }
+
+  if (req.url === '/api/finance-vault' && req.method === 'DELETE') {
+    if (sessionRole !== 'write') {
+      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      return;
+    }
+    const result = deleteFinanceVaultPayload();
+    writeAuditEvent({ action: 'finance_vault_delete', req, actorRole: sessionRole });
+    sendJson(res, result);
+    return;
+  }
+
   if (req.url === '/api/backups/status' && req.method === 'GET') {
     sendJson(res, getBackupStatus());
     return;
   }
 
   if (req.url === '/api/backups/run' && req.method === 'POST') {
-    ensureSqliteStore();
-    const backup = createBackupFile('manual', 'manual backup from settings page');
-    sendJson(res, { ok: true, backup });
+    const task = await runExclusiveTask('manual-backup', 'manual', () => createBackupFile('manual', 'manual backup from settings page'), { timeoutMs: 10 * 60 * 1000 });
+    writeAuditEvent({ action: 'backup_create', req, actorRole: sessionRole, detail: { filePath: task.result?.filePath, kind: task.result?.kind } });
+    sendJson(res, { ok: true, backup: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
     return;
   }
 
   if (req.url === '/api/backups/restore' && req.method === 'POST') {
     const body = await readJsonBody(req);
     const result = restoreBackupFile(body.fileName);
+    writeAuditEvent({ action: 'backup_restore', req, actorRole: sessionRole, detail: { fileName: body.fileName, safetyBackup: result.safetyBackup?.filePath } });
     sendJson(res, { ok: true, ...result });
     return;
   }
 
   if (req.url === '/api/tasks/status' && req.method === 'GET') {
+    collectOperationalNotifications();
     sendJson(res, { ...getTaskCenterStatus(), readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (req.url === '/api/learning-progress' && req.method === 'GET') {
+    sendJson(res, getLearningProgressPayload(sessionRole));
+    return;
+  }
+
+  if (req.url === '/api/project-progress' && req.method === 'GET') {
+    sendJson(res, getProjectProgressPayload(sessionRole));
+    return;
+  }
+
+  if (req.url === '/api/visits/summary' && req.method === 'GET') {
+    sendJson(res, getVisitStatsPayload(sessionRole));
+    return;
+  }
+
+  if (req.url === '/api/ops/logs/summary' && req.method === 'GET') {
+    collectOperationalNotifications();
+    sendJson(res, getOpsLogSummaryPayload(sessionRole));
+    return;
+  }
+
+  if (req.url?.startsWith('/api/notifications') && req.method === 'GET') {
+    const requestUrl = new URL(req.url, 'http://localhost');
+    if (requestUrl.pathname === '/api/notifications/center') {
+      sendJson(res, getNotificationCenterPayload(sessionRole, { status: requestUrl.searchParams.get('status') || 'all' }));
+      return;
+    }
+  }
+
+  if (req.url === '/api/notifications/ack' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    notificationRepository.acknowledge(body.id);
+    sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/wechat/test' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const digest = buildClawbotDailyDigest(todayISO());
+    const message = String(body.message || digest.text);
+    const delivery = await sendClawbotPushText(message);
+    notifyEvent({
+      eventKey: `clawbot:test:${todayISO()}`,
+      source: 'clawbot',
+      severity: delivery.ok ? 'info' : 'warning',
+      title: '微信 ClawBot 测试推送',
+      content: delivery.ok ? '通知中心已通过微信 ClawBot 发出测试消息。' : `微信 ClawBot 测试推送失败：${delivery.error || '未知错误'}`,
+      payload: { ok: delivery.ok, method: delivery.method, messageId: delivery.messageId || null },
+    });
+    writeAuditEvent({ action: 'notifications_wechat_test', req, actorRole: sessionRole, detail: { ok: delivery.ok, method: delivery.method } });
+    sendJson(res, { ok: delivery.ok, digest, delivery, center: getNotificationCenterPayload(sessionRole) }, delivery.ok ? 200 : 502);
+    return;
+  }
+
+  if (req.url === '/api/notifications/wechat/settings' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const current = getDailyBriefSettings({ includeSecret: true });
+    const generateTime = /^\d{2}:\d{2}$/.test(body.generateTime || '') ? body.generateTime : current.generateTime;
+    const settings = saveDailyBriefSettings({
+      ...current,
+      generateTime,
+      wechat: { enabled: body.enabled !== false },
+    });
+    writeAuditEvent({ action: 'notifications_wechat_settings', req, actorRole: sessionRole, detail: { enabled: settings.wechat.enabled, generateTime: settings.generateTime } });
+    sendJson(res, { ok: true, settings, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url?.startsWith('/api/calendar') && req.method === 'GET') {
+    const requestUrl = new URL(req.url, 'http://localhost');
+    sendJson(res, getCalendarPayload(sessionRole, {
+      from: requestUrl.searchParams.get('from') || undefined,
+      to: requestUrl.searchParams.get('to') || undefined,
+    }));
     return;
   }
 
@@ -5230,6 +7614,7 @@ ORDER BY project_id;`);
     }
 
     if (pathname === '/api/library/upload' && req.method === 'POST') {
+      assertDiskSpace();
       const rawBody = await readRawBody(req);
       const form = parseMultipartForm(rawBody, String(req.headers['content-type'] || ''));
       sendJson(res, { ok: true, detail: uploadLibraryBookFromMultipart(form.fields, form.files) });
@@ -5275,8 +7660,9 @@ ORDER BY project_id;`);
     const body = await readJsonBody(req);
     const kind = body.kind === 'monthly' ? 'monthly' : 'weekly';
     const period = body.period === 'previous' ? previousPeriod(kind) : currentPeriod(kind);
-    const report = generateLearningReport(kind, body.periodStart || period.periodStart, body.periodEnd || period.periodEnd, 'manual');
-    sendJson(res, { ok: true, report });
+    const task = await runExclusiveTask(`report-${kind}-${body.periodStart || period.periodStart}-${body.periodEnd || period.periodEnd}`, 'manual', () =>
+      generateLearningReport(kind, body.periodStart || period.periodStart, body.periodEnd || period.periodEnd, 'manual'), { timeoutMs: 3 * 60 * 1000 });
+    sendJson(res, { ok: true, report: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
     return;
   }
 
@@ -5290,12 +7676,13 @@ ORDER BY project_id;`);
   if (req.url === '/api/briefs/generate' && req.method === 'POST') {
     ensureSqliteStore();
     const body = await readJsonBody(req);
-    const brief = await generateDailyBrief({
+    const task = await runExclusiveTask('daily-brief', 'manual', () => generateDailyBrief({
       date: body.date || todayISO(),
       trigger: 'manual',
       sendEmail: Boolean(body.sendEmail),
-    });
-    sendJson(res, { ok: true, brief });
+      sendWechat: Boolean(body.sendWechat),
+    }), { timeoutMs: 4 * 60 * 1000 });
+    sendJson(res, { ok: true, brief: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
     return;
   }
 
@@ -5319,17 +7706,20 @@ ORDER BY project_id;`);
   const timestamp = nowISO();
 
   if (req.url === '/api/maintenance/sqlite' && req.method === 'POST') {
-    sendJson(res, runSqliteMaintenance('manual'));
+    const task = await runExclusiveTask('sqlite-maintenance', 'manual', () => runSqliteMaintenance('manual'), { timeoutMs: 10 * 60 * 1000 });
+    sendJson(res, task.result);
     return;
   }
 
   if (req.url === '/api/maintenance/precompute' && req.method === 'POST') {
-    sendJson(res, await precomputeNightlyArtifacts('manual'));
+    const task = await runExclusiveTask('precompute', 'manual', () => precomputeNightlyArtifacts('manual'), { timeoutMs: 30 * 60 * 1000 });
+    sendJson(res, task.result);
     return;
   }
 
   if (req.url === '/api/reset' && req.method === 'POST') {
     writeState(baseState());
+    writeAuditEvent({ action: 'state_reset', req, actorRole: sessionRole });
     sendJson(res, { ok: true });
     return;
   }
@@ -5428,7 +7818,15 @@ ORDER BY project_id;`);
   sendJson(res, { error: 'Not found' }, 404);
 }
 
-createServer(async (req, res) => {
+validateStartupConfig();
+
+const httpServer = createServer(async (req, res) => {
+  if (shuttingDown) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'connection': 'close' });
+    res.end('server shutting down');
+    return;
+  }
+
   if (req.url === '/login' && req.method === 'POST') {
     const clientIp = getClientIp(req);
     const params = new URLSearchParams(await readBody(req));
@@ -5444,7 +7842,7 @@ createServer(async (req, res) => {
       recordLoginSuccess(clientIp);
       res.writeHead(302, {
         location: '/',
-        'set-cookie': `${cookieName}=${encodeURIComponent(createSessionValue(role))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
+        'set-cookie': `${cookieName}=${encodeURIComponent(createSessionValue(role))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secureCookie ? '; Secure' : ''}`,
       });
       res.end();
       return;
@@ -5460,21 +7858,51 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'text/plain' });
+  if (req.url?.startsWith('/health')) {
+    const requestUrl = new URL(req.url || '/health', 'http://localhost');
+    if (requestUrl.searchParams.get('full') === '1') {
+      const payload = getHealthPayload();
+      sendJson(res, payload, payload.ok ? 200 : 503);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('ok');
     return;
   }
 
   if (req.url?.startsWith('/api/')) {
+    const startedAt = Date.now();
+    const sessionRole = getSessionRole(req.headers.cookie) || '';
+    let statusCode = 200;
+    const originalWriteHead = res.writeHead.bind(res);
+    res.writeHead = (status, ...args) => {
+      statusCode = Number(status) || statusCode;
+      return originalWriteHead(status, ...args);
+    };
     try {
       await handleApi(req, res);
     } catch (error) {
-      console.error(error);
+      logStructured('error', 'api_error', {
+        method: req.method,
+        path: new URL(req.url || '/', 'http://localhost').pathname,
+        error: redactSecretText(error.message || String(error)),
+      });
       if (!res.headersSent) {
+        statusCode = error.statusCode || 500;
         sendJson(res, { error: error.message || 'Server error' }, error.statusCode || 500);
       } else {
         res.end();
+      }
+    } finally {
+      const durationMs = Date.now() - startedAt;
+      writeApiRequestLog({ req, statusCode, durationMs, role: sessionRole });
+      if (durationMs >= requestLogSlowMs) {
+        logStructured('warn', 'slow_api_request', {
+          method: req.method,
+          path: new URL(req.url || '/', 'http://localhost').pathname,
+          statusCode,
+          durationMs,
+        });
       }
     }
     return;
@@ -5486,12 +7914,36 @@ createServer(async (req, res) => {
     return;
   }
 
-  if (!isValidSession(req.headers.cookie)) {
+  const pageSessionRole = getSessionRole(req.headers.cookie);
+  if (!pageSessionRole) {
     sendHtml(res, loginPage());
     return;
   }
 
+  recordVisitEvent(req, pageSessionRole);
   serveStatic(req, res);
 }).listen(port, '127.0.0.1', () => {
-  console.log(`Exam planner server listening on http://127.0.0.1:${port}`);
+  try {
+    ensureSqliteStore();
+  } catch (error) {
+    logStructured('error', 'startup_store_initialization_failed', { error: redactSecretText(error.message || String(error)) });
+  }
+  logStructured('info', 'server_started', { url: `http://127.0.0.1:${port}`, config: getAppConfigSnapshot() });
 });
+
+function shutdown(signal) {
+  shuttingDown = true;
+  logStructured('info', 'server_shutdown_started', { signal });
+  if (dailyBriefTimer) clearTimeout(dailyBriefTimer);
+  httpServer.close(() => {
+    logStructured('info', 'server_shutdown_completed', { signal });
+    process.exit(0);
+  });
+  setTimeout(() => {
+    logStructured('error', 'server_shutdown_forced', { signal });
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

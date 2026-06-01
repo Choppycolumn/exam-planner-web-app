@@ -5,8 +5,10 @@ import { queryClient } from './api/queryClient.ts'
 import App from './App.tsx'
 import './index.css'
 import { registerServiceWorker } from './utils/registerServiceWorker.ts'
+import { applyTheme, resolveInitialTheme } from './utils/theme.ts'
 
 registerServiceWorker()
+applyTheme(resolveInitialTheme())
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

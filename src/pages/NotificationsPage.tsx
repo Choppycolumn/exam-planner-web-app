@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarCheck, CloudSun, Mail, RefreshCw, TrendingUp } from 'lucide-react';
+import { AlertTriangle, BellRing, CalendarCheck, CheckCircle2, Clock, CloudSun, Filter, Mail, MessageCircle, Radio, RefreshCw, Send, TrendingUp } from 'lucide-react';
 import { Page } from '../components/Page';
 import { EmptyState } from '../components/EmptyState';
 import { Toast } from '../components/Toast';
-import { serverApi, type DailyBrief } from '../api/client';
+import { serverApi, type DailyBrief, type NotificationChannel, type NotificationEvent } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { minutesToHoursText } from '../utils/date';
@@ -93,35 +93,137 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
   );
 }
 
+function severityClass(severity: string) {
+  if (severity === 'critical') return 'border-rose-100 bg-rose-50 text-rose-700';
+  if (severity === 'warning') return 'border-amber-100 bg-amber-50 text-amber-700';
+  return 'border-blue-100 bg-blue-50 text-blue-700';
+}
+
+function NotificationEventRow({ event, readOnly, onAck }: { event: NotificationEvent; readOnly?: boolean; onAck: (id: number) => void }) {
+  return (
+    <div className={`rounded-lg border p-3 ${severityClass(event.severity)}`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">{event.title}</p>
+          <p className="mt-1 line-clamp-2 text-xs opacity-80">{event.content}</p>
+          <p className="mt-2 text-xs opacity-70">{event.source} · {new Date(event.createdAt).toLocaleString()}</p>
+        </div>
+        {event.status !== 'acknowledged' ? (
+          <button className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-white" disabled={readOnly} onClick={() => onAck(event.id)}>
+            知道了
+          </button>
+        ) : <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">已确认</span>}
+      </div>
+    </div>
+  );
+}
+
+function ChannelBadge({ channel }: { channel: NotificationChannel }) {
+  return (
+    <div className={`rounded-lg border px-3 py-2 text-sm ${channel.enabled ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-500'}`}>
+      <p className="font-semibold">{channel.name}</p>
+      <p className="mt-1 text-xs opacity-75">{channel.type} · {channel.enabled ? '已启用' : '预留'}</p>
+    </div>
+  );
+}
+
 export function NotificationsPage() {
   const { readOnly } = useDashboardData();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'sent' | 'unsent' | 'failed'>('all');
+  const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'acknowledged'>('open');
+  const [search, setSearch] = useState('');
+  const { data: notificationData } = useQuery({
+    queryKey: queryKeys.notifications(eventFilter),
+    queryFn: () => serverApi.getNotificationCenter(eventFilter),
+    placeholderData: { generatedAt: '', channels: [], events: [], deliveries: [], metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, channelPlan: {}, readOnly: false },
+  });
   const { data } = useQuery({
     queryKey: queryKeys.briefs,
     queryFn: () => serverApi.getBriefs(30),
     placeholderData: { briefs: [] as DailyBrief[] },
   });
-  const briefs = data?.briefs ?? [];
-  const selected = useMemo(() => briefs.find((brief) => brief.id === selectedId) ?? briefs[0] ?? null, [briefs, selectedId]);
+  const briefs = useMemo(() => data?.briefs ?? [], [data?.briefs]);
+  const stats = useMemo(() => ({
+    total: briefs.length,
+    sent: briefs.filter((brief) => brief.emailedAt).length,
+    failed: briefs.filter((brief) => brief.emailError).length,
+    unsent: briefs.filter((brief) => !brief.emailedAt).length,
+  }), [briefs]);
+  const visibleBriefs = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    return briefs
+      .filter((brief) => (filter === 'sent' ? Boolean(brief.emailedAt) : filter === 'unsent' ? !brief.emailedAt : filter === 'failed' ? Boolean(brief.emailError) : true))
+      .filter((brief) => !keyword || `${brief.title} ${brief.date}`.toLowerCase().includes(keyword));
+  }, [briefs, filter, search]);
+  const selected = useMemo(() => visibleBriefs.find((brief) => brief.id === selectedId) ?? visibleBriefs[0] ?? null, [visibleBriefs, selectedId]);
 
   const refreshBriefs = async (preferred?: DailyBrief) => {
     const result = await serverApi.getBriefs(30);
     queryClient.setQueryData(queryKeys.briefs, result);
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
     setSelectedId(preferred?.id ?? result.briefs[0]?.id ?? null);
   };
 
-  const generate = async (sendEmail = false) => {
+  const acknowledgeEvent = async (id: number) => {
+    if (readOnly) return;
+    try {
+      const result = await serverApi.acknowledgeNotification(id);
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast('通知已确认');
+    } catch {
+      setToast('通知确认失败');
+    } finally {
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const generate = async (sendEmail = false, sendWechat = false) => {
     if (readOnly) return;
     setLoading(true);
     try {
-      const result = await serverApi.generateBrief(sendEmail);
+      const result = await serverApi.generateBrief(sendEmail, sendWechat);
       await refreshBriefs(result.brief);
-      setToast(sendEmail ? '简报已生成并尝试邮件推送' : '今日简报已生成');
+      setToast(sendWechat ? '简报已生成并尝试微信推送' : sendEmail ? '简报已生成并尝试邮件推送' : '今日简报已生成');
     } catch {
       setToast('简报生成失败，请稍后重试');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const testWechatPush = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.testWechatNotification();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast(result.ok ? '微信测试推送已发送' : '微信测试推送失败');
+    } catch {
+      setToast('微信测试推送失败，请检查 OpenClaw 服务');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const saveWechatPush = async (enabled: boolean) => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.saveWechatNotificationSettings(enabled, '08:00');
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.briefSettings });
+      setToast(enabled ? '微信每日 08:00 推送已启用' : '微信每日推送已暂停');
+    } catch {
+      setToast('微信推送设置保存失败');
     } finally {
       setLoading(false);
       window.setTimeout(() => setToast(''), 2200);
@@ -142,25 +244,146 @@ export function NotificationsPage() {
       window.setTimeout(() => setToast(''), 2200);
     }
   };
+  const wechat = notificationData?.wechatClawbot;
+  const wechatReady = Boolean(wechat?.enabled && wechat.configured);
 
   return (
-    <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，也可以配置邮件推送。">
+    <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，支持邮件与微信 ClawBot 推送。">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <button className="btn btn-primary" disabled={readOnly || loading} onClick={() => void generate(false)}>
             <RefreshCw size={16} />生成今日简报
           </button>
+          <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void generate(false, true)}>
+            <MessageCircle size={16} />生成并微信推送
+          </button>
+          <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void generate(true)}>
+            <Send size={16} />生成并邮件推送
+          </button>
           <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void sendLatest()}>
             <Mail size={16} />发送最新简报
           </button>
         </div>
-        <p className="text-sm text-slate-500">自动生成时间和邮件 SMTP 在设置页配置。</p>
+        <p className="text-sm text-slate-500">微信每日推送固定使用 08:00，邮件 SMTP 在设置页配置。</p>
+      </div>
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <p className="flex items-center gap-2 text-xs font-semibold text-slate-500"><BellRing size={15} />事件总数</p>
+          <p className="mt-1 text-2xl font-semibold text-slate-950">{notificationData?.metrics.total ?? 0}</p>
+        </div>
+        <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700">
+          <p className="text-xs font-semibold opacity-80">未确认</p>
+          <p className="mt-1 text-2xl font-semibold">{notificationData?.metrics.open ?? 0}</p>
+        </div>
+        <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700">
+          <p className="flex items-center gap-2 text-xs font-semibold opacity-80"><AlertTriangle size={15} />预警</p>
+          <p className="mt-1 text-2xl font-semibold">{notificationData?.metrics.warnings ?? 0}</p>
+        </div>
+        <div className="rounded-lg border border-rose-100 bg-rose-50 p-4 text-rose-700">
+          <p className="text-xs font-semibold opacity-80">严重</p>
+          <p className="mt-1 text-2xl font-semibold">{notificationData?.metrics.critical ?? 0}</p>
+        </div>
+      </div>
+
+      <div className="mb-5 grid gap-4 xl:grid-cols-[1fr_360px]">
+        <section className="card p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">站内通知事件</h2>
+              <p className="mt-1 text-sm text-slate-500">日报、报告、任务失败、磁盘预警和慢接口会进入统一通知模型。</p>
+            </div>
+            <div className="flex gap-2">
+              {(['open', 'all', 'acknowledged'] as const).map((item) => (
+                <button
+                  key={item}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${eventFilter === item ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}
+                  type="button"
+                  onClick={() => setEventFilter(item)}
+                >
+                  {item === 'open' ? '未确认' : item === 'acknowledged' ? '已确认' : '全部'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {notificationData?.events.length ? notificationData.events.map((event) => (
+              <NotificationEventRow key={event.id} event={event} readOnly={readOnly} onAck={(id) => void acknowledgeEvent(id)} />
+            )) : <EmptyState title="暂无通知事件" description="日报、报告或系统预警生成后会出现在这里。" />}
+          </div>
+        </section>
+
+        <section className="card p-5">
+          <div className="flex items-center gap-2">
+            <Radio size={16} className="text-blue-600" />
+            <h2 className="text-base font-semibold text-slate-900">通知通道预备</h2>
+          </div>
+          <div className={`mt-4 rounded-lg border p-3 ${wechatReady ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-amber-100 bg-amber-50 text-amber-700'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold"><MessageCircle size={16} />微信 ClawBot</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {wechatReady ? `每日 ${wechat?.scheduleTime ?? '08:00'} 自动推送，下一次 ${wechat?.nextPushAt ? new Date(wechat.nextPushAt).toLocaleString() : '待计算'}` : 'OpenClaw 账号或会话令牌未就绪'}
+                </p>
+              </div>
+              <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{wechatReady ? '运行中' : '待检查'}</span>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold transition hover:bg-white" disabled={readOnly || loading} onClick={() => void testWechatPush()}>
+                <MessageCircle size={14} />立即测试
+              </button>
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold transition hover:bg-white" disabled={readOnly || loading} onClick={() => void saveWechatPush(!wechat?.enabled)}>
+                <Clock size={14} />{wechat?.enabled ? '暂停每日推送' : '启用每日 08:00'}
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {(notificationData?.channels ?? []).map((channel) => <ChannelBadge key={channel.channelKey} channel={channel} />)}
+          </div>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-600">
+            Telegram 需要 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`；企业微信/微信中转建议先走 `WECOM_WEBHOOK_URL` 或通用 `NOTIFICATION_WEBHOOK_URL`。
+          </div>
+        </section>
+      </div>
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-slate-200 bg-white p-4">
+          <p className="flex items-center gap-2 text-xs font-semibold text-slate-500"><BellRing size={15} />简报总数</p>
+          <p className="mt-1 text-2xl font-semibold text-slate-950">{stats.total}</p>
+        </div>
+        <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-4 text-emerald-700">
+          <p className="flex items-center gap-2 text-xs font-semibold opacity-80"><CheckCircle2 size={15} />已推送</p>
+          <p className="mt-1 text-2xl font-semibold">{stats.sent}</p>
+        </div>
+        <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700">
+          <p className="text-xs font-semibold opacity-80">未推送</p>
+          <p className="mt-1 text-2xl font-semibold">{stats.unsent}</p>
+        </div>
+        <div className="rounded-lg border border-rose-100 bg-rose-50 p-4 text-rose-700">
+          <p className="text-xs font-semibold opacity-80">推送失败</p>
+          <p className="mt-1 text-2xl font-semibold">{stats.failed}</p>
+        </div>
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <Filter size={16} className="text-slate-500" />
+        {(['all', 'sent', 'unsent', 'failed'] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={`rounded-lg border px-3 py-2 text-sm font-semibold ${filter === item ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+            onClick={() => setFilter(item)}
+          >
+            {item === 'all' ? '全部' : item === 'sent' ? '已推送' : item === 'unsent' ? '未推送' : '失败'}
+          </button>
+        ))}
+        <input className="field w-full md:ml-auto md:w-64" placeholder="搜索标题或日期" value={search} onChange={(event) => setSearch(event.target.value)} />
       </div>
 
       {selected ? (
         <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
           <div className="space-y-2">
-            {briefs.map((brief) => (
+            {visibleBriefs.map((brief) => (
               <button
                 key={brief.id}
                 className={`w-full rounded-lg border p-3 text-left transition ${

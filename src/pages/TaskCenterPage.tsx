@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, Archive, BarChart3, Cpu, Database, Download, HardDrive, RefreshCw, Sparkles } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, BarChart3, Clock3, Cpu, Database, Download, HardDrive, RefreshCw, Sparkles } from 'lucide-react';
 import { Page } from '../components/Page';
 import { EmptyState } from '../components/EmptyState';
 import { Toast } from '../components/Toast';
@@ -254,6 +254,67 @@ export function TaskCenterPage() {
             <dd className="mt-1 text-sm font-semibold">{status?.maintenance.lastError || status?.maintenance.lastPrecomputeError || '正常'}</dd>
           </div>
         </dl>
+      </section>
+
+      <section className="mt-5 card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">后台任务运行记录</h2>
+            <p className="mt-1 text-sm text-slate-500">备份、报告、简报、预计算和维护任务会记录开始时间、耗时和失败原因。</p>
+          </div>
+          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+            运行中 {status?.tasks?.active.length ?? 0}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-4">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Activity size={14} />总运行</p>
+            <p className="mt-1 text-lg font-semibold text-slate-950">{status?.tasks?.metrics?.total ?? 0}</p>
+            <p className="mt-1 text-xs text-slate-500">近 24 小时 {status?.tasks?.metrics?.last24h ?? 0} 次</p>
+          </div>
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-emerald-700">
+            <p className="text-xs font-semibold opacity-80">成功</p>
+            <p className="mt-1 text-lg font-semibold">{status?.tasks?.metrics?.completed ?? 0}</p>
+            <p className="mt-1 text-xs opacity-80">运行中 {status?.tasks?.metrics?.running ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-rose-700">
+            <p className="flex items-center gap-2 text-xs font-semibold opacity-80"><AlertTriangle size={14} />失败</p>
+            <p className="mt-1 text-lg font-semibold">{status?.tasks?.metrics?.failed ?? 0}</p>
+            <p className="mt-1 text-xs opacity-80">失败后优先看错误列</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="flex items-center gap-2 text-xs font-semibold text-slate-500"><Clock3 size={14} />平均耗时</p>
+            <p className="mt-1 text-lg font-semibold text-slate-950">{status?.tasks?.metrics?.averageDurationMs == null ? '--' : `${Math.round(status.tasks.metrics.averageDurationMs / 100) / 10}s`}</p>
+            <p className="mt-1 text-xs text-slate-500">最长 {status?.tasks?.metrics?.maxDurationMs == null ? '--' : `${Math.round(status.tasks.metrics.maxDurationMs / 100) / 10}s`}</p>
+          </div>
+        </div>
+        {status?.tasks?.metrics?.byName?.length ? (
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+            {status.tasks.metrics.byName.slice(0, 6).map((task) => (
+              <div key={task.taskName} className="grid gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_80px_80px_150px_100px]">
+                <span className="truncate font-semibold text-slate-800">{task.taskName}</span>
+                <span className="text-slate-500">{task.total} 次</span>
+                <span className={task.failed ? 'text-rose-600' : 'text-emerald-600'}>{task.failed} 失败</span>
+                <span className="text-xs text-slate-500">{formatDateTime(task.lastStartedAt)}</span>
+                <span className="text-xs text-slate-500">{task.averageDurationMs == null ? '--' : `${Math.round(task.averageDurationMs / 100) / 10}s`}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          {(status?.tasks?.latestRuns ?? []).map((task) => (
+            <div key={task.id} className="grid gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_90px_140px_100px]">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-slate-900">{task.taskName}</p>
+                {task.error ? <p className="mt-1 truncate text-xs text-rose-600">{task.error}</p> : null}
+              </div>
+              <span className={`w-fit rounded-lg border px-2 py-1 text-xs font-semibold ${statusTone(task.status)}`}>{task.status}</span>
+              <span className="text-xs text-slate-500">{formatDateTime(task.startedAt)}</span>
+              <span className="text-xs text-slate-500">{task.durationMs == null ? '--' : `${Math.round(task.durationMs / 100) / 10}s`}</span>
+            </div>
+          ))}
+          {status?.tasks?.latestRuns?.length ? null : <div className="p-4"><EmptyState title="暂无后台任务记录" /></div>}
+        </div>
       </section>
 
       <section className="mt-5 card p-5">

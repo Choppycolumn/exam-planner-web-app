@@ -102,6 +102,11 @@ export function DashboardPage() {
     queryFn: () => serverApi.getProblemInbox('open', 6),
     placeholderData: { items: [], readOnly: false },
   });
+  const { data: notificationCenter = { metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, events: [] } } = useQuery({
+    queryKey: queryKeys.notifications('open'),
+    queryFn: () => serverApi.getNotificationCenter('open'),
+    placeholderData: { generatedAt: '', channels: [], events: [], deliveries: [], metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, channelPlan: {} },
+  });
   const today = todayISO();
   const greeting = getTimeGreeting(currentTime);
   const reviewScore = getReviewAverageScore(todayReview ?? undefined);
@@ -206,6 +211,21 @@ export function DashboardPage() {
         />
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
+
+      <section className="mt-6 grid gap-4 md:grid-cols-3">
+        <Link className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700 transition hover:bg-blue-100" to="/goal-review">
+          <p className="flex items-center gap-2 text-sm font-semibold"><Target size={16} />目标复盘</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">把长期目标、项目动量和最近报告汇总校准。</p>
+        </Link>
+        <Link className="rounded-lg border border-emerald-100 bg-emerald-50 p-4 text-emerald-700 transition hover:bg-emerald-100" to="/progress">
+          <p className="flex items-center gap-2 text-sm font-semibold"><CalendarCheck size={16} />阶段进度</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">查看学习、复盘、任务和目标推进节奏。</p>
+        </Link>
+        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/notifications">
+          <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />未确认通知 {notificationCenter.metrics.open}</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件会在这里沉淀。'}</p>
+        </Link>
+      </section>
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <section className="card p-5">

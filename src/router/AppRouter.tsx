@@ -10,10 +10,13 @@ const GoalsPage = lazy(() => routeLoaders.goals().then((module) => ({ default: m
 const StudyTimePage = lazy(() => routeLoaders.studyTime().then((module) => ({ default: module.StudyTimePage })));
 const ReviewsPage = lazy(() => routeLoaders.reviews().then((module) => ({ default: module.ReviewsPage })));
 const ReviewInsightsPage = lazy(() => routeLoaders.reviewInsights().then((module) => ({ default: module.ReviewInsightsPage })));
-const StatisticsPage = lazy(() => routeLoaders.statistics().then((module) => ({ default: module.StatisticsPage })));
-const ReportsPage = lazy(() => routeLoaders.reports().then((module) => ({ default: module.ReportsPage })));
+const LearningProgressPage = lazy(() => routeLoaders.progress().then((module) => ({ default: module.LearningProgressPage })));
+const ProjectProgressPage = lazy(() => routeLoaders.projectProgress().then((module) => ({ default: module.ProjectProgressPage })));
+const GoalReviewPage = lazy(() => routeLoaders.goalReview().then((module) => ({ default: module.GoalReviewPage })));
+const FinancePage = lazy(() => routeLoaders.finance().then((module) => ({ default: module.FinancePage })));
 const NotificationsPage = lazy(() => routeLoaders.notifications().then((module) => ({ default: module.NotificationsPage })));
 const TaskCenterPage = lazy(() => routeLoaders.taskCenter().then((module) => ({ default: module.TaskCenterPage })));
+const OperationsPage = lazy(() => routeLoaders.operations().then((module) => ({ default: module.OperationsPage })));
 const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ default: module.MockExamsPage })));
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
 const LibraryPage = lazy(() => routeLoaders.library().then((module) => ({ default: module.LibraryPage })));
@@ -43,10 +46,13 @@ export const router = createBrowserRouter([
       { path: 'study-time', element: lazyElement(<StudyTimePage />) },
       { path: 'reviews', element: lazyElement(<ReviewsPage />) },
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
-      { path: 'statistics', element: lazyElement(<StatisticsPage />) },
-      { path: 'reports', element: lazyElement(<ReportsPage />) },
+      { path: 'progress', element: lazyElement(<LearningProgressPage />) },
+      { path: 'project-progress', element: lazyElement(<ProjectProgressPage />) },
+      { path: 'goal-review', element: lazyElement(<GoalReviewPage />) },
+      { path: 'finance', element: lazyElement(<FinancePage />) },
       { path: 'notifications', element: lazyElement(<NotificationsPage />) },
       { path: 'task-center', element: lazyElement(<TaskCenterPage />) },
+      { path: 'operations', element: lazyElement(<OperationsPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
       { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },
       { path: 'library', element: lazyElement(<LibraryPage />) },

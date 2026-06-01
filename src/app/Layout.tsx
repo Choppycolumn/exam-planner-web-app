@@ -1,35 +1,43 @@
-import { useEffect } from 'react';
-import { Activity, BarChart3, Bell, BookOpen, CalendarCheck, ClipboardList, Cpu, FileText, Home, Languages, LibraryBig, Settings } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Cpu, Flag, Home, Languages, LibraryBig, Moon, Settings, Sun, TrendingUp, WalletCards } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 import { preloadSecondaryRoutes } from '../router/preload';
+import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme';
 
 const navItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
-  { to: '/statistics', label: '数据统计', icon: BarChart3 },
-  { to: '/reports', label: '学习报告', icon: FileText },
+  { to: '/progress', label: '学习进度', icon: TrendingUp },
+  { to: '/project-progress', label: '项目进展', icon: BriefcaseBusiness },
+  { to: '/goal-review', label: '目标复盘', icon: Flag },
+  { to: '/finance', label: '理财', icon: WalletCards },
   { to: '/notifications', label: '通知中心', icon: Bell },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/library', label: '资料图书馆', icon: LibraryBig },
   { to: '/settings', label: '设置', icon: Settings },
   { to: '/task-center', label: '任务中心', icon: Cpu },
+  { to: '/operations', label: '运维观察', icon: Activity },
 ];
 
 export function Layout() {
   const { activeGoal, readOnly } = useDashboardData();
+  const { online } = useNetworkStatus();
   const location = useLocation();
+  const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
 
   useEffect(() => preloadSecondaryRoutes(), []);
+  useEffect(() => applyTheme(theme), [theme]);
 
   return (
     <div className="min-h-screen bg-[#f7f8fb] text-slate-900">
-      <aside className="fixed left-0 top-0 hidden h-screen w-64 border-r border-slate-200 bg-white/90 px-4 py-5 backdrop-blur lg:block">
+      <aside className="fixed left-0 top-0 hidden h-screen w-64 overflow-y-auto border-r border-slate-200 bg-white/90 px-4 py-5 backdrop-blur lg:block">
         <div className="px-2">
           <p className="text-sm font-semibold text-blue-700">Exam Planner</p>
           <h1 className="mt-1 text-lg font-semibold text-slate-950">考研计划管理</h1>
@@ -61,7 +69,18 @@ export function Layout() {
                 {activeGoal ? `当前目标：${activeGoal.name}，剩余 ${calculateCountdownDays(activeGoal.deadline)} 天` : '还没有启用目标'}
               </p>
             </div>
-            {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
+            <div className="flex items-center gap-2">
+              {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
+              <button
+                className="btn btn-soft h-10 w-10 px-0"
+                type="button"
+                onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+                aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
+                title={theme === 'dark' ? '浅色模式' : '深色模式'}
+              >
+                {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+              </button>
+            </div>
             <div className="flex gap-2 overflow-x-auto lg:hidden">
               {navItems.map(({ to, label }) => (
                 <NavLink key={to} to={to} className={({ isActive }) => `whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'}`}>
@@ -72,6 +91,11 @@ export function Layout() {
           </div>
         </header>
         <div className="mx-auto max-w-7xl px-4 py-8 lg:px-8">
+          {!online ? (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+              当前处于离线状态。已打开的页面可以继续查看，保存、同步和行情更新会在恢复网络后再操作。
+            </div>
+          ) : null}
           <AnimatePresence mode="wait">
             <Outlet key={location.pathname} />
           </AnimatePresence>

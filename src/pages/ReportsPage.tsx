@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CalendarDays, RefreshCw } from 'lucide-react';
+import { CalendarDays, Clipboard, Download, RefreshCw, Sparkles } from 'lucide-react';
 import { ChartBox, MinutesBar, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Page';
@@ -14,6 +14,71 @@ const kindLabel: Record<LearningReport['kind'], string> = {
   weekly: '周报',
   monthly: '月报',
 };
+
+function buildReportMarkdown(report: LearningReport) {
+  const lines = [
+    `# ${report.title}`,
+    '',
+    `- 类型：${kindLabel[report.kind]}`,
+    `- 周期：${report.periodStart} 至 ${report.periodEnd}`,
+    `- 生成时间：${new Date(report.generatedAt).toLocaleString()}`,
+    '',
+    '## 总览',
+    '',
+    `- 累计学习：${minutesToHoursText(report.summary.totalMinutes)}`,
+    `- 学习天数：${report.summary.studyDays} 天`,
+    `- 复盘数量：${report.summary.reviewCount} 篇`,
+    `- 复盘均分：${report.summary.averageReviewScore ?? '暂无'}`,
+    `- 任务完成：${report.summary.totalTasks ? `${report.summary.completedTasks}/${report.summary.totalTasks}` : '暂无'}`,
+    `- 主要项目：${report.summary.topProject ? `${report.summary.topProject.name} ${minutesToHoursText(report.summary.topProject.minutes)}` : '暂无'}`,
+    '',
+    '## 本期摘要',
+    '',
+    ...report.highlights.map((item) => `- ${item}`),
+    '',
+    '## 建议',
+    '',
+    ...(report.suggestions.length ? report.suggestions.map((item) => `- ${item}`) : ['- 暂无自动建议']),
+    '',
+    '## 共性问题',
+    '',
+    ...(report.commonProblems?.length
+      ? report.commonProblems.map((item) => `- ${item.label}：${item.count} 天提到，日期 ${item.dates.join('、')}`)
+      : ['- 暂未识别到反复出现的问题']),
+    '',
+    '## 复盘摘录',
+    '',
+    ...(report.reviews.length
+      ? report.reviews.map((review) => `### ${review.date}（${review.score}/10）\n\n- 总结：${review.summary || '未填写'}\n- 做得好：${review.wins || '未填写'}\n- 问题：${review.problems || '未填写'}\n- 下一步：${review.tomorrowPlan || '未填写'}`)
+      : ['暂无复盘摘录']),
+  ];
+  return lines.join('\n');
+}
+
+function buildAiPrompt(report: LearningReport) {
+  return [
+    '你现在是我的学习复盘教练，请基于下面这份结构化学习报告，输出一份简洁但具体的 AI 总结：',
+    '',
+    '要求：',
+    '1. 先判断本周期学习状态；',
+    '2. 找出最值得继续保持的 3 件事；',
+    '3. 找出最需要修正的 3 个问题；',
+    '4. 给出下一周/下一月的行动计划；',
+    '5. 不要泛泛鼓励，要引用报告里的数据和复盘内容。',
+    '',
+    buildReportMarkdown(report),
+  ].join('\n');
+}
+
+function downloadTextFile(fileName: string, text: string) {
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
 export function ReportsPage() {
   const { readOnly } = useDashboardData();
@@ -31,6 +96,8 @@ export function ReportsPage() {
     () => reports.find((report) => report.id === selectedReportId) ?? reports[0],
     [reports, selectedReportId],
   );
+  const selectedReportMarkdown = useMemo(() => (selectedReport ? buildReportMarkdown(selectedReport) : ''), [selectedReport]);
+  const selectedAiPrompt = useMemo(() => (selectedReport ? buildAiPrompt(selectedReport) : ''), [selectedReport]);
 
   const loadReports = async (preferred?: LearningReport) => {
     const result = await serverApi.getReports();
@@ -41,19 +108,26 @@ export function ReportsPage() {
     setSelectedReportId(matched?.id ?? result.reports[0]?.id ?? null);
   };
 
-  const generate = async (kind: LearningReport['kind']) => {
+  const generate = async (kind: LearningReport['kind'], period: 'current' | 'previous' = 'current') => {
     if (readOnly) return;
     setLoading(true);
     try {
-      const result = await serverApi.generateReport(kind, 'current');
+      const result = await serverApi.generateReport(kind, period);
       await loadReports(result.report);
-      setToast(`${kindLabel[kind]}已刷新`);
+      setToast(`${period === 'current' ? '当前' : '上一'}${kindLabel[kind]}已刷新`);
     } catch {
       setToast('报告生成失败，请稍后重试');
     } finally {
       setLoading(false);
       window.setTimeout(() => setToast(''), 2200);
     }
+  };
+
+  const copyText = async (text: string, message: string) => {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setToast(message);
+    window.setTimeout(() => setToast(''), 2200);
   };
 
   return (
@@ -65,6 +139,12 @@ export function ReportsPage() {
           </button>
           <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void generate('monthly')}>
             <RefreshCw size={16} />刷新本月月报
+          </button>
+          <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void generate('weekly', 'previous')}>
+            <RefreshCw size={16} />补生成上周
+          </button>
+          <button className="btn btn-soft" disabled={readOnly || loading} onClick={() => void generate('monthly', 'previous')}>
+            <RefreshCw size={16} />补生成上月
           </button>
         </div>
         <p className="text-sm text-slate-500">上一个完整周和上一个完整月会由服务器自动生成。</p>
@@ -98,6 +178,17 @@ export function ReportsPage() {
                   <p className="flex items-center gap-2 text-sm font-semibold text-blue-700"><CalendarDays size={16} />{kindLabel[selectedReport.kind]}</p>
                   <h2 className="mt-1 text-xl font-semibold text-slate-950">{selectedReport.title}</h2>
                   <p className="mt-1 text-sm text-slate-500">生成时间：{new Date(selectedReport.generatedAt).toLocaleString()}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn btn-soft" onClick={() => void copyText(selectedReportMarkdown, '报告 Markdown 已复制')}>
+                    <Clipboard size={16} />复制报告
+                  </button>
+                  <button className="btn btn-soft" onClick={() => downloadTextFile(`${selectedReport.periodStart}-${selectedReport.periodEnd}-${selectedReport.kind}.md`, selectedReportMarkdown)}>
+                    <Download size={16} />下载 Markdown
+                  </button>
+                  <button className="btn btn-primary" onClick={() => void copyText(selectedAiPrompt, 'AI 总结提示词已复制')}>
+                    <Sparkles size={16} />复制 AI 总结提示词
+                  </button>
                 </div>
               </div>
 
@@ -169,6 +260,19 @@ export function ReportsPage() {
               {selectedReport.projectTotals.length ? <MinutesBar data={selectedReport.projectTotals} denseLabels /> : <EmptyState title="暂无项目用时" />}
             </ChartBox>
           </div>
+
+          <section className="mt-5 card p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">AI 总结报告助手</h2>
+                <p className="mt-1 text-sm text-slate-500">这里会把报告整理成可直接交给 AI 的上下文，用于生成下一周期行动计划。</p>
+              </div>
+              <button className="btn btn-primary" onClick={() => void copyText(selectedAiPrompt, 'AI 总结提示词已复制')}>
+                <Sparkles size={16} />复制提示词
+              </button>
+            </div>
+            <textarea className="field mt-4 min-h-48 font-mono text-xs leading-5" readOnly value={selectedAiPrompt} />
+          </section>
 
           <section className="mt-5 card p-5">
             <h2 className="text-base font-semibold text-slate-900">复盘摘录</h2>

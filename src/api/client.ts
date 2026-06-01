@@ -117,6 +117,9 @@ export interface DailyBriefSettings {
   longitude: number;
   marketSymbolsText: string;
   nextDailyBriefAt?: string | null;
+  wechat: {
+    enabled: boolean;
+  };
   email: {
     enabled: boolean;
     host: string;
@@ -245,6 +248,186 @@ export interface RuntimeStatus {
   nodeVersion: string;
 }
 
+export interface LearningProgressSummary {
+  today: string;
+  current7Minutes: number;
+  previous7Minutes: number;
+  current30Minutes: number;
+  studyStreakDays: number;
+  targetHitDays: number;
+  targetDays: number;
+  averageReviewScore: number | null;
+  reviewCount: number;
+  completedTasks: number;
+  totalTasks: number;
+  taskCompletionRate: number | null;
+  topProject: { name: string; minutes: number } | null;
+}
+
+export interface LearningProgressResponse {
+  summary: LearningProgressSummary;
+  daily: Array<{ date: string; minutes: number; reviewScore: number | null; targetMinutes: number; hitTarget: boolean }>;
+  projectTotals: Array<{ name: string; minutes: number }>;
+  reviewTrend: Array<{ date: string; score: number | null }>;
+  readOnly?: boolean;
+}
+
+export interface ProjectProgressResponse {
+  generatedAt: string;
+  items: Array<{
+    id: number;
+    name: string;
+    color: string;
+    isActive: boolean;
+    totalMinutes: number;
+    last30Minutes: number;
+    last7Minutes: number;
+    lastStudiedAt: string | null;
+    recordCount: number;
+    sharePercent: number;
+    momentum: 'up' | 'flat' | 'down';
+  }>;
+  totals: {
+    totalMinutes: number;
+    activeProjects: number;
+    inactiveProjects: number;
+    topProject: { name: string; minutes: number } | null;
+  };
+  daily: Array<{ date: string; minutes: number }>;
+  readOnly?: boolean;
+}
+
+export interface VisitStatsResponse {
+  generatedAt: string;
+  total: number;
+  today: number;
+  last7: number;
+  uniqueVisitors7: number;
+  daily: Array<{ date: string; visits: number; uniqueVisitors: number }>;
+  topPaths: Array<{ path: string; visits: number }>;
+  latest: Array<{ path: string; role: string; userAgent: string; createdAt: string }>;
+  readOnly?: boolean;
+}
+
+export interface OpsLogSource {
+  name: string;
+  available: boolean;
+  error?: string;
+  lines: string[];
+  errorCount: number;
+  warningCount: number;
+}
+
+export interface OpsLogSummaryResponse {
+  generatedAt: string;
+  sources: OpsLogSource[];
+  auditEvents?: Array<{ action: string; actorRole: string; detail: Record<string, unknown>; createdAt: string }>;
+  slowApi?: Array<{ method: string; path: string; statusCode: number; durationMs: number; error: string; createdAt: string }>;
+  apiMetrics?: {
+    logged: number;
+    serverErrors: number;
+    clientErrors: number;
+    averageDurationMs: number | null;
+    maxDurationMs: number | null;
+    slowest: Array<{ method: string; path: string; statusCode: number; durationMs: number; createdAt: string }>;
+  };
+  readOnly?: boolean;
+}
+
+export interface NotificationChannel {
+  id: number;
+  channelKey: string;
+  type: 'in_app' | 'email' | 'telegram' | 'wecom_webhook' | 'webhook' | string;
+  name: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationEvent {
+  id: number;
+  eventKey: string;
+  source: string;
+  severity: 'info' | 'warning' | 'critical' | string;
+  title: string;
+  content: string;
+  status: 'open' | 'acknowledged' | string;
+  scheduledAt: string | null;
+  acknowledgedAt: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationDelivery {
+  id: number;
+  eventId: number;
+  channelKey: string;
+  channelType: string;
+  status: string;
+  attemptedAt: string | null;
+  deliveredAt: string | null;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+  response?: Record<string, unknown>;
+}
+
+export interface NotificationCenterResponse {
+  generatedAt: string;
+  channels: NotificationChannel[];
+  channelReadiness?: Array<{ channelKey: string; type: string; ready: boolean; requiredEnv: string[] }>;
+  wechatClawbot?: {
+    enabled: boolean;
+    configured: boolean;
+    channel: string;
+    accountId: string;
+    accountDirExists: boolean;
+    accountFileExists: boolean;
+    targetConfigured: boolean;
+    hasContextToken: boolean;
+    cli: string;
+    nextPushAt: string | null;
+    scheduleTime: string;
+  };
+  events: NotificationEvent[];
+  deliveries: NotificationDelivery[];
+  metrics: { total: number; open: number; warnings: number; critical: number };
+  channelPlan: Record<string, { enabled: boolean; requiredEnv: string[]; method: string }>;
+  readOnly?: boolean;
+}
+
+export interface CalendarEventItem {
+  id: string;
+  date: string;
+  type: 'study' | 'review' | 'task' | 'report' | 'notification' | string;
+  title: string;
+  detail: string;
+  tone: 'slate' | 'emerald' | 'blue' | 'amber' | 'rose' | string;
+  value: number | string | null;
+}
+
+export interface CalendarResponse {
+  generatedAt: string;
+  from?: string;
+  to?: string;
+  events: CalendarEventItem[];
+  readOnly?: boolean;
+}
+
+export interface TaskRunSummary {
+  id: number;
+  taskName: string;
+  trigger: string;
+  status: 'running' | 'completed' | 'failed' | string;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  error: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface TaskCenterStatus {
   generatedAt: string;
   backup: BackupStatus & { nextWeeklyBackupAt: string | null };
@@ -280,6 +463,20 @@ export interface TaskCenterStatus {
     reviews: number;
     studyTimeRecords: number;
     revision: number;
+  };
+  tasks?: {
+    active: string[];
+    latestRuns: TaskRunSummary[];
+    metrics?: {
+      total: number;
+      running: number;
+      completed: number;
+      failed: number;
+      last24h: number;
+      averageDurationMs: number | null;
+      maxDurationMs: number | null;
+      byName: Array<{ taskName: string; total: number; failed: number; lastStartedAt: string | null; averageDurationMs: number | null }>;
+    };
   };
   runtime: RuntimeStatus;
   readOnly?: boolean;
@@ -545,12 +742,23 @@ const shortApiCache = new Map<string, { expiresAt: number; value: unknown }>();
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method: options.method ?? 'GET',
-    headers: options.body ? { 'content-type': 'application/json' } : undefined,
+    credentials: 'same-origin',
+    headers: options.body ? { accept: 'application/json', 'content-type': 'application/json' } : { accept: 'application/json' },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
 
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    let message = text || `Request failed with ${response.status}`;
+    try {
+      const payload = JSON.parse(text) as { error?: string; message?: string };
+      message = payload.error || payload.message || message;
+    } catch {
+      // Non-JSON server errors still surface as plain text for debugging.
+    }
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   return response.json() as Promise<T>;
@@ -633,7 +841,7 @@ export const serverApi = {
   saveBriefSettings: (settings: DailyBriefSettings) => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings', { method: 'POST', body: settings }),
   getBriefs: (limit = 30) => cachedApiRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>(`/briefs?limit=${limit}`, 60_000),
   getTodayBrief: () => cachedApiRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('/briefs/today', 60_000),
-  generateBrief: (sendEmail = false) => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/generate', { method: 'POST', body: { sendEmail } }),
+  generateBrief: (sendEmail = false, sendWechat = false) => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/generate', { method: 'POST', body: { sendEmail, sendWechat } }),
   sendLatestBrief: () => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/send-latest', { method: 'POST' }),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();
@@ -680,6 +888,18 @@ export const serverApi = {
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
   getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
+  getLearningProgress: () => cachedApiRequest<LearningProgressResponse>('/learning-progress', 60_000),
+  getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
+  getVisitStats: () => cachedApiRequest<VisitStatsResponse>('/visits/summary', 30_000),
+  getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
+  getNotificationCenter: (status: 'all' | 'open' | 'acknowledged' = 'all') =>
+    cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
+  acknowledgeNotification: (id: number) => apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
+  testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
+  saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
+    apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
+  getCalendarEvents: (from: string, to: string) =>
+    cachedApiRequest<CalendarResponse>(`/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 30_000),
   runSqliteMaintenance: () => apiRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('/maintenance/sqlite', { method: 'POST' }),
   runPrecompute: () => apiRequest<{ ok: boolean; ranAt: string; error?: string }>('/maintenance/precompute', { method: 'POST' }),
   getReports: () => cachedApiRequest<{ reports: LearningReport[] }>('/reports', 120_000),

@@ -9,11 +9,20 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+__pycache__
+*.pyc
 dist
 dist-ssr
 data-local
+data/analysis
 screenshots
+test-results
+playwright-report
 server-backups
+remote-audit
+.openclaw-weixin
+battery-report.html
+*.zip
 *.local
 
 # Editor directories and files

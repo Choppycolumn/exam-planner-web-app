@@ -29,14 +29,29 @@ const backupKindLabel: Record<string, string> = {
   restore: '恢复记录',
 };
 
+type SettingsTab = 'all' | 'general' | 'briefs' | 'backups' | 'goals' | 'dictionary' | 'danger';
+
+const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
+  { id: 'all', label: '全部', description: '显示所有设置块' },
+  { id: 'general', label: '基础', description: '数据说明与学习目标' },
+  { id: 'briefs', label: '通知', description: '晨间简报与邮件' },
+  { id: 'backups', label: '备份', description: '服务器快照与恢复' },
+  { id: 'goals', label: '目标', description: '长期目标管理' },
+  { id: 'dictionary', label: '词典', description: '易混词数据同步' },
+  { id: 'danger', label: '危险区', description: '重置与清空' },
+];
+
 function defaultBriefSettings(): DailyBriefSettings {
   return {
     enabled: true,
-    generateTime: '07:00',
+    generateTime: '08:00',
     cityName: '北京',
     latitude: 39.9042,
     longitude: 116.4074,
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
+    wechat: {
+      enabled: true,
+    },
     email: {
       enabled: false,
       host: '',
@@ -61,6 +76,8 @@ export function SettingsPage() {
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [briefSettings, setBriefSettings] = useState<DailyBriefSettings>(() => defaultBriefSettings());
   const [briefLoading, setBriefLoading] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('all');
+  const showSection = (section: SettingsTab) => settingsTab === 'all' || settingsTab === section;
 
   const refreshBackupStatus = async () => {
     try {
@@ -79,7 +96,15 @@ export function SettingsPage() {
           if (backupResult.status === 'fulfilled') setBackupStatus(backupResult.value);
           else setBackupStatus(null);
           if (targetResult.status === 'fulfilled') setStudyTargetHours(targetResult.value.targetHours ? String(targetResult.value.targetHours) : '');
-          if (briefResult.status === 'fulfilled') setBriefSettings(briefResult.value.settings);
+          if (briefResult.status === 'fulfilled') {
+            const defaults = defaultBriefSettings();
+            setBriefSettings({
+              ...defaults,
+              ...briefResult.value.settings,
+              wechat: { ...defaults.wechat, ...(briefResult.value.settings.wechat ?? {}) },
+              email: { ...defaults.email, ...(briefResult.value.settings.email ?? {}) },
+            });
+          }
         })
     }, 0);
     return () => {
@@ -244,12 +269,36 @@ export function SettingsPage() {
         <MetricCard label="学习记录" value={`${studyRecords.length} 条`} />
         <MetricCard label="模考记录" value={`${exams.length} 条`} />
       </div>
-      <div className="mt-5 card p-5">
+      <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">系统设置中心</h2>
+            <p className="mt-1 text-sm text-slate-500">按基础配置、通知、备份、目标、词典和危险操作分组，减少长页面滚动成本。</p>
+          </div>
+          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
+            当前：{settingsTabs.find((tab) => tab.id === settingsTab)?.label}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+          {settingsTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`rounded-lg border px-3 py-2 text-left transition ${settingsTab === tab.id ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
+              onClick={() => setSettingsTab(tab.id)}
+            >
+              <span className="block text-sm font-semibold">{tab.label}</span>
+              <span className="mt-1 block text-xs opacity-75">{tab.description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">数据保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
       </div>
-      <div className="mt-5 card p-5">
+      <div className={showSection('briefs') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Hourglass size={18} />学习总时长目标</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">这里设置的是到当前长期目标截止日期前，希望累计完成的总学习小时数。首页会自动显示已完成总时长、距离目标还差多少，以及平均每天还需要学多久。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-[240px_auto]">
@@ -270,7 +319,7 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
-      <div className="mt-5 card p-5">
+      <div className={showSection('backups') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -311,6 +360,14 @@ export function SettingsPage() {
           </label>
         </div>
         <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-800">
+            <input
+              type="checkbox"
+              checked={briefSettings.wechat?.enabled ?? false}
+              onChange={(event) => setBriefSettings({ ...briefSettings, wechat: { ...briefSettings.wechat, enabled: event.target.checked } })}
+            />
+            <Bell size={16} />启用微信每日推送
+          </label>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <input
               type="checkbox"
@@ -388,14 +445,14 @@ export function SettingsPage() {
           )}
         </div>
       </div>
-      <div className="mt-5">
+      <div className={showSection('goals') ? 'mt-5' : 'hidden'}>
         <div className="mb-3">
           <h2 className="text-base font-semibold text-slate-900">长期目标管理</h2>
           <p className="mt-1 text-sm text-slate-500">长期目标入口已收纳到设置页，首页仍会显示当前启用目标倒计时。</p>
         </div>
         <GoalsManager />
       </div>
-      <div className="mt-5 card p-5">
+      <div className={showSection('dictionary') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">易混单词数据</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">易混单词保存在当前浏览器本地，共 {confusingGroups.length} 组。可以导出 JSON，也可以设置服务器地址用于每小时备份。</p>
         <div className="mt-4 flex flex-wrap gap-3">
@@ -412,7 +469,7 @@ export function SettingsPage() {
           <button className="btn btn-soft" onClick={() => void restoreConfusingWordsBackup()}>从服务器恢复</button>
         </div>
       </div>
-      <div className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-5">
+      <div className={showSection('danger') ? 'mt-5 rounded-lg border border-rose-200 bg-rose-50 p-5' : 'hidden'}>
         <h2 className="text-base font-semibold text-rose-800">危险操作</h2>
         <p className="mt-2 text-sm leading-6 text-rose-700">一键清空会删除当前浏览器中的所有本地数据，包括复盘、学习时间、模考成绩、目标和短期任务。操作会进行二次确认，清空后会自动恢复默认学习项目和默认科目。</p>
         <button className="btn btn-danger mt-4" onClick={clearAllData}><Trash2 size={16} />一键清空所有数据</button>
