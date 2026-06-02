@@ -1,7 +1,7 @@
 import type { AppSetting, DailyReview, Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject } from '../types/models';
 
 export const DB_NAME = 'exam_plan_manager';
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 3;
 export const ENTITY_SCHEMA_VERSION = 1;
 
 export interface ExamPlannerSchema {

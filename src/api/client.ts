@@ -94,7 +94,7 @@ export interface ReviewPrefill {
   date: string;
   totalMinutes: number;
   topProject: { name: string; minutes: number } | null;
-  unfinishedTasks: Array<{ id: number; title: string; dueDate: string; urgency: string }>;
+  unfinishedTasks: Array<{ id: number; title: string; dueDate: string; dueTime?: string; urgency: string }>;
   water: { cups: number; cupMl: number; targetCups: number };
   problemInboxItems: ProblemInboxItem[];
   previousTomorrowPlan: string;
@@ -119,6 +119,11 @@ export interface DailyBriefSettings {
   nextDailyBriefAt?: string | null;
   wechat: {
     enabled: boolean;
+  };
+  taskReminders: {
+    enabled: boolean;
+    count: number;
+    offsetsMinutes: number[];
   };
   email: {
     enabled: boolean;
@@ -441,6 +446,8 @@ export interface TaskCenterStatus {
     latest: DailyBrief | null;
     nextDailyBriefAt: string | null;
     emailEnabled: boolean;
+    taskReminders?: DailyBriefSettings['taskReminders'];
+    nextTaskReminderScanAt?: string | null;
   };
   errorThemes: {
     job: ErrorThemeBatchJob | null;

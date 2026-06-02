@@ -66,9 +66,13 @@ export type TaskUrgency = 'low' | 'medium' | 'high';
 export interface ShortTermTask extends BaseEntity {
   title: string;
   dueDate: string;
+  dueTime?: string;
   urgency: TaskUrgency;
   isCompleted: boolean;
   completedAt?: string;
+  reminderEnabled?: boolean;
+  reminderSentOffsets?: number[];
+  reminderLastSentAt?: string;
   note?: string;
 }
 

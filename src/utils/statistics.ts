@@ -106,5 +106,5 @@ export const getVisibleShortTermTasks = (tasks: ShortTermTask[], currentDate = t
     .sort((a, b) => {
       const urgencyDiff = urgencyRank[b.urgency] - urgencyRank[a.urgency];
       if (urgencyDiff) return urgencyDiff;
-      return a.dueDate.localeCompare(b.dueDate);
+      return a.dueDate.localeCompare(b.dueDate) || String(a.dueTime || '').localeCompare(String(b.dueTime || ''));
     });

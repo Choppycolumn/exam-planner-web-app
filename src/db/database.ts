@@ -57,6 +57,27 @@ class ExamPlannerDatabase extends Dexie {
           updatedAt: nowISO(),
         });
       });
+
+    this.version(3)
+      .stores({
+        goals: '++id, isActive, deadline, type, createdAt, schemaVersion',
+        dailyReviews: '++id, &date, createdAt, updatedAt, schemaVersion',
+        studyProjects: '++id, name, isActive, sortOrder, schemaVersion',
+        studyTimeRecords: '++id, [date+projectId], date, projectId, createdAt, schemaVersion',
+        subjects: '++id, name, isActive, sortOrder, schemaVersion',
+        mockExamRecords: '++id, date, subjectId, [subjectId+date], createdAt, schemaVersion',
+        shortTermTasks: '++id, dueDate, dueTime, urgency, isCompleted, completedAt, createdAt, schemaVersion',
+        appSettings: '++id, &key, schemaVersion',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('appSettings').put({
+          key: 'dbSchemaVersion',
+          value: 3,
+          schemaVersion: ENTITY_SCHEMA_VERSION,
+          createdAt: nowISO(),
+          updatedAt: nowISO(),
+        });
+      });
   }
 }
 

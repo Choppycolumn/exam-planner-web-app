@@ -98,11 +98,14 @@ let nightlyErrorThemeTimerStarted = false;
 let dailyBriefTimerStarted = false;
 let maintenanceTimerStarted = false;
 let dailyBriefTimer = null;
+let taskReminderTimerStarted = false;
+let taskReminderTimer = null;
 let errorThemeBatchJob = null;
 let shuttingDown = false;
 let nextNightlyErrorThemeAt = null;
 let nextDailyBriefAt = null;
 let nextMaintenanceAt = null;
+let nextTaskReminderScanAt = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
@@ -162,6 +165,42 @@ function startOfMonthISO(value) {
 function endOfMonthISO(value) {
   const [year, month] = value.split('-').map(Number);
   return formatDateString(new Date(Date.UTC(year, month, 0)));
+}
+
+function normalizeTaskDueTime(value) {
+  const text = String(value || '').trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(text);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return '';
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function normalizeReminderSentOffsets(value) {
+  let items = value;
+  if (typeof value === 'string') {
+    try {
+      items = JSON.parse(value || '[]');
+    } catch {
+      items = [];
+    }
+  }
+  if (!Array.isArray(items)) return [];
+  return Array.from(new Set(items.map((item) => Number(item)).filter((item) => Number.isInteger(item) && item >= 0 && item <= 30 * 24 * 60))).sort((a, b) => a - b);
+}
+
+function normalizeTaskRow(item = {}) {
+  const dueTime = normalizeTaskDueTime(item.dueTime);
+  return {
+    ...item,
+    dueTime,
+    isCompleted: Boolean(item.isCompleted),
+    completedAt: item.completedAt || undefined,
+    reminderEnabled: Boolean(item.reminderEnabled) && Boolean(dueTime),
+    reminderSentOffsets: normalizeReminderSentOffsets(item.reminderSentOffsets),
+    reminderLastSentAt: item.reminderLastSentAt || undefined,
+  };
 }
 
 function previousWeekPeriod(today = todayISO()) {
@@ -455,9 +494,13 @@ CREATE TABLE IF NOT EXISTS short_term_tasks (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
   due_date TEXT NOT NULL,
+  due_time TEXT NOT NULL DEFAULT '',
   urgency TEXT NOT NULL DEFAULT 'medium',
   is_completed INTEGER NOT NULL DEFAULT 0,
   completed_at TEXT,
+  reminder_enabled INTEGER NOT NULL DEFAULT 0,
+  reminder_sent_offsets TEXT NOT NULL DEFAULT '[]',
+  reminder_last_sent_at TEXT,
   note TEXT NOT NULL DEFAULT '',
   schema_version INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -823,13 +866,17 @@ function writeStateToTables(state) {
     created_at: item.createdAt || timestamp,
     updated_at: item.updatedAt || timestamp,
   }))));
-  scripts.push(insertRowsSql('short_term_tasks', ['id', 'title', 'due_date', 'urgency', 'is_completed', 'completed_at', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.shortTermTasks.map((item, index) => ({
+  scripts.push(insertRowsSql('short_term_tasks', ['id', 'title', 'due_date', 'due_time', 'urgency', 'is_completed', 'completed_at', 'reminder_enabled', 'reminder_sent_offsets', 'reminder_last_sent_at', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.shortTermTasks.map((item, index) => ({
     id: Number(item.id || index + 1),
     title: item.title || '',
     due_date: item.dueDate || todayISO(),
+    due_time: normalizeTaskDueTime(item.dueTime),
     urgency: item.urgency || 'medium',
     is_completed: Boolean(item.isCompleted),
     completed_at: item.completedAt || null,
+    reminder_enabled: item.reminderEnabled ?? Boolean(normalizeTaskDueTime(item.dueTime)),
+    reminder_sent_offsets: JSON.stringify(normalizeReminderSentOffsets(item.reminderSentOffsets)),
+    reminder_last_sent_at: item.reminderLastSentAt || null,
     note: item.note || '',
     schema_version: Number(item.schemaVersion || entitySchemaVersion),
     created_at: item.createdAt || timestamp,
@@ -886,9 +933,10 @@ FROM subjects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boo
 paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM mock_exam_records ORDER BY date DESC, id DESC;`);
-  const shortTermTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted, completed_at AS completedAt, note,
+  const shortTermTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted, completed_at AS completedAt,
+reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM short_term_tasks ORDER BY due_date, id;`).map((item) => ({ ...item, isCompleted: Boolean(item.isCompleted), completedAt: item.completedAt || undefined }));
+FROM short_term_tasks ORDER BY due_date, due_time, id;`).map(normalizeTaskRow);
   const waterIntakeRecords = sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records ORDER BY date DESC;`);
@@ -1784,6 +1832,11 @@ function defaultDailyBriefSettings() {
     wechat: {
       enabled: true,
     },
+    taskReminders: {
+      enabled: true,
+      count: 1,
+      offsetsMinutes: [60],
+    },
     email: {
       enabled: false,
       host: '',
@@ -1795,6 +1848,26 @@ function defaultDailyBriefSettings() {
       to: '',
       subjectPrefix: 'Exam Planner 今日简报',
     },
+  };
+}
+
+function normalizeTaskReminderSettings(input = {}, previous = null) {
+  const defaults = defaultDailyBriefSettings().taskReminders;
+  const previousSettings = previous?.taskReminders || {};
+  const enabled = Boolean(input.enabled ?? previousSettings.enabled ?? defaults.enabled);
+  const rawOffsets = Array.isArray(input.offsetsMinutes) ? input.offsetsMinutes : previousSettings.offsetsMinutes || defaults.offsetsMinutes;
+  const offsets = Array.from(new Set(rawOffsets
+    .map((item) => Math.round(Number(item)))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 30 * 24 * 60)))
+    .sort((a, b) => b - a)
+    .slice(0, 5);
+  const requestedCount = Math.round(Number(input.count ?? previousSettings.count ?? (offsets.length || defaults.count)));
+  const nextOffsets = offsets.length ? offsets : defaults.offsetsMinutes;
+  const count = Math.max(1, Math.min(5, nextOffsets.length, Number.isFinite(requestedCount) ? requestedCount : defaults.count));
+  return {
+    enabled,
+    count,
+    offsetsMinutes: nextOffsets.slice(0, count),
   };
 }
 
@@ -1817,6 +1890,7 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
     wechat: {
       enabled: Boolean(wechatInput.enabled ?? previousWechat.enabled ?? defaults.wechat.enabled),
     },
+    taskReminders: normalizeTaskReminderSettings(input.taskReminders || {}, previous),
     email: {
       enabled: Boolean(emailInput.enabled),
       host: String(emailInput.host || previousEmail.host || '').trim(),
@@ -2589,11 +2663,12 @@ function getDailyBriefLearningSummary(date) {
   const activeGoal = sqliteJson(`SELECT name, deadline FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`)[0] || null;
   const yesterdayReview = sqliteJson(`SELECT date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score
 FROM daily_reviews WHERE date = ${sqlString(yesterday)} LIMIT 1;`).map(normalizeReview)[0] || null;
-  const todayTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted
+  const todayTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt
 FROM short_term_tasks
 WHERE due_date <= ${sqlString(date)} AND is_completed = 0
-ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
-LIMIT 8;`).map((task) => ({ ...task, isCompleted: Boolean(task.isCompleted) }));
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
+LIMIT 8;`).map(normalizeTaskRow);
   const latestExam = sqliteJson(`SELECT date, subject_name_snapshot AS subjectName, score, full_score AS fullScore, paper_name AS paperName
 FROM mock_exam_records ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
   const yesterdayMinutes = Number(sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${sqlString(yesterday)};`) || 0);
@@ -2835,7 +2910,7 @@ function dailyBriefHtml(payload) {
   const markets = payload.markets || [];
   const learning = payload.learning || {};
   const finance = payload.finance || null;
-  const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueDate)})</span></li>`).join('');
+  const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
   const studyPush = dailyBriefStudyPushHtml(learning);
   return `<!doctype html>
@@ -3598,6 +3673,8 @@ LIMIT 1;`)[0] || null;
       latest: getLatestDailyBriefSummary(),
       nextDailyBriefAt,
       emailEnabled: Boolean(getDailyBriefSettings({ includeSecret: true }).email.enabled),
+      taskReminders: getDailyBriefSettings({ includeSecret: true }).taskReminders,
+      nextTaskReminderScanAt,
     },
     errorThemes: {
       job: currentErrorThemeJobSnapshot(),
@@ -3643,6 +3720,20 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   if (applied.length) {
     logStructured('info', 'sqlite_migrations_applied', { applied });
   }
+}
+
+function ensureTaskReminderColumns() {
+  const existing = new Set(sqliteJson('PRAGMA table_info(short_term_tasks);').map((column) => column.name));
+  const columns = [
+    ['due_time', "TEXT NOT NULL DEFAULT ''"],
+    ['reminder_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+    ['reminder_sent_offsets', "TEXT NOT NULL DEFAULT '[]'"],
+    ['reminder_last_sent_at', 'TEXT'],
+  ];
+  for (const [name, definition] of columns) {
+    if (!existing.has(name)) runSqlite(`ALTER TABLE short_term_tasks ADD COLUMN ${name} ${definition};`);
+  }
+  runSqlite('CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_time ON short_term_tasks(is_completed, due_date, due_time);');
 }
 
 function notifyEvent(payload) {
@@ -3904,6 +3995,7 @@ VALUES ('structured_schema_version', '13', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
   runStructuredMigrations();
+  ensureTaskReminderColumns();
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -3932,6 +4024,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   if (!maintenanceTimerStarted) {
     scheduleDailyMaintenance();
     maintenanceTimerStarted = true;
+  }
+  if (!taskReminderTimerStarted) {
+    scheduleTaskReminderScan();
+    taskReminderTimerStarted = true;
   }
 }
 
@@ -4988,14 +5084,26 @@ function saveTaskSql(payload) {
   const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM short_term_tasks WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
     ? Number(payload.id)
     : nextTableId('short_term_tasks');
-  runSqlite(`INSERT INTO short_term_tasks (id, title, due_date, urgency, is_completed, completed_at, note, schema_version, created_at, updated_at)
-VALUES (${id}, ${sqlValue(payload.title || '')}, ${sqlValue(payload.dueDate || todayISO())}, ${sqlValue(payload.urgency || 'medium')}, ${sqlValue(Boolean(payload.isCompleted))}, ${sqlValue(payload.completedAt || null)}, ${sqlValue(payload.note || '')}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
+  const existing = sqliteJson(`SELECT due_date AS dueDate, due_time AS dueTime, reminder_sent_offsets AS reminderSentOffsets
+FROM short_term_tasks WHERE id = ${sqlValue(id)} LIMIT 1;`).map(normalizeTaskRow)[0] || null;
+  const dueDate = payload.dueDate || todayISO();
+  const dueTime = normalizeTaskDueTime(payload.dueTime);
+  const timeChanged = existing && (existing.dueDate !== dueDate || existing.dueTime !== dueTime);
+  const reminderEnabled = Boolean(payload.reminderEnabled ?? dueTime) && Boolean(dueTime);
+  const sentOffsets = timeChanged ? [] : normalizeReminderSentOffsets(payload.reminderSentOffsets ?? existing?.reminderSentOffsets);
+  const reminderLastSentAt = timeChanged ? null : payload.reminderLastSentAt || existing?.reminderLastSentAt || null;
+  runSqlite(`INSERT INTO short_term_tasks (id, title, due_date, due_time, urgency, is_completed, completed_at, reminder_enabled, reminder_sent_offsets, reminder_last_sent_at, note, schema_version, created_at, updated_at)
+VALUES (${id}, ${sqlValue(payload.title || '')}, ${sqlValue(dueDate)}, ${sqlValue(dueTime)}, ${sqlValue(payload.urgency || 'medium')}, ${sqlValue(Boolean(payload.isCompleted))}, ${sqlValue(payload.completedAt || null)}, ${sqlValue(reminderEnabled)}, ${sqlValue(JSON.stringify(sentOffsets))}, ${sqlValue(reminderLastSentAt)}, ${sqlValue(payload.note || '')}, ${entitySchemaVersion}, ${sqlValue(timestamp)}, ${sqlValue(timestamp)})
 ON CONFLICT(id) DO UPDATE SET
 title = excluded.title,
 due_date = excluded.due_date,
+due_time = excluded.due_time,
 urgency = excluded.urgency,
 is_completed = excluded.is_completed,
 completed_at = excluded.completed_at,
+reminder_enabled = excluded.reminder_enabled,
+reminder_sent_offsets = excluded.reminder_sent_offsets,
+reminder_last_sent_at = excluded.reminder_last_sent_at,
 note = excluded.note,
 updated_at = excluded.updated_at;`);
   tableChanged();
@@ -5634,11 +5742,12 @@ FROM study_project_daily_summaries
 WHERE date = ${sqlString(date)}
 ORDER BY minutes DESC, project_name_snapshot
 LIMIT 1;`).map((item) => ({ name: item.name, minutes: Number(item.minutes || 0) }))[0] || null;
-  const unfinishedTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency
+  const unfinishedTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency,
+reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt
 FROM short_term_tasks
 WHERE due_date <= ${sqlString(date)} AND is_completed = 0
-ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
-LIMIT 6;`);
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
+LIMIT 6;`).map(normalizeTaskRow);
   const water = sqliteJson(`SELECT cups, cup_ml AS cupMl, target_cups AS targetCups
 FROM water_intake_records WHERE date = ${sqlString(date)} LIMIT 1;`)[0] || { cups: 0, cupMl: 500, targetCups: 6 };
   const inboxItems = listProblemInboxItems({ status: 'open', from: date, to: date, limit: 6 });
@@ -5721,11 +5830,12 @@ FROM mock_exam_records ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
   const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM daily_reviews WHERE date IN (${sqlString(today)}, ${sqlString(yesterday)});`).map(normalizeReview);
-  const visibleTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted, completed_at AS completedAt, note,
+  const visibleTasks = sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted, completed_at AS completedAt,
+reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM short_term_tasks
 WHERE is_completed = 0 OR date(completed_at) = date(${sqlString(today)})
-ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id;`).map((task) => ({ ...task, isCompleted: Boolean(task.isCompleted), completedAt: task.completedAt || undefined }));
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id;`).map(normalizeTaskRow);
   const waterRecord = sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
@@ -6606,14 +6716,19 @@ function clawbotMinutesText(minutes) {
 }
 
 function normalizeClawbotTask(row) {
+  const task = normalizeTaskRow(row);
   return {
     id: Number(row.id),
-    title: row.title,
-    dueDate: row.dueDate,
-    urgency: row.urgency || 'medium',
-    isCompleted: Boolean(row.isCompleted),
-    completedAt: row.completedAt || null,
-    note: row.note || '',
+    title: task.title,
+    dueDate: task.dueDate,
+    dueTime: task.dueTime,
+    urgency: task.urgency || 'medium',
+    isCompleted: task.isCompleted,
+    completedAt: task.completedAt || null,
+    reminderEnabled: task.reminderEnabled,
+    reminderSentOffsets: task.reminderSentOffsets,
+    reminderLastSentAt: task.reminderLastSentAt || null,
+    note: task.note || '',
   };
 }
 
@@ -6623,10 +6738,22 @@ function clawbotUrgencyLabel(urgency) {
   return '中';
 }
 
+function taskLetterLabel(index) {
+  const value = Math.max(0, Number(index) || 0);
+  return String.fromCharCode(65 + (value % 26));
+}
+
+function taskLabelIndex(value) {
+  const text = String(value || '').trim();
+  if (!/^[A-Z]$/i.test(text)) return null;
+  return text.toUpperCase().charCodeAt(0) - 65;
+}
+
 function formatClawbotTask(task, index = 0) {
-  const prefix = index ? `${index}. ` : '';
+  const prefix = index >= 0 ? `${taskLetterLabel(index)}. ` : '';
   const status = task.isCompleted ? '已完成' : task.dueDate < todayISO() ? '逾期' : '未完成';
-  return `${prefix}${task.title}｜${task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}｜${status}`;
+  const due = task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate;
+  return `${prefix}${task.title}｜${due}｜${clawbotUrgencyLabel(task.urgency)}｜${status}`;
 }
 
 function taskSearchPattern(keyword) {
@@ -6637,12 +6764,22 @@ function taskSearchPattern(keyword) {
 function listClawbotTasks({ range = 'today', date = todayISO(), limit = 30 } = {}) {
   ensureSqliteStore();
   const endDate = range === 'week' ? endOfWeekISO(date) : date;
-  return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
-completed_at AS completedAt, note
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
 WHERE is_completed = 0 AND due_date <= ${sqlString(endDate)}
-ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT ${Math.max(1, Math.min(50, Number(limit) || 30))};`).map(normalizeClawbotTask);
+}
+
+function listClawbotLabelTasks({ limit = 26 } = {}) {
+  ensureSqliteStore();
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
+FROM short_term_tasks
+WHERE is_completed = 0
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
+LIMIT ${Math.max(1, Math.min(26, Number(limit) || 26))};`).map(normalizeClawbotTask);
 }
 
 function findClawbotTasks(keyword, { includeCompleted = false, limit = 6 } = {}) {
@@ -6650,28 +6787,33 @@ function findClawbotTasks(keyword, { includeCompleted = false, limit = 6 } = {})
   const text = String(keyword || '').trim();
   if (!text) return [];
   const statusClause = includeCompleted ? '' : 'AND is_completed = 0';
+  const labelIndex = taskLabelIndex(text);
+  if (labelIndex !== null) {
+    const labeled = listClawbotLabelTasks({ limit: 26 })[labelIndex];
+    return labeled ? [labeled] : [];
+  }
   const id = text.match(/^#?(\d+)$/)?.[1];
   if (id) {
-    return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
-completed_at AS completedAt, note
+    return sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
 WHERE id = ${sqlValue(Number(id))} ${statusClause}
 LIMIT 1;`).map(normalizeClawbotTask);
   }
   const pattern = taskSearchPattern(text);
   if (!pattern) return [];
-  return sqliteJson(`SELECT id, title, due_date AS dueDate, urgency, is_completed AS isCompleted,
-completed_at AS completedAt, note
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
 WHERE title LIKE ${sqlString(pattern)} ${statusClause}
-ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, id
+ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT ${Math.max(1, Math.min(20, Number(limit) || 6))};`).map(normalizeClawbotTask);
 }
 
 function buildClawbotTaskListReply(range, tasks) {
   const title = range === 'week' ? '本周未完成待办' : '今日未完成待办';
   if (!tasks.length) return `${title}：暂无。`;
-  return `${title}：\n${tasks.map((task, index) => formatClawbotTask(task, index + 1)).join('\n')}`;
+  return `${title}：\n${tasks.map((task, index) => formatClawbotTask(task, index)).join('\n')}`;
 }
 
 function clawbotSignedMoney(value, currency = 'CNY') {
@@ -6705,7 +6847,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     learning.yesterdayReview?.problems ? `昨日问题：${compactText(learning.yesterdayReview.problems, 120)}` : '',
   ];
   const taskLines = tasks.length
-    ? tasks.map((task, index) => `${index + 1}. ${task.title}｜${task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}`)
+    ? tasks.map((task, index) => `${taskLetterLabel(index)}. ${task.title}｜${task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}`)
     : ['今天没有到期待办。'];
   const financeLines = !finance
     ? ['暂无理财摘要。']
@@ -6766,6 +6908,7 @@ function buildClawbotDailyDigest(date = todayISO()) {
             id: task.id,
             title: task.title,
             dueDate: task.dueDate,
+            dueTime: task.dueTime,
             urgency: task.urgency,
             isCompleted: Boolean(task.isCompleted),
           })),
@@ -6778,7 +6921,7 @@ function buildClawbotDailyDigest(date = todayISO()) {
 }
 
 function ambiguousClawbotReply(action, matches) {
-  return `找到多个可${action}的待办，请说得更具体，或使用 #ID：\n${matches.map((task) => `#${task.id} ${formatClawbotTask(task)}`).join('\n')}`;
+  return `找到多个可${action}的待办，请说得更具体，或使用 #ID：\n${matches.map((task, index) => `#${task.id} ${formatClawbotTask(task, index)}`).join('\n')}`;
 }
 
 async function executeClawbotCommand(command, req) {
@@ -6799,12 +6942,15 @@ async function executeClawbotCommand(command, req) {
       urgency: command.urgency,
       note: 'Created by ClawBot rule command',
       isCompleted: false,
+      dueTime: command.dueTime,
+      reminderEnabled: Boolean(command.dueTime),
     });
-    writeAuditEvent({ action: 'clawbot_task_create', req, actorRole: 'clawbot', detail: { id, dueDate: command.dueDate, urgency: command.urgency } });
+    writeAuditEvent({ action: 'clawbot_task_create', req, actorRole: 'clawbot', detail: { id, dueDate: command.dueDate, dueTime: command.dueTime, urgency: command.urgency } });
+    const due = command.dueTime ? `${command.dueDate} ${command.dueTime}` : command.dueDate;
     return {
       ok: true,
-      reply: `已添加待办：#${id} ${command.title}｜${command.dueDate}｜${clawbotUrgencyLabel(command.urgency)}`,
-      task: { id, title: command.title, dueDate: command.dueDate, urgency: command.urgency },
+      reply: `已添加待办：#${id} ${command.title}｜${due}｜${clawbotUrgencyLabel(command.urgency)}`,
+      task: { id, title: command.title, dueDate: command.dueDate, dueTime: command.dueTime, urgency: command.urgency },
       command,
     };
   }
@@ -7030,6 +7176,117 @@ async function postClawbotWebhook(text) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function chinaDateISO(date = new Date()) {
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function chinaWallClockUtcMs(dateValue, timeValue) {
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue || '')) ? String(dateValue) : '';
+  const dueTime = normalizeTaskDueTime(timeValue);
+  if (!dueDate || !dueTime) return null;
+  const [year, month, day] = dueDate.split('-').map(Number);
+  const [hour, minute] = dueTime.split(':').map(Number);
+  return Date.UTC(year, month - 1, day, hour - 8, minute, 0, 0);
+}
+
+function formatReminderLead(minutes) {
+  const value = Math.max(0, Math.round(Number(minutes) || 0));
+  if (value >= 60) {
+    const hours = Math.floor(value / 60);
+    const rest = value % 60;
+    return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+  }
+  return `${value} 分钟`;
+}
+
+function taskCompletionHint(taskId) {
+  const tasks = listClawbotLabelTasks({ limit: 26 });
+  const index = tasks.findIndex((task) => Number(task.id) === Number(taskId));
+  if (index >= 0) return { label: taskLetterLabel(index), command: `完成${taskLetterLabel(index)}` };
+  return { label: `#${taskId}`, command: `完成#${taskId}` };
+}
+
+function buildTaskReminderText(task, offsetMinutes, dueAtMs) {
+  const hint = taskCompletionHint(task.id);
+  const due = `${task.dueDate} ${task.dueTime}`;
+  const remaining = Math.max(0, Math.round((dueAtMs - Date.now()) / 60000));
+  return [
+    '【待办提醒】',
+    `${hint.label}. ${task.title}`,
+    `时间：${due}`,
+    `优先级：${clawbotUrgencyLabel(task.urgency)}`,
+    `提醒：提前 ${formatReminderLead(offsetMinutes)}，距离开始约 ${formatReminderLead(remaining)}`,
+    '',
+    `可回复：${hint.command} / 今日待办`,
+  ].join('\n');
+}
+
+function listTimedReminderTasks(scanDate) {
+  const maxForwardDays = 35;
+  return sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
+completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
+FROM short_term_tasks
+WHERE is_completed = 0
+  AND reminder_enabled = 1
+  AND due_time <> ''
+  AND due_date >= ${sqlString(scanDate)}
+  AND due_date <= ${sqlString(addDaysISO(scanDate, maxForwardDays))}
+ORDER BY due_date, due_time, id;`).map(normalizeClawbotTask);
+}
+
+async function processTaskReminders() {
+  ensureSqliteStore();
+  const settings = getDailyBriefSettings({ includeSecret: true }).taskReminders;
+  if (!settings?.enabled) return { ok: true, sent: 0, skipped: 'disabled' };
+  const offsets = normalizeTaskReminderSettings(settings).offsetsMinutes;
+  if (!offsets.length) return { ok: true, sent: 0, skipped: 'no_offsets' };
+  const nowMs = Date.now();
+  const scanDate = chinaDateISO(new Date(nowMs - Math.max(...offsets) * 60 * 1000));
+  const tasks = listTimedReminderTasks(scanDate);
+  let sent = 0;
+  for (const task of tasks) {
+    const dueAtMs = chinaWallClockUtcMs(task.dueDate, task.dueTime);
+    if (!dueAtMs || nowMs >= dueAtMs) continue;
+    const sentOffsets = normalizeReminderSentOffsets(task.reminderSentOffsets);
+    const dueOffsets = offsets
+      .filter((offset) => !sentOffsets.includes(offset))
+      .filter((offset) => nowMs >= dueAtMs - offset * 60 * 1000)
+      .sort((a, b) => a - b);
+    const offset = dueOffsets[0];
+    if (typeof offset !== 'number') continue;
+    const delivery = await sendClawbotPushText(buildTaskReminderText(task, offset, dueAtMs));
+    if (!delivery.ok) {
+      logStructured('warn', 'task_reminder_push_failed', { taskId: task.id, offset, error: redactSecretText(delivery.error || '') });
+      continue;
+    }
+    const timestamp = nowISO();
+    const nextOffsets = normalizeReminderSentOffsets([...sentOffsets, offset]);
+    runSqlite(`UPDATE short_term_tasks
+SET reminder_sent_offsets = ${sqlString(JSON.stringify(nextOffsets))},
+    reminder_last_sent_at = ${sqlString(timestamp)},
+    updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(task.id)};`);
+    tableChanged();
+    sent += 1;
+    logStructured('info', 'task_reminder_pushed', { taskId: task.id, offset, method: delivery.method, messageId: delivery.messageId || null });
+  }
+  return { ok: true, sent };
+}
+
+function scheduleTaskReminderScan() {
+  if (taskReminderTimer) clearInterval(taskReminderTimer);
+  const scan = () => {
+    nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();
+    processTaskReminders().catch((error) => {
+      logStructured('error', 'task_reminder_scan_failed', { error: redactSecretText(error.message || String(error)) });
+    });
+  };
+  nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();
+  setTimeout(scan, 5000).unref?.();
+  taskReminderTimer = setInterval(scan, 60 * 1000);
+  taskReminderTimer.unref?.();
 }
 
 async function handleClawbotApi(req, res) {
@@ -7935,6 +8192,7 @@ function shutdown(signal) {
   shuttingDown = true;
   logStructured('info', 'server_shutdown_started', { signal });
   if (dailyBriefTimer) clearTimeout(dailyBriefTimer);
+  if (taskReminderTimer) clearInterval(taskReminderTimer);
   httpServer.close(() => {
     logStructured('info', 'server_shutdown_completed', { signal });
     process.exit(0);

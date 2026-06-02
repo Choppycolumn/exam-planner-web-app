@@ -85,7 +85,7 @@ export function DashboardPage() {
     errorThemeWall = [],
     readOnly,
   } = useDashboardData();
-  const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), urgency: 'medium' as TaskUrgency });
+  const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), dueTime: '', urgency: 'medium' as TaskUrgency });
   const [inboxText, setInboxText] = useState('');
   const [startPanelOpen, setStartPanelOpen] = useState(false);
   const [chartsReady, setChartsReady] = useState(false);
@@ -131,8 +131,8 @@ export function DashboardPage() {
 
   const saveTask = async () => {
     if (!taskDraft.title.trim()) return alert('请填写短期目标名称');
-    await tasksRepository.save(taskDraft);
-    setTaskDraft({ title: '', dueDate: todayISO(), urgency: 'medium' });
+    await tasksRepository.save({ ...taskDraft, reminderEnabled: Boolean(taskDraft.dueTime) });
+    setTaskDraft({ title: '', dueDate: todayISO(), dueTime: '', urgency: 'medium' });
   };
 
   const refreshInbox = async () => {
@@ -484,9 +484,10 @@ export function DashboardPage() {
             <h2 className="text-base font-semibold text-slate-900">短期目标</h2>
             <p className="mt-1 text-sm text-slate-500">按紧急程度排序，完成后当天保留横线，第二天从首页隐藏。</p>
           </div>
-          <div className="grid w-full gap-2 md:w-auto md:grid-cols-[220px_150px_130px_auto]">
+          <div className="grid w-full gap-2 md:w-auto md:grid-cols-[220px_150px_120px_130px_auto]">
             <input className="field" placeholder="目标名称" value={taskDraft.title} onChange={(event) => setTaskDraft({ ...taskDraft, title: event.target.value })} />
             <input className="field" type="date" value={taskDraft.dueDate} onChange={(event) => setTaskDraft({ ...taskDraft, dueDate: event.target.value })} />
+            <input className="field" type="time" value={taskDraft.dueTime} onChange={(event) => setTaskDraft({ ...taskDraft, dueTime: event.target.value })} />
             <select className="field" value={taskDraft.urgency} onChange={(event) => setTaskDraft({ ...taskDraft, urgency: event.target.value as TaskUrgency })}>
               <option value="high">紧急</option>
               <option value="medium">普通</option>
@@ -507,7 +508,7 @@ export function DashboardPage() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className={`rounded border px-2 py-1 ${urgencyClassName[task.urgency]}`}>{urgencyLabel[task.urgency]}</span>
                   <span className={`rounded border px-2 py-1 font-semibold ${dueStatus.className}`}>{dueStatus.label}</span>
-                  <span className="text-slate-500">到期：{task.dueDate}</span>
+                  <span className="text-slate-500">到期：{task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate}</span>
                   <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => task.id && confirm('确定删除这个短期目标吗？') && tasksRepository.remove(task.id)}><Trash2 size={16} /></button>
                 </div>
               </div>

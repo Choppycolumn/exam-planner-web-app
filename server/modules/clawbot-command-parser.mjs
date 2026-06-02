@@ -32,16 +32,16 @@ const urgencyTokens = [
 
 export const clawbotHelpText = [
   'ClawBot 规则命令：',
-  '1. 待办 明天 高 背单词 50 个',
-  '2. 完成 背单词',
-  '3. 删除待办 背单词',
+  '1. 待办 明天 15:30 高 背单词 50 个',
+  '2. 完成A / 完成 A / 完成 背单词',
+  '3. 删除待办 A / 删除待办 背单词',
   '4. 今日待办 / 本周待办',
   '5. 每日简报 / 帮助',
 ].join('\n');
 
 function cleanText(value = '') {
   return String(value)
-    .replace(/[，,；;。]+/g, ' ')
+    .replace(/[，。；;、|]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -80,7 +80,7 @@ function removeSlice(text, start, end) {
 }
 
 function resolveWeekdayDate(token, today) {
-  const nextWeek = /^下/.test(token);
+  const nextWeek = /^下周|^下星期|^下礼拜/.test(token);
   const weekdayChar = token.at(-1);
   const target = weekdayValues.get(weekdayChar);
   const todayDate = parseISODate(today);
@@ -97,7 +97,7 @@ function resolveWeekdayDate(token, today) {
 }
 
 function extractDueDate(input, today) {
-  let text = cleanText(input);
+  const text = cleanText(input);
 
   const iso = text.match(/\b(20\d{2})[./-](\d{1,2})[./-](\d{1,2})\b/);
   if (iso) {
@@ -107,9 +107,7 @@ function extractDueDate(input, today) {
 
   for (const [token, offset] of relativeDateOffsets.entries()) {
     const index = text.indexOf(token);
-    if (index >= 0) {
-      return { dueDate: addDaysISO(today, offset), text: removeSlice(text, index, index + token.length) };
-    }
+    if (index >= 0) return { dueDate: addDaysISO(today, offset), text: removeSlice(text, index, index + token.length) };
   }
 
   const weekday = text.match(/(下周|下星期|下礼拜|这周|本周|周|星期|礼拜)[一二三四五六日天1-7]/);
@@ -131,12 +129,64 @@ function extractDueDate(input, today) {
   return { dueDate: null, text };
 }
 
+function normalizeHour(hour, meridiem = '') {
+  let value = Number(hour);
+  if (!Number.isFinite(value)) return null;
+  if (/下午|晚上|傍晚/.test(meridiem) && value >= 1 && value <= 11) value += 12;
+  if (/中午/.test(meridiem) && value >= 1 && value <= 10) value += 12;
+  if (/凌晨|早上|上午/.test(meridiem) && value === 12) value = 0;
+  return value >= 0 && value <= 23 ? value : null;
+}
+
+function normalizeTimeParts(hour, minute, meridiem = '') {
+  const normalizedHour = normalizeHour(hour, meridiem);
+  const normalizedMinute = Number(minute);
+  if (normalizedHour === null || !Number.isFinite(normalizedMinute) || normalizedMinute < 0 || normalizedMinute > 59) return null;
+  return `${String(normalizedHour).padStart(2, '0')}:${String(normalizedMinute).padStart(2, '0')}`;
+}
+
+function extractDueTime(input) {
+  const text = cleanText(input);
+
+  const colon = text.match(/(^|[\s:：])(?:(凌晨|早上|上午|中午|下午|傍晚|晚上)\s*)?(\d{1,2})[:：](\d{2})(?=$|[\s:：])/);
+  if (colon) {
+    const dueTime = normalizeTimeParts(colon[3], colon[4], colon[2] || '');
+    if (dueTime) {
+      const start = colon.index + colon[1].length;
+      const end = colon.index + colon[0].length;
+      return { dueTime, text: removeSlice(text, start, end) };
+    }
+  }
+
+  const half = text.match(/(^|[\s:：])(?:(凌晨|早上|上午|中午|下午|傍晚|晚上)\s*)?(\d{1,2})点半(?=$|[\s:：])/);
+  if (half) {
+    const dueTime = normalizeTimeParts(half[3], 30, half[2] || '');
+    if (dueTime) {
+      const start = half.index + half[1].length;
+      const end = half.index + half[0].length;
+      return { dueTime, text: removeSlice(text, start, end) };
+    }
+  }
+
+  const zh = text.match(/(^|[\s:：])(?:(凌晨|早上|上午|中午|下午|傍晚|晚上)\s*)?(\d{1,2})点(?:(\d{1,2})分?)?(?=$|[\s:：])/);
+  if (zh) {
+    const dueTime = normalizeTimeParts(zh[3], zh[4] || 0, zh[2] || '');
+    if (dueTime) {
+      const start = zh.index + zh[1].length;
+      const end = zh.index + zh[0].length;
+      return { dueTime, text: removeSlice(text, start, end) };
+    }
+  }
+
+  return { dueTime: '', text };
+}
+
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function extractUrgency(input) {
-  let text = cleanText(input);
+  const text = cleanText(input);
   for (const item of urgencyTokens) {
     const tokenPattern = item.tokens.map(escapeRegex).join('|');
     const pattern = new RegExp(`(^|[\\s:：])(${tokenPattern})(?=$|[\\s:：])`, 'i');
@@ -151,7 +201,7 @@ function extractUrgency(input) {
 }
 
 function stripCreatePrefix(text) {
-  return cleanText(text.replace(/^(请|帮我|给我|麻烦)?(提醒我|记一下|记录一下|添加|新增|新建)\s*/i, ''));
+  return cleanText(text.replace(/^(请|帮我|给我|麻烦)?(提醒我|记一个|记录一个|添加|新增|新建)\s*/i, ''));
 }
 
 function unknown(reason, raw) {
@@ -168,10 +218,10 @@ export function parseClawbotCommand(input, { today = formatISODate(new Date()) }
   if (/^(本周待办|这周待办|周待办|本周任务)$/i.test(text)) return { type: 'list_tasks', range: 'week', raw };
   if (/^(每日简报|今日简报|日报|早报|今日提醒)$/i.test(text)) return { type: 'daily_digest', raw };
 
-  const complete = text.match(/^(完成|搞定|已完成|打卡)\s+(.+)$/i);
+  const complete = text.match(/^(完成|搞定|已完成|打卡)\s*(.+)$/i);
   if (complete) return { type: 'complete_task', keyword: cleanText(complete[2]), raw };
 
-  const remove = text.match(/^(删除待办|删除任务|删待办|取消待办|取消任务)\s+(.+)$/i);
+  const remove = text.match(/^(删除待办|删除任务|删待办|取消待办|取消任务)\s*(.+)$/i);
   if (remove) return { type: 'delete_task', keyword: cleanText(remove[2]), raw };
 
   const create = text.match(/^(待办|添加待办|新增待办|新建待办|任务|添加任务|新增任务|新建任务)(?:\s|:|：)?(.+)$/i);
@@ -180,18 +230,23 @@ export function parseClawbotCommand(input, { today = formatISODate(new Date()) }
   let rest = stripCreatePrefix(create[2]);
   const firstDate = extractDueDate(rest, today);
   rest = firstDate.text;
+  const firstTime = extractDueTime(rest);
+  rest = firstTime.text;
   const urgency = extractUrgency(rest);
   rest = urgency.text;
   const secondDate = firstDate.dueDate ? { dueDate: firstDate.dueDate, text: rest } : extractDueDate(rest, today);
   rest = secondDate.text;
+  const secondTime = firstTime.dueTime ? { dueTime: firstTime.dueTime, text: rest } : extractDueTime(rest);
+  rest = secondTime.text;
 
-  const title = cleanText(rest.replace(/^[:：-]+/, ''));
+  const title = cleanText(rest.replace(/^[:：]+/, ''));
   if (!title) return unknown('missing_task_title', raw);
 
   return {
     type: 'create_task',
     title: title.slice(0, 160),
     dueDate: secondDate.dueDate || today,
+    dueTime: secondTime.dueTime || '',
     urgency: urgency.urgency,
     raw,
   };

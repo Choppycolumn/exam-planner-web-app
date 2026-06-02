@@ -52,6 +52,11 @@ function defaultBriefSettings(): DailyBriefSettings {
     wechat: {
       enabled: true,
     },
+    taskReminders: {
+      enabled: true,
+      count: 1,
+      offsetsMinutes: [60],
+    },
     email: {
       enabled: false,
       host: '',
@@ -66,6 +71,18 @@ function defaultBriefSettings(): DailyBriefSettings {
   };
 }
 
+function parseReminderOffsets(value: string) {
+  const offsets = value
+    .split(/[,\s，、]+/)
+    .map((item) => Math.round(Number(item.trim())))
+    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 30 * 24 * 60);
+  return Array.from(new Set(offsets)).sort((a, b) => b - a).slice(0, 5);
+}
+
+function reminderOffsetsText(settings: DailyBriefSettings) {
+  return (settings.taskReminders?.offsetsMinutes?.length ? settings.taskReminders.offsetsMinutes : [60]).join(', ');
+}
+
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
   const [toast, setToast] = useState('');
@@ -75,6 +92,7 @@ export function SettingsPage() {
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [briefSettings, setBriefSettings] = useState<DailyBriefSettings>(() => defaultBriefSettings());
+  const [taskReminderOffsetsText, setTaskReminderOffsetsText] = useState(() => reminderOffsetsText(defaultBriefSettings()));
   const [briefLoading, setBriefLoading] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('all');
   const showSection = (section: SettingsTab) => settingsTab === 'all' || settingsTab === section;
@@ -102,8 +120,10 @@ export function SettingsPage() {
               ...defaults,
               ...briefResult.value.settings,
               wechat: { ...defaults.wechat, ...(briefResult.value.settings.wechat ?? {}) },
+              taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) },
               email: { ...defaults.email, ...(briefResult.value.settings.email ?? {}) },
             });
+            setTaskReminderOffsetsText(reminderOffsetsText({ ...defaults, ...briefResult.value.settings, taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) } }));
           }
         })
     }, 0);
@@ -141,8 +161,16 @@ export function SettingsPage() {
   const saveBriefSettings = async () => {
     setBriefLoading(true);
     try {
-      const result = await serverApi.saveBriefSettings(briefSettings);
+      const offsetsMinutes = parseReminderOffsets(taskReminderOffsetsText);
+      const result = await serverApi.saveBriefSettings({
+        ...briefSettings,
+        taskReminders: {
+          ...briefSettings.taskReminders,
+          offsetsMinutes: offsetsMinutes.length ? offsetsMinutes : [60],
+        },
+      });
       setBriefSettings(result.settings);
+      setTaskReminderOffsetsText(reminderOffsetsText(result.settings));
       notifyDataChanged();
       setToast('晨间简报设置已保存');
     } catch {
@@ -298,7 +326,7 @@ export function SettingsPage() {
         <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
       </div>
-      <div className={showSection('briefs') ? 'mt-5 card p-5' : 'hidden'}>
+      <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Hourglass size={18} />学习总时长目标</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">这里设置的是到当前长期目标截止日期前，希望累计完成的总学习小时数。首页会自动显示已完成总时长、距离目标还差多少，以及平均每天还需要学多久。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-[240px_auto]">
@@ -319,7 +347,7 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
-      <div className={showSection('backups') ? 'mt-5 card p-5' : 'hidden'}>
+      <div className={showSection('briefs') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -368,6 +396,48 @@ export function SettingsPage() {
             />
             <Bell size={16} />启用微信每日推送
           </label>
+          <div className="mb-4 rounded-lg border border-blue-100 bg-white p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                checked={briefSettings.taskReminders?.enabled ?? true}
+                onChange={(event) => setBriefSettings({
+                  ...briefSettings,
+                  taskReminders: { ...(briefSettings.taskReminders ?? defaultBriefSettings().taskReminders), enabled: event.target.checked },
+                })}
+              />
+              <Bell size={16} />启用定时待办微信提醒
+            </label>
+            <div className="mt-3 grid gap-3 md:grid-cols-[160px_1fr]">
+              <label>
+                <span className="label">提醒次数</span>
+                <input
+                  className="field"
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={briefSettings.taskReminders?.count ?? 1}
+                  onChange={(event) => setBriefSettings({
+                    ...briefSettings,
+                    taskReminders: {
+                      ...(briefSettings.taskReminders ?? defaultBriefSettings().taskReminders),
+                      count: Math.max(1, Math.min(5, Number(event.target.value) || 1)),
+                    },
+                  })}
+                />
+              </label>
+              <label>
+                <span className="label">每次提前分钟</span>
+                <input
+                  className="field"
+                  placeholder="60 或 120, 60, 15"
+                  value={taskReminderOffsetsText}
+                  onChange={(event) => setTaskReminderOffsetsText(event.target.value)}
+                />
+                <p className="mt-1 text-xs leading-5 text-slate-500">多个提醒用逗号分隔；例如 120, 60, 15 表示提前 2 小时、1 小时、15 分钟各提醒一次。</p>
+              </label>
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <input
               type="checkbox"
@@ -392,7 +462,7 @@ export function SettingsPage() {
           <button className="btn btn-soft" disabled={readOnly || briefLoading} onClick={() => void generateBriefNow()}><Cloud size={16} />立即生成今日简报</button>
         </div>
       </div>
-      <div className="mt-5 card p-5">
+      <div className={showSection('backups') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">服务器备份系统</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">服务器会每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。词典已建立本地 SQLite 索引，查询时不依赖外部 API。</p>
         <dl className="mt-4 grid gap-4 border-y border-slate-100 py-4 md:grid-cols-4">
