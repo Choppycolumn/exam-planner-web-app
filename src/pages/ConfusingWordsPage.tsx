@@ -4,10 +4,10 @@ import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
 import { Page } from '../components/Page';
 import { Toast } from '../components/Toast';
-import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
+import { backupConfusingWords, ConfusingWordsBackupConflictError, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
 import { queryDictionary } from '../features/confusing-words/dictionaryApi';
 import { openPrintWindow } from '../features/confusing-words/print';
-import { buildExport, createGroup, createWord, loadGroups, parseWords, saveGroups } from '../features/confusing-words/storage';
+import { buildExport, createGroup, createWord, isDefaultConfusingWordsSeed, loadConfusingWordsExport, loadGroups, parseWords, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordEntry, ConfusingWordGroup, PrintMode } from '../features/confusing-words/types';
 
 const nowISO = () => new Date().toISOString();
@@ -39,6 +39,8 @@ export function ConfusingWordsPage() {
   const [toast, setToast] = useState('');
   const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem(BACKUP_META_KEY) || '');
   const [serverRestoreChecked, setServerRestoreChecked] = useState(false);
+  const [hasLocalChanges, setHasLocalChanges] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
 
   const selectedGroup = groups.find((group) => group.id === selectedId) ?? groups[0];
   const totalWords = countWords(groups);
@@ -53,6 +55,7 @@ export function ConfusingWordsPage() {
 
   const persist = (next: ConfusingWordGroup[], message?: string) => {
     setGroups(next);
+    setHasLocalChanges(true);
     saveGroups(next);
     if (message) {
       setToast(message);
@@ -71,16 +74,27 @@ export function ConfusingWordsPage() {
         if (cancelled || !backup?.groups?.length) return;
         const backupWords = countWords(backup.groups);
         const localWords = countWords(initialGroups);
-        if (backupWords > localWords) {
+        const localExport = loadConfusingWordsExport();
+        const localBackedUpAt = localStorage.getItem(BACKUP_META_KEY) || localExport?.exportedAt || '';
+        const serverBackedUpAt = backup.backedUpAt || backup.exportedAt || '';
+        const serverIsNewer = Boolean(serverBackedUpAt && localBackedUpAt && new Date(serverBackedUpAt).getTime() > new Date(localBackedUpAt).getTime());
+        const shouldUseServer = isDefaultConfusingWordsSeed(initialGroups)
+          || backupWords > localWords
+          || (serverIsNewer && backupWords >= localWords);
+        if (shouldUseServer) {
           saveGroups(backup.groups);
           setGroups(backup.groups);
+          setHasLocalChanges(false);
           setSelectedId(backup.groups[0]?.id ?? '');
           if (backup.backedUpAt) {
             localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
             setLastBackupAt(backup.backedUpAt);
           }
           setToast('已从服务器备份恢复易混单词');
+          setSyncStatus(`服务器同步：已恢复 ${backup.groups.length} 组 / ${backupWords} 个词`);
           window.setTimeout(() => setToast(''), 1800);
+        } else {
+          setSyncStatus(`服务器同步：服务器有 ${backup.groups.length} 组 / ${backupWords} 个词`);
         }
       } catch {
         // 本地优先：没有登录或备份不可用时继续使用当前浏览器数据。
@@ -102,6 +116,7 @@ export function ConfusingWordsPage() {
         words: group.words.map((word) => word.id === wordId ? { ...word, ...patch, updatedAt: nowISO() } : word),
         updatedAt: nowISO(),
       } : group);
+      setHasLocalChanges(true);
       saveGroups(next);
       return next;
     });
@@ -164,18 +179,26 @@ export function ConfusingWordsPage() {
   const performBackup = useCallback(async () => {
     if (!serverRestoreChecked) return;
     if (!groups.length) return;
-    if (lastBackupAt && Date.now() - new Date(lastBackupAt).getTime() < BACKUP_INTERVAL_MS) return;
+    if (isDefaultConfusingWordsSeed(groups)) return;
+    if (!hasLocalChanges && lastBackupAt && Date.now() - new Date(lastBackupAt).getTime() < BACKUP_INTERVAL_MS) return;
     try {
       const result = await backupConfusingWords(buildExport(groups), {
         baseUrl: localStorage.getItem(BACKUP_BASE_URL_KEY) || '',
         password: localStorage.getItem(BACKUP_PASSWORD_KEY) || '',
-      });
+      }, { source: hasLocalChanges ? 'browser-sync' : 'hourly-sync' });
       localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
       setLastBackupAt(result.backedUpAt);
-    } catch {
+      setHasLocalChanges(false);
+      setSyncStatus(`服务器同步：已备份 ${groups.length} 组 / ${result.wordCount} 个词`);
+    } catch (error) {
+      if (error instanceof ConfusingWordsBackupConflictError) {
+        setSyncStatus(`服务器同步：已保护服务器 ${error.server?.wordCount ?? 0} 个词，未用本地 ${error.incoming?.wordCount ?? 0} 个词覆盖`);
+        return;
+      }
+      setSyncStatus('服务器同步：暂时不可用，本地数据仍可继续使用');
       // 本地优先：备份失败不打断当前学习记录。
     }
-  }, [groups, lastBackupAt, serverRestoreChecked]);
+  }, [groups, hasLocalChanges, lastBackupAt, serverRestoreChecked]);
 
   useEffect(() => {
     const firstRun = window.setTimeout(() => void performBackup(), 0);
@@ -193,6 +216,8 @@ export function ConfusingWordsPage() {
         <MetricCard label="单词数" value={`${totalWords} 个`} />
         <MetricCard label="今日新增" value={`${todayWords} 个`} />
       </div>
+
+      {syncStatus ? <p className="mt-3 text-sm text-slate-500">{syncStatus}</p> : null}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[320px_1fr_260px]">
         <aside className="space-y-5">

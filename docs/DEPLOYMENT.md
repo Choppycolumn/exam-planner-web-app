@@ -54,6 +54,18 @@ npm run build
 
 变量名见 `.env.example`。
 
+理财交易所同步需要额外配置只读/税务 API 环境变量：
+
+```text
+BINANCE_API_KEY=
+BINANCE_API_SECRET=
+BITGET_API_KEY=
+BITGET_API_SECRET=
+BITGET_API_PASSPHRASE=   # 可选；税务 API Key 没有 passphrase 时留空
+```
+
+交易所 API Key 建议只开启读取或税务权限，不开启交易、划转、提现权限。Binance `LD*` 理财资产会按底层币种估值并归类为 Earn。Bitget 税务 Key 没有 passphrase 时只能同步税务流水，并尽量用流水里的 balance 字段生成资产快照；如果税务流水没有 balance 字段，只能按所选时间窗口内的流水金额做估算。Bitget Earn/活期理财余额需要额外配置带 passphrase 的只读 API，服务会读取 `/api/v2/earn/account/assets` 和 `/api/v2/earn/savings/assets`。生产服务器配置后需要重载 systemd 配置并重启服务才会生效。
+
 ## 推荐发布流程
 
 1. 本地确认 `npm run lint && npm test && npm run build` 通过。

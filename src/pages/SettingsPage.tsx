@@ -7,7 +7,14 @@ import { Toast } from '../components/Toast';
 import { GoalsManager } from '../components/GoalsManager';
 import { useEffect, useState } from 'react';
 import { notifyDataChanged, serverApi, type BackupStatus, type DailyBriefSettings } from '../api/client';
-import { backupConfusingWords, fetchConfusingWordsBackup } from '../features/confusing-words/backupApi';
+import {
+  backupConfusingWords,
+  ConfusingWordsBackupConflictError,
+  fetchConfusingWordsBackup,
+  fetchConfusingWordsBackupVersions,
+  restoreConfusingWordsBackupVersion,
+  type ConfusingWordsBackupVersion,
+} from '../features/confusing-words/backupApi';
 import { buildExport, loadGroups, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordGroup } from '../features/confusing-words/types';
 
@@ -90,6 +97,8 @@ export function SettingsPage() {
   const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
   const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
+  const [confusingBackupVersions, setConfusingBackupVersions] = useState<ConfusingWordsBackupVersion[]>([]);
+  const [confusingServerBackup, setConfusingServerBackup] = useState<{ groups: ConfusingWordGroup[]; backedUpAt?: string } | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [briefSettings, setBriefSettings] = useState<DailyBriefSettings>(() => defaultBriefSettings());
   const [taskReminderOffsetsText, setTaskReminderOffsetsText] = useState(() => reminderOffsetsText(defaultBriefSettings()));
@@ -100,8 +109,37 @@ export function SettingsPage() {
   const refreshBackupStatus = async () => {
     try {
       setBackupStatus(await serverApi.getBackupStatus());
-    } catch {
+    } catch (error) {
+      if (error instanceof ConfusingWordsBackupConflictError) {
+        const shouldForce = confirm(`服务器已有 ${error.server?.wordCount ?? 0} 个词，本地只有 ${error.incoming?.wordCount ?? 0} 个词。确定要用本地覆盖服务器备份吗？`);
+        if (!shouldForce) {
+          setToast('已取消覆盖服务器单词备份');
+          setTimeout(() => setToast(''), 2200);
+          return;
+        }
+        const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword }, { force: true, source: 'manual-force' });
+        localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
+        await refreshConfusingWordsBackups();
+        setToast('已强制覆盖服务器单词备份');
+        setTimeout(() => setToast(''), 2200);
+        return;
+      }
       setBackupStatus(null);
+    }
+  };
+
+  const refreshConfusingWordsBackups = async () => {
+    try {
+      const settings = { baseUrl: backupBaseUrl, password: backupPassword };
+      const [serverBackup, versionsResult] = await Promise.all([
+        fetchConfusingWordsBackup(settings),
+        fetchConfusingWordsBackupVersions(settings),
+      ]);
+      setConfusingServerBackup(serverBackup ? { groups: serverBackup.groups || [], backedUpAt: serverBackup.backedUpAt || serverBackup.exportedAt } : null);
+      setConfusingBackupVersions(versionsResult.items || []);
+    } catch {
+      setConfusingServerBackup(null);
+      setConfusingBackupVersions([]);
     }
   };
 
@@ -131,6 +169,15 @@ export function SettingsPage() {
       mounted = false;
       window.clearTimeout(timeoutId);
     };
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void refreshConfusingWordsBackups();
+    }, 500);
+    return () => window.clearTimeout(timeoutId);
+    // Backup settings are saved in localStorage first; avoid refetching while the password field is being typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const exportData = () => {
@@ -221,14 +268,16 @@ export function SettingsPage() {
   const saveBackupSettings = () => {
     localStorage.setItem(BACKUP_BASE_URL_KEY, backupBaseUrl.trim());
     localStorage.setItem(BACKUP_PASSWORD_KEY, backupPassword);
+    void refreshConfusingWordsBackups();
     setToast('易混单词备份设置已保存');
     setTimeout(() => setToast(''), 1800);
   };
 
   const backupNow = async () => {
     try {
-      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword });
+      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword }, { source: 'manual-settings' });
       localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
+      await refreshConfusingWordsBackups();
       setToast('易混单词已备份到服务器');
     } catch {
       setToast('备份失败，请检查服务器地址和密码');
@@ -244,9 +293,28 @@ export function SettingsPage() {
       saveGroups(backup.groups);
       setConfusingGroups(backup.groups);
       if (backup.backedUpAt) localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
+      await refreshConfusingWordsBackups();
       setToast('已从服务器恢复易混单词');
     } catch {
       setToast('恢复失败，请检查服务器地址和密码');
+    }
+    setTimeout(() => setToast(''), 2200);
+  };
+
+  const restoreConfusingWordsVersion = async (version: ConfusingWordsBackupVersion) => {
+    if (!confirm(`确定恢复这个历史版本吗？它包含 ${version.groupCount} 组 / ${version.wordCount} 个词，会覆盖当前浏览器里的易混单词。`)) return;
+    try {
+      await restoreConfusingWordsBackupVersion(version.id, { baseUrl: backupBaseUrl, password: backupPassword });
+      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, password: backupPassword });
+      if (backup?.groups?.length) {
+        saveGroups(backup.groups);
+        setConfusingGroups(backup.groups);
+        if (backup.backedUpAt) localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
+      }
+      await refreshConfusingWordsBackups();
+      setToast('已从历史版本恢复易混单词');
+    } catch {
+      setToast('历史版本恢复失败，请检查登录状态或备份密码');
     }
     setTimeout(() => setToast(''), 2200);
   };
@@ -289,6 +357,9 @@ export function SettingsPage() {
     }
     setTimeout(() => setToast(''), 2600);
   };
+
+  const confusingLocalWordCount = confusingGroups.reduce((sum, group) => sum + group.words.length, 0);
+  const confusingServerWordCount = confusingServerBackup?.groups.reduce((sum, group) => sum + group.words.length, 0) ?? 0;
 
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
@@ -539,6 +610,48 @@ export function SettingsPage() {
           <button className="btn btn-soft" onClick={() => void restoreConfusingWordsBackup()}>从服务器恢复</button>
         </div>
       </div>
+        <div className={showSection('dictionary') ? 'mt-5' : 'hidden'}>
+          <div className="flex flex-wrap gap-3">
+            <button className="btn btn-soft" onClick={() => void refreshConfusingWordsBackups()}>刷新服务器版本</button>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">本机易混单词</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{confusingGroups.length} 组 / {confusingLocalWordCount} 个词</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">服务器当前备份</p>
+              <p className="mt-1 text-lg font-semibold text-slate-900">{confusingServerBackup ? `${confusingServerBackup.groups.length} 组 / ${confusingServerWordCount} 个词` : '未读取'}</p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">服务器备份时间</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{confusingServerBackup?.backedUpAt ? new Date(confusingServerBackup.backedUpAt).toLocaleString() : '--'}</p>
+            </div>
+          </div>
+          <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+            <div className="grid grid-cols-[1fr_90px_90px_86px] bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+              <span>历史版本</span>
+              <span>组数</span>
+              <span>词数</span>
+              <span className="text-right">操作</span>
+            </div>
+            {confusingBackupVersions.length ? confusingBackupVersions.slice(0, 10).map((version) => (
+              <div key={version.id} className="grid grid-cols-[1fr_90px_90px_86px] items-center gap-2 border-t border-slate-100 px-3 py-2 text-sm">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-slate-800">{new Date(version.createdAt).toLocaleString()}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">{version.source} · {formatBytes(version.payloadBytes)}</p>
+                </div>
+                <span className="text-slate-600">{version.groupCount}</span>
+                <span className="text-slate-600">{version.wordCount}</span>
+                <button className="justify-self-end rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => void restoreConfusingWordsVersion(version)}>
+                  恢复
+                </button>
+              </div>
+            )) : (
+              <div className="border-t border-slate-100 px-3 py-6 text-center text-sm text-slate-500">暂无服务器历史版本；点击“立即备份”后会开始保留。</div>
+            )}
+          </div>
+        </div>
       <div className={showSection('danger') ? 'mt-5 rounded-lg border border-rose-200 bg-rose-50 p-5' : 'hidden'}>
         <h2 className="text-base font-semibold text-rose-800">危险操作</h2>
         <p className="mt-2 text-sm leading-6 text-rose-700">一键清空会删除当前浏览器中的所有本地数据，包括复盘、学习时间、模考成绩、目标和短期任务。操作会进行二次确认，清空后会自动恢复默认学习项目和默认科目。</p>

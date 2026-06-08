@@ -6,7 +6,9 @@ import App from './App.tsx'
 import './index.css'
 import { registerServiceWorker } from './utils/registerServiceWorker.ts'
 import { applyTheme, resolveInitialTheme } from './utils/theme.ts'
+import { initPwaInstallPrompt } from './hooks/usePwaInstall.ts'
 
+initPwaInstallPrompt()
 registerServiceWorker()
 applyTheme(resolveInitialTheme())
 

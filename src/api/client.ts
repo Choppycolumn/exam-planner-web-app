@@ -231,6 +231,42 @@ export interface BackupStatus {
   dictionaryIndexedAt: string | null;
 }
 
+export interface MihomoNode {
+  name: string;
+  type: string;
+  udp: boolean;
+  delay: number | null;
+  alive: boolean | null;
+}
+
+export interface MihomoSettingsResponse {
+  ok: boolean;
+  installed: boolean;
+  active: boolean;
+  version: string;
+  controllerOk: boolean;
+  controllerUrl: string;
+  localProxyUrl: string;
+  subscriptionConfigured: boolean;
+  subscriptionLabel: string;
+  providerMode: '' | 'http' | 'file';
+  current: string;
+  nodes: MihomoNode[];
+  error: string;
+  exchangeProxyUsingMihomo: boolean;
+  restarted?: boolean;
+  selected?: string;
+  imported?: boolean;
+  message?: string;
+  updatedAt?: string;
+}
+
+export interface MihomoTestResponse {
+  ok: boolean;
+  testedAt: string;
+  results: Array<{ id: string; label: string; ok: boolean; status: number; durationMs: number; sample?: string; error?: string }>;
+}
+
 export interface RuntimeStatus {
   uptimeSeconds: number;
   processUptimeSeconds: number;
@@ -372,6 +408,7 @@ export interface NotificationDelivery {
   channelType: string;
   status: string;
   attemptedAt: string | null;
+  acceptedAt?: string | null;
   deliveredAt: string | null;
   error: string;
   createdAt: string;
@@ -399,6 +436,7 @@ export interface NotificationCenterResponse {
   events: NotificationEvent[];
   deliveries: NotificationDelivery[];
   metrics: { total: number; open: number; warnings: number; critical: number };
+  notificationSemantics?: { reply: string; proactive: string };
   channelPlan: Record<string, { enabled: boolean; requiredEnv: string[]; method: string }>;
   readOnly?: boolean;
 }
@@ -894,6 +932,14 @@ export const serverApi = {
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
+  getMihomoSettings: () => apiRequest<MihomoSettingsResponse>('/settings/mihomo'),
+  saveMihomoSubscription: (subscriptionUrl: string, clearSubscription = false) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/subscription', { method: 'POST', body: { subscriptionUrl, clearSubscription } }),
+  importMihomoProvider: (subscriptionContent: string) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/import', { method: 'POST', body: { subscriptionContent } }),
+  selectMihomoProxy: (name: string) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/select', { method: 'POST', body: { name } }),
+  testMihomoProxy: () => apiRequest<MihomoTestResponse>('/settings/mihomo/test', { method: 'POST' }),
   getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
   getLearningProgress: () => cachedApiRequest<LearningProgressResponse>('/learning-progress', 60_000),
   getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
