@@ -90,7 +90,6 @@ export function DashboardPage() {
   const [startPanelOpen, setStartPanelOpen] = useState(false);
   const [chartsReady, setChartsReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const [briefAckVersion, setBriefAckVersion] = useState(0);
   const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
     queryKey: queryKeys.dashboardCharts,
     queryFn: serverApi.getDashboardCharts,
@@ -103,8 +102,8 @@ export function DashboardPage() {
     placeholderData: { items: [], readOnly: false },
   });
   const { data: notificationCenter = { metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, events: [] } } = useQuery({
-    queryKey: queryKeys.notifications('open'),
-    queryFn: () => serverApi.getNotificationCenter('open'),
+    queryKey: queryKeys.notifications('all'),
+    queryFn: () => serverApi.getNotificationCenter('all'),
     placeholderData: { generatedAt: '', channels: [], events: [], deliveries: [], metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, channelPlan: {} },
   });
   const today = todayISO();
@@ -112,12 +111,10 @@ export function DashboardPage() {
   const reviewScore = getReviewAverageScore(todayReview ?? undefined);
   const reviewTone = getReviewTone(reviewScore);
   const waterCardKey = todayWaterRecord ? `${todayWaterRecord.date}-${todayWaterRecord.updatedAt ?? ''}-${todayWaterRecord.cups}` : today;
-  const briefAckKey = todayBrief ? `examPlanner.dashboardBriefAck.${todayBrief.id}.${todayBrief.generatedAt}` : '';
   const briefWeather = todayBrief?.payload.weather;
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
-  const briefAcknowledged = Boolean(briefAckVersion >= 0 && briefAckKey && localStorage.getItem(briefAckKey));
-  const showBriefCard = !todayBrief || !briefAcknowledged;
+  const showBriefCard = true;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
   const dailyRequiredMinutes = goalDaysLeft ? Math.ceil(remainingStudyMinutes / goalDaysLeft) : 0;
@@ -171,12 +168,6 @@ export function DashboardPage() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  const acknowledgeBrief = () => {
-    if (!briefAckKey) return;
-    localStorage.setItem(briefAckKey, new Date().toISOString());
-    setBriefAckVersion((version) => version + 1);
-  };
-
   return (
     <Page title={`${greeting}，今天继续稳稳推进`} subtitle="第一眼看目标、看今天、看趋势。">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
@@ -222,7 +213,7 @@ export function DashboardPage() {
           <p className="mt-2 text-xs leading-5 opacity-80">查看学习、复盘、任务和目标推进节奏。</p>
         </Link>
         <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/notifications">
-          <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />未确认通知 {notificationCenter.metrics.open}</p>
+          <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />最近通知 {notificationCenter.metrics.open}</p>
           <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件会在这里沉淀。'}</p>
         </Link>
       </section>
@@ -423,11 +414,6 @@ export function DashboardPage() {
               <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/notifications">
                 {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
               </Link>
-              {todayBrief ? (
-                <button className="rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white" onClick={acknowledgeBrief}>
-                  我已知晓
-                </button>
-              ) : null}
             </div>
           </div>
           {todayBrief ? (

@@ -99,7 +99,7 @@ function severityClass(severity: string) {
   return 'border-blue-100 bg-blue-50 text-blue-700';
 }
 
-function NotificationEventRow({ event, readOnly, onAck }: { event: NotificationEvent; readOnly?: boolean; onAck: (id: number) => void }) {
+function NotificationEventRow({ event }: { event: NotificationEvent }) {
   return (
     <div className={`rounded-lg border p-3 ${severityClass(event.severity)}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -108,11 +108,9 @@ function NotificationEventRow({ event, readOnly, onAck }: { event: NotificationE
           <p className="mt-1 line-clamp-2 text-xs opacity-80">{event.content}</p>
           <p className="mt-2 text-xs opacity-70">{event.source} · {new Date(event.createdAt).toLocaleString()}</p>
         </div>
-        {event.status !== 'acknowledged' ? (
-          <button className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-white" disabled={readOnly} onClick={() => onAck(event.id)}>
-            知道了
-          </button>
-        ) : <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">已确认</span>}
+        <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">
+          {event.severity === 'critical' ? '严重' : event.severity === 'warning' ? '预警' : '通知'}
+        </span>
       </div>
     </div>
   );
@@ -133,7 +131,7 @@ export function NotificationsPage() {
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<'all' | 'sent' | 'unsent' | 'failed'>('all');
-  const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'acknowledged'>('open');
+  const [eventFilter, setEventFilter] = useState<'all' | 'warning' | 'critical'>('all');
   const [search, setSearch] = useState('');
   const { data: notificationData } = useQuery({
     queryKey: queryKeys.notifications(eventFilter),
@@ -168,19 +166,6 @@ export function NotificationsPage() {
     setSelectedId(preferred?.id ?? result.briefs[0]?.id ?? null);
   };
 
-  const acknowledgeEvent = async (id: number) => {
-    if (readOnly) return;
-    try {
-      const result = await serverApi.acknowledgeNotification(id);
-      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
-      setToast('通知已确认');
-    } catch {
-      setToast('通知确认失败');
-    } finally {
-      window.setTimeout(() => setToast(''), 2200);
-    }
-  };
 
   const generate = async (sendEmail = false, sendWechat = false) => {
     if (readOnly) return;
@@ -273,7 +258,7 @@ export function NotificationsPage() {
           <p className="mt-1 text-2xl font-semibold text-slate-950">{notificationData?.metrics.total ?? 0}</p>
         </div>
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700">
-          <p className="text-xs font-semibold opacity-80">未确认</p>
+          <p className="text-xs font-semibold opacity-80">最近 7 天</p>
           <p className="mt-1 text-2xl font-semibold">{notificationData?.metrics.open ?? 0}</p>
         </div>
         <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700">
@@ -294,21 +279,21 @@ export function NotificationsPage() {
               <p className="mt-1 text-sm text-slate-500">日报、报告、任务失败、磁盘预警和慢接口会进入统一通知模型。</p>
             </div>
             <div className="flex gap-2">
-              {(['open', 'all', 'acknowledged'] as const).map((item) => (
+              {(['all', 'warning', 'critical'] as const).map((item) => (
                 <button
                   key={item}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${eventFilter === item ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}
                   type="button"
                   onClick={() => setEventFilter(item)}
                 >
-                  {item === 'open' ? '未确认' : item === 'acknowledged' ? '已确认' : '全部'}
+                  {item === 'warning' ? '预警' : item === 'critical' ? '严重' : '全部'}
                 </button>
               ))}
             </div>
           </div>
           <div className="mt-4 space-y-2">
             {notificationData?.events.length ? notificationData.events.map((event) => (
-              <NotificationEventRow key={event.id} event={event} readOnly={readOnly} onAck={(id) => void acknowledgeEvent(id)} />
+              <NotificationEventRow key={event.id} event={event} />
             )) : <EmptyState title="暂无通知事件" description="日报、报告或系统预警生成后会出现在这里。" />}
           </div>
         </section>

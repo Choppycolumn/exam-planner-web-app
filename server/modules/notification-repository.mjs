@@ -59,7 +59,11 @@ FROM notification_channels
 ORDER BY enabled DESC, id;`).map(normalizeChannel);
 
   const listEvents = ({ status = 'all', limit = 50 } = {}) => {
-    const where = status && status !== 'all' ? `WHERE status = ${sqlString(status)}` : '';
+    const where = status && status !== 'all'
+      ? status === 'warning' || status === 'critical'
+        ? `WHERE severity = ${sqlString(status)}`
+        : `WHERE status = ${sqlString(status)}`
+      : '';
     const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
     return sqlite.json(`SELECT id, event_key AS eventKey, source, severity, title, content, status,
 scheduled_at AS scheduledAt, acknowledged_at AS acknowledgedAt, payload_json AS payloadJson,
@@ -81,7 +85,7 @@ FROM notification_deliveries`;
 ORDER BY created_at DESC, id DESC
 LIMIT ${Math.max(1, Math.min(200, Number(limit) || 80))};`).map(normalizeDelivery);
 
-  const upsertEvent = ({ eventKey, source, severity = 'info', title, content, status = 'open', scheduledAt = null, acknowledgedAt = null, payload = {} }) => {
+  const upsertEvent = ({ eventKey, source, severity = 'info', title, content, status = 'notified', scheduledAt = null, acknowledgedAt = null, payload = {} }) => {
     const timestamp = new Date().toISOString();
     sqlite.run(`INSERT INTO notification_events (event_key, source, severity, title, content, status, scheduled_at, acknowledged_at, payload_json, created_at, updated_at)
 VALUES (${sqlString(eventKey)}, ${sqlString(source)}, ${sqlString(severity)}, ${sqlString(title)}, ${sqlString(content)}, ${sqlString(status)}, ${sqlValue(scheduledAt)}, ${sqlValue(acknowledgedAt)}, ${sqlString(JSON.stringify(payload || {}))}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
@@ -90,7 +94,7 @@ ON CONFLICT(event_key) DO UPDATE SET
   severity = excluded.severity,
   title = excluded.title,
   content = excluded.content,
-  status = CASE WHEN notification_events.status = 'acknowledged' THEN notification_events.status ELSE excluded.status END,
+  status = excluded.status,
   scheduled_at = excluded.scheduled_at,
   payload_json = excluded.payload_json,
   updated_at = excluded.updated_at;`);
@@ -141,7 +145,7 @@ WHERE id = ${sqlValue(Number(id))};`);
   const acknowledge = (id) => {
     const timestamp = new Date().toISOString();
     sqlite.run(`UPDATE notification_events
-SET status = 'acknowledged', acknowledged_at = ${sqlString(timestamp)}, updated_at = ${sqlString(timestamp)}
+SET status = 'notified', acknowledged_at = ${sqlString(timestamp)}, updated_at = ${sqlString(timestamp)}
 WHERE id = ${sqlValue(Number(id))};`);
   };
 
@@ -149,12 +153,13 @@ WHERE id = ${sqlValue(Number(id))};`);
     const row = sqlite.json(`SELECT
 COUNT(*) AS total,
 SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open,
-SUM(CASE WHEN severity = 'warning' AND status <> 'acknowledged' THEN 1 ELSE 0 END) AS warnings,
-SUM(CASE WHEN severity = 'critical' AND status <> 'acknowledged' THEN 1 ELSE 0 END) AS critical
+SUM(CASE WHEN created_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS recent,
+SUM(CASE WHEN severity = 'warning' THEN 1 ELSE 0 END) AS warnings,
+SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) AS critical
 FROM notification_events;`)[0] || {};
     return {
       total: Number(row.total || 0),
-      open: Number(row.open || 0),
+      open: Number(row.recent || row.open || 0),
       warnings: Number(row.warnings || 0),
       critical: Number(row.critical || 0),
     };

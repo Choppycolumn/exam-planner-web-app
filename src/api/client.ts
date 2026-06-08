@@ -393,7 +393,7 @@ export interface NotificationEvent {
   severity: 'info' | 'warning' | 'critical' | string;
   title: string;
   content: string;
-  status: 'open' | 'acknowledged' | string;
+  status: 'notified' | string;
   scheduledAt: string | null;
   acknowledgedAt: string | null;
   payload: Record<string, unknown>;
@@ -945,9 +945,8 @@ export const serverApi = {
   getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
   getVisitStats: () => cachedApiRequest<VisitStatsResponse>('/visits/summary', 30_000),
   getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
-  getNotificationCenter: (status: 'all' | 'open' | 'acknowledged' = 'all') =>
+  getNotificationCenter: (status: 'all' | 'warning' | 'critical' | 'notified' = 'all') =>
     cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
-  acknowledgeNotification: (id: number) => apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
   testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
   saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
     apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
