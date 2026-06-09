@@ -198,6 +198,22 @@ export function NotificationsPage() {
     }
   };
 
+  const testBarkPush = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.testBarkNotification();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast('Bark 测试通知已进入发送队列');
+    } catch {
+      setToast('Bark 测试通知失败，请检查服务器配置');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
   const saveWechatPush = async (enabled: boolean) => {
     if (readOnly) return;
     setLoading(true);
@@ -231,6 +247,8 @@ export function NotificationsPage() {
   };
   const wechat = notificationData?.wechatClawbot;
   const wechatReady = Boolean(wechat?.enabled && wechat.configured);
+  const bark = notificationData?.bark;
+  const barkReady = Boolean(bark?.enabled && bark.configured);
 
   return (
     <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，支持邮件与微信 ClawBot 推送。">
@@ -319,6 +337,22 @@ export function NotificationsPage() {
               </button>
               <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold transition hover:bg-white" disabled={readOnly || loading} onClick={() => void saveWechatPush(!wechat?.enabled)}>
                 <Clock size={14} />{wechat?.enabled ? '暂停每日推送' : '启用每日 08:00'}
+              </button>
+            </div>
+          </div>
+          <div className={`mt-3 rounded-lg border p-3 ${barkReady ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold"><BellRing size={16} />Bark iOS</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {barkReady ? `已连接 ${bark?.serverUrl}，与微信并行推送` : '服务器尚未配置 Bark Device Key'}
+                </p>
+              </div>
+              <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{barkReady ? '运行中' : '未配置'}</span>
+            </div>
+            <div className="mt-3">
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold transition hover:bg-white" disabled={readOnly || loading || !barkReady} onClick={() => void testBarkPush()}>
+                <BellRing size={14} />立即测试
               </button>
             </div>
           </div>

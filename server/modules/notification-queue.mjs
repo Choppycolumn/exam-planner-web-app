@@ -10,11 +10,11 @@ export function createNotificationQueue({
 }) {
   let processing = false;
 
-  const enqueueProactive = ({ eventKey, source, title, content, text, payload = {}, channelKey = 'clawbot_weixin' }) => {
+  const enqueueProactive = ({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKey = 'clawbot_weixin' }) => {
     const event = repository.upsertEvent({
       eventKey,
       source,
-      severity: 'info',
+      severity,
       title,
       content,
       payload: { ...payload, notificationMode: 'proactive' },
@@ -24,7 +24,7 @@ export function createNotificationQueue({
       channelKey,
       channelType: channelKey === 'clawbot_weixin' ? 'clawbot_weixin' : channelKey,
       mode: 'proactive',
-      payload: { text, ...payload },
+      payload: { text, title, content, source, severity, ...payload },
       maxAttempts: retryDelaysMs.length + 1,
       nextAttemptAt: now().toISOString(),
     });
@@ -47,7 +47,7 @@ export function createNotificationQueue({
         repository.markDeliverySending(delivery.id, now().toISOString());
         let result;
         try {
-          result = await sendProactive(String(delivery.payload?.text || ''));
+          result = await sendProactive(String(delivery.payload?.text || ''), delivery);
         } catch (error) {
           result = { ok: false, error: error instanceof Error ? error.message : String(error) };
         }

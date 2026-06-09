@@ -433,6 +433,12 @@ export interface NotificationCenterResponse {
     nextPushAt: string | null;
     scheduleTime: string;
   };
+  bark?: {
+    enabled: boolean;
+    configured: boolean;
+    serverUrl: string;
+    deviceKeyMasked: string;
+  };
   events: NotificationEvent[];
   deliveries: NotificationDelivery[];
   metrics: { total: number; open: number; warnings: number; critical: number };
@@ -948,6 +954,7 @@ export const serverApi = {
   getNotificationCenter: (status: 'all' | 'warning' | 'critical' | 'notified' = 'all') =>
     cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
   testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
+  testBarkNotification: () => apiRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/bark/test', { method: 'POST', body: {} }),
   saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
     apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
   getCalendarEvents: (from: string, to: string) =>

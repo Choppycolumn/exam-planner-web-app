@@ -68,7 +68,7 @@ const opsRepository = createOpsRepository(sqliteRepository);
 const notificationRepository = createNotificationRepository(sqliteRepository);
 const notificationQueue = createNotificationQueue({
   repository: notificationRepository,
-  sendProactive: (text) => sendProactiveClawbotText(text),
+  sendProactive: (text, delivery) => sendProactiveNotification(text, delivery),
   notifyEvent: (payload) => notifyEvent(payload),
   log: (level, event, detail) => logStructured(level, event, detail),
 });
@@ -391,7 +391,9 @@ function assertDiskSpace(minBytes = minFreeDiskBytes) {
 }
 
 function redactSecretText(value = '') {
-  return String(value)
+  const text = String(value);
+  const barkKey = String(process.env.BARK_DEVICE_KEY || '').trim();
+  return (barkKey ? text.replaceAll(barkKey, '[redacted-bark-device-key]') : text)
     .replace(/(password|passwd|token|secret|cookie|authorization)(=|:)\s*[^,\s;]+/gi, '$1$2 [redacted]')
     .replace(/exam_planner_session=[^;\s]+/gi, 'exam_planner_session=[redacted]')
     .replace(/APP_PASSWORD=[^,\s;]+/gi, 'APP_PASSWORD=[redacted]')
@@ -4416,6 +4418,7 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
     deliveries: notificationRepository.listDeliveries(80),
     metrics: notificationRepository.metrics(),
     wechatClawbot,
+    bark: resolveBarkConfig(),
     notificationSemantics: {
       reply: '收到微信指令后在同一会话中即时回复，不进入主动通知队列。',
       proactive: '日报、待办提醒和测试消息先进入持久化队列，失败后自动重试并站内兜底。',
@@ -4426,6 +4429,11 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         enabled: wechatClawbot.enabled && wechatClawbot.configured,
         requiredEnv: ['OPENCLAW_CLAWBOT_CHANNEL', 'OPENCLAW_CLAWBOT_ACCOUNT', 'OPENCLAW_CLAWBOT_TARGET'],
         method: 'openclaw message send via local OpenClaw gateway',
+      },
+      bark: {
+        enabled: Boolean(process.env.BARK_DEVICE_KEY),
+        requiredEnv: ['BARK_DEVICE_KEY'],
+        method: 'POST Bark API V2 /push',
       },
       telegram: {
         enabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
@@ -7248,12 +7256,95 @@ async function sendProactiveClawbotText(text) {
   return { ok: false, method: 'none', error: 'No ClawBot push channel is configured', status: resolveOpenClawWechatConfig() };
 }
 
-function queueProactiveNotification({ eventKey, source, title, content, text, payload = {} }) {
-  const delivery = notificationQueue.enqueueProactive({ eventKey, source, title, content, text, payload });
+function resolveBarkConfig({ includeSecret = false } = {}) {
+  const rawServerUrl = String(process.env.BARK_SERVER_URL || 'https://api.day.app').trim().replace(/\/+$/, '');
+  const serverUrl = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(rawServerUrl) ? rawServerUrl : 'https://api.day.app';
+  const deviceKey = String(process.env.BARK_DEVICE_KEY || '').trim();
+  return {
+    enabled: Boolean(deviceKey),
+    configured: Boolean(deviceKey),
+    serverUrl,
+    deviceKeyMasked: deviceKey ? `${deviceKey.slice(0, 4)}...${deviceKey.slice(-4)}` : '',
+    ...(includeSecret ? { deviceKey } : {}),
+  };
+}
+
+function barkLevel({ source = '', severity = 'info' } = {}) {
+  if (severity === 'critical') return 'critical';
+  if (source === 'task' || source === 'ops' || severity === 'warning') return 'timeSensitive';
+  if (source === 'brief' || source === 'report') return 'passive';
+  return 'active';
+}
+
+async function sendBarkNotification(text, delivery) {
+  const config = resolveBarkConfig({ includeSecret: true });
+  if (!config.configured) return { ok: false, method: 'bark', error: 'Bark is not configured' };
+  const payload = delivery?.payload || {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(`${config.serverUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        device_key: config.deviceKey,
+        title: String(payload.title || 'Exam Planner').slice(0, 120),
+        body: String(text || payload.content || '').slice(0, 4000),
+        group: `exam-planner-${String(payload.source || 'system').slice(0, 40)}`,
+        level: barkLevel(payload),
+        isArchive: '1',
+      }),
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    let responseJson = {};
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      responseJson = {};
+    }
+    if (!response.ok || (responseJson.code && Number(responseJson.code) !== 200)) {
+      throw new Error(`Bark HTTP ${response.status}: ${String(responseJson.message || responseText).slice(0, 200)}`);
+    }
+    return { ok: true, method: 'bark', channel: 'bark_default', response: { code: responseJson.code || response.status } };
+  } catch (error) {
+    return { ok: false, method: 'bark', channel: 'bark_default', error: redactSecretText(error.message || String(error)) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendProactiveNotification(text, delivery) {
+  if (delivery?.channelKey === 'bark_default') return sendBarkNotification(text, delivery);
+  return sendProactiveClawbotText(text);
+}
+
+function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
+  const channels = channelKeys || [
+    'clawbot_weixin',
+    ...(resolveBarkConfig().configured ? ['bark_default'] : []),
+  ];
+  const deliveries = channels.map((channelKey) => notificationQueue.enqueueProactive({
+    eventKey,
+    source,
+    severity,
+    title,
+    content,
+    text,
+    payload,
+    channelKey,
+  }));
   setImmediate(() => notificationQueue.processDue().catch((error) => {
     logStructured('warn', 'notification_queue_kick_failed', { error: redactSecretText(error.message || String(error)) });
   }));
-  return { ok: true, queued: true, mode: 'proactive', deliveryId: delivery.id, status: delivery.status };
+  return {
+    ok: true,
+    queued: true,
+    mode: 'proactive',
+    deliveryId: deliveries[0]?.id || null,
+    deliveries: deliveries.map((delivery) => ({ id: delivery.id, channelKey: delivery.channelKey, status: delivery.status })),
+    status: deliveries[0]?.status || 'queued',
+  };
 }
 
 function scheduleNotificationQueue() {
@@ -7833,6 +7924,7 @@ async function handleApi(req, res) {
       content: '测试消息已进入主动推送队列。',
       text: message,
       payload: { requestedBy: sessionRole },
+      channelKeys: ['clawbot_weixin'],
     });
     notifyEvent({
       eventKey: `clawbot:test:${todayISO()}`,
@@ -7844,6 +7936,31 @@ async function handleApi(req, res) {
     });
     writeAuditEvent({ action: 'notifications_wechat_test', req, actorRole: sessionRole, detail: { ok: true, queued: true, deliveryId: delivery.deliveryId } });
     sendJson(res, { ok: true, digest, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
+    return;
+  }
+
+  if (req.url === '/api/notifications/bark/test' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    if (!resolveBarkConfig().configured) {
+      sendJson(res, { error: 'Bark is not configured' }, 409);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const message = String(body.message || 'Bark 通知通道已接入 Exam Planner。');
+    const delivery = queueProactiveNotification({
+      eventKey: `bark:test:${Date.now()}`,
+      source: 'test',
+      title: 'Exam Planner Bark 测试',
+      content: 'Bark 测试消息已进入主动推送队列。',
+      text: message,
+      payload: { requestedBy: sessionRole },
+      channelKeys: ['bark_default'],
+    });
+    writeAuditEvent({ action: 'notifications_bark_test', req, actorRole: sessionRole, detail: { queued: true, deliveryId: delivery.deliveryId } });
+    sendJson(res, { ok: true, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
     return;
   }
 

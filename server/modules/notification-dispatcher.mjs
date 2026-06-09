@@ -87,5 +87,11 @@ export function notificationChannelReadiness(channel, env = process.env) {
       requiredEnv: [],
     };
   }
+  if (channel.type === 'bark') {
+    return {
+      ready: Boolean(env.BARK_DEVICE_KEY),
+      requiredEnv: ['BARK_DEVICE_KEY'],
+    };
+  }
   return { ready: channel.type === 'in_app', requiredEnv: [] };
 }
