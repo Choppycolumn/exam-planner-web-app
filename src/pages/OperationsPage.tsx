@@ -58,6 +58,7 @@ export function OperationsPage() {
   const status = taskQuery.data;
   const logs = logsQuery.data;
   const notifications = notificationsQuery.data;
+  const unifiedHealth = status?.unifiedHealth;
   const wechatReady = Boolean(notifications?.wechatClawbot?.enabled && notifications.wechatClawbot.configured && notifications.wechatClawbot.targetConfigured && notifications.wechatClawbot.hasContextToken);
   const diskAvailable = status?.runtime.disk?.availableBytes ?? 0;
   const diskOk = !status?.runtime.disk || diskAvailable >= 2 * 1024 * 1024 * 1024;
@@ -131,6 +132,26 @@ export function OperationsPage() {
           更新时间 {formatDateTime(status?.generatedAt ?? logs?.generatedAt)}
         </span>
       </div>
+
+      <section className={`mt-5 rounded-lg border p-5 ${unifiedHealth?.status === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-800' : unifiedHealth?.status === 'degraded' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold opacity-75">统一健康状态</p>
+            <h2 className="mt-1 text-lg font-semibold">{unifiedHealth?.status === 'failed' ? '故障' : unifiedHealth?.status === 'degraded' ? '降级' : '正常'}</h2>
+            <p className="mt-1 text-sm opacity-85">{unifiedHealth?.summary || '正在汇总关键服务状态'}</p>
+          </div>
+          {unifiedHealth?.status === 'normal' ? <ShieldCheck size={24} /> : <AlertTriangle size={24} />}
+        </div>
+        {unifiedHealth?.actions?.length ? (
+          <div className="mt-4 space-y-2">
+            {unifiedHealth.actions.map((item) => (
+              <div key={item.id} className="rounded-lg border border-current/20 bg-white/70 px-3 py-2 text-sm">
+                <span className="font-semibold">{item.title}：</span>{item.action}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
 
       <section className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         {healthItems.map((item) => (
@@ -296,8 +317,7 @@ export function OperationsPage() {
                 </span>
               </div>
               <p className="mt-2 text-xs text-slate-500">错误 {source.errorCount} · 警告 {source.warningCount}</p>
-              {source.error ? <p className="mt-2 rounded bg-white p-2 text-xs text-amber-700">{source.error}</p> : null}
-              <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-white p-3 text-xs leading-5 text-slate-700">{source.lines.slice(-14).join('\n') || '暂无日志'}</pre>
+              {source.action ? <p className="mt-3 rounded bg-white p-3 text-xs font-medium text-slate-700">{source.action}</p> : <p className="mt-3 text-xs font-medium text-emerald-700">无需处理</p>}
             </article>
           ))}
         </div>

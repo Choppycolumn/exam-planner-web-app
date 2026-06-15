@@ -11,6 +11,11 @@ import { setDefaultResultOrder } from 'node:dns';
 import { createSqliteRepository } from './modules/sqlite-repository.mjs';
 import { createTaskRunsRepository } from './modules/task-runs-repository.mjs';
 import { createOpsRepository } from './modules/ops-repository.mjs';
+import { createExternalApiClient } from './modules/external-api-client.mjs';
+import { parseWorldPeRatio, scoreIndexPurchaseAssessment } from './modules/index-assessment.mjs';
+import { summarizeHealth } from './modules/health-status.mjs';
+import { resolveBackupPath } from './modules/backup-validation.mjs';
+import { queryLimit, queryOffset } from './modules/api-helpers.mjs';
 import { createNotificationRepository } from './modules/notification-repository.mjs';
 import { createNotificationQueue } from './modules/notification-queue.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
@@ -65,6 +70,7 @@ const loginFailureDelaySpreadMs = 1000;
 const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
+const externalApiClient = createExternalApiClient();
 const notificationRepository = createNotificationRepository(sqliteRepository);
 const notificationQueue = createNotificationQueue({
   repository: notificationRepository,
@@ -3004,119 +3010,30 @@ async function getBriefMarket(symbolItem) {
   }
 }
 
-function scoreIndexPurchaseAssessment(metrics) {
-  let score = 0;
-  const reasons = [];
-  if (metrics.pePercentile5 <= 20) {
-    score += 2;
-    reasons.push(`近 5 年 PE 百分位仅 ${metrics.pePercentile5}%，估值处于历史低位`);
-  } else if (metrics.pePercentile5 <= 40) {
-    score += 1;
-    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值相对偏低`);
-  } else if (metrics.pePercentile5 >= 90) {
-    score -= 2;
-    reasons.push(`近 5 年 PE 百分位达到 ${metrics.pePercentile5}%，估值处于极高位置`);
-  } else if (metrics.pePercentile5 >= 75) {
-    score -= 1;
-    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值相对偏高`);
-  } else {
-    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值处于中性区间`);
-  }
-
-  if (metrics.sma200Margin <= -10) {
-    score += 1;
-    reasons.push('价格明显低于 200 日均线，仅适合分批承接');
-  } else if (metrics.sma200Margin >= 20) {
-    score -= 1;
-    reasons.push('价格明显高于 200 日均线，长期趋势偏拥挤');
-  }
-
-  if (metrics.sma50Margin <= -5) {
-    score += 1;
-    reasons.push('价格低于 50 日均线，短期已有回调');
-  } else if (metrics.sma50Margin >= 10) {
-    score -= 1;
-    reasons.push('价格明显高于 50 日均线，短期不宜追高');
-  }
-
-  if (score >= 3) return { score, signal: '适合分批加仓', intensity: '高于常规定投', reasons };
-  if (score >= 1) return { score, signal: '适合按计划定投', intensity: '常规定投', reasons };
-  if (score === 0) return { score, signal: '中性，可按计划定投', intensity: '常规定投，不额外加仓', reasons };
-  if (score >= -2) return { score, signal: '估值偏高，仍可按计划小额定投', intensity: '低于常规定投，不额外加仓', reasons };
-  return { score, signal: '估值与趋势同时过热，暂缓追高', intensity: '暂缓额外加仓，仅保留极小额定投', reasons };
-}
-
-function worldPeHistory(html) {
-  const match = String(html || '').match(/detailPE_data\s*=\s*\[(.*?)\];/s);
-  if (!match) return [];
-  return [...match[1].matchAll(/\[Date\.UTC\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\),\s*([0-9.]+)\]/g)]
-    .map((item) => ({
-      date: new Date(Date.UTC(Number(item[1]), Number(item[2]), Number(item[3]))),
-      pe: Number(item[4]),
-    }))
-    .filter((item) => Number.isFinite(item.pe));
-}
-
-function peHistoryPercentile(history, currentPe, years) {
-  const latestDate = history.at(-1)?.date;
-  if (!latestDate) return null;
-  const cutoff = new Date(latestDate);
-  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - years);
-  const values = history.filter((item) => item.date >= cutoff).map((item) => item.pe);
-  if (!values.length) return null;
-  const rank = values.filter((value) => value <= currentPe).length / values.length;
-  return Number((rank * 100).toFixed(1));
-}
-
-function worldPeRatioText(html) {
-  return String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&mu;/gi, 'μ')
-    .replace(/&amp;/gi, '&')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 async function getIndexPurchaseAssessment({ name, symbol, slug }) {
   try {
     const url = `https://worldperatio.com/index/${slug}/`;
-    let html;
+    let result;
     try {
-      html = fetchTextWithProxyCurl(url, 45);
+      result = await externalApiClient.text(url, {
+        timeoutMs: 20000,
+        retries: 1,
+        freshMs: 60 * 60 * 1000,
+        staleMs: 24 * 60 * 60 * 1000,
+        cacheKey: `pe:${slug}`,
+      });
     } catch {
-      html = await fetchTextWithFallback(url, 15000);
+      result = { value: fetchTextWithProxyCurl(url, 45), cacheStatus: 'proxy', fetchedAt: nowISO() };
     }
-    const text = worldPeRatioText(html);
-    const peMatch = text.match(/estimated Price-to-Earnings \(P\/E\) Ratio for .*? is\s*([0-9.]+)/i);
-    const rangeMatch = text.match(/average P\/E interval is\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\]/i);
-    const valuationMatch = text.match(/current P\/E can be considered\s*([A-Za-z]+)/i);
-    const sma200Match = text.match(/Price vs SMA200\s*([+-]?[0-9.]+)%/i);
-    const sma50Match = text.match(/Price vs SMA50\s*([+-]?[0-9.]+)%/i);
-    const dateMatch = text.match(/calculated on\s*([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})/i);
-    if (!peMatch || !rangeMatch || !sma200Match || !sma50Match) throw new Error('估值或均线数据解析失败');
-    const history = worldPeHistory(html);
-    const pe = Number(peMatch[1]);
-    const pePercentile5 = peHistoryPercentile(history, pe, 5);
-    const pePercentile10 = peHistoryPercentile(history, pe, 10);
-    if (pePercentile5 == null || pePercentile10 == null) throw new Error('PE 历史百分位计算失败');
-    const metrics = {
-      pe,
-      peRangeLow: Number(rangeMatch[1]),
-      peRangeHigh: Number(rangeMatch[2]),
-      pePercentile5,
-      pePercentile10,
-      valuation: valuationMatch?.[1] || '',
-      sma200Margin: Number(sma200Match[1]),
-      sma50Margin: Number(sma50Match[1]),
-    };
+    const metrics = parseWorldPeRatio(result.value);
     return {
       ok: true,
       name,
       symbol,
-      asOf: dateMatch?.[1] || '',
+      asOf: metrics.asOf,
       source: 'World P/E Ratio',
+      cacheStatus: result.cacheStatus,
+      fetchedAt: result.fetchedAt,
       ...metrics,
       ...scoreIndexPurchaseAssessment(metrics),
     };
@@ -4198,11 +4115,8 @@ function listBackupFiles() {
 }
 
 function restoreBackupFile(fileName) {
-  if (!/^[a-zA-Z0-9._-]+$/.test(fileName || '')) {
-    throw new Error('Invalid backup file name');
-  }
-  const sourceFile = join(backupsDir, fileName);
-  if (!existsSync(sourceFile) || !sourceFile.startsWith(backupsDir)) {
+  const sourceFile = resolveBackupPath(backupsDir, fileName);
+  if (!existsSync(sourceFile)) {
     throw new Error('Backup file not found');
   }
   const integrity = runSqliteFile(sourceFile, 'PRAGMA integrity_check;').trim();
@@ -4418,12 +4332,24 @@ function getHealthPayload() {
     addCheck('backup', 'error', { error: redactSecretText(error.message || String(error)) });
   }
   addCheck('tasks', activeTaskLocks.size ? 'warn' : 'ok', { active: Array.from(activeTaskLocks) });
+  const externalApis = externalApiClient.status();
+  addCheck('external-api', externalApis.openCircuits.length ? 'warn' : 'ok', {
+    openCircuitCount: externalApis.openCircuits.length,
+  });
+  const unified = summarizeHealth(checks.map((check) => ({
+    id: check.name,
+    title: check.name,
+    status: check.status === 'error' ? 'failed' : check.status === 'warn' ? 'degraded' : 'normal',
+    action: check.status === 'ok' ? '' : `检查 ${check.name} 状态并处理异常。`,
+  })));
   return {
     ok,
     status: ok ? 'ok' : 'degraded',
+    unified,
     generatedAt: nowISO(),
     version: process.env.npm_package_version || '0.0.0',
     runtime: getRuntimeStatus(),
+    externalApis,
     checks,
   };
 }
@@ -4502,6 +4428,8 @@ LIMIT 1;`)[0] || null;
       metrics: taskMetrics,
     },
     runtime: getRuntimeStatus(),
+    unifiedHealth: getHealthPayload().unified,
+    externalApis: externalApiClient.status(),
   };
 }
 
@@ -6299,13 +6227,21 @@ function redactLogLine(line = '') {
 
 function summarizeLogLines(name, lines, error = '') {
   const cleanLines = lines.filter(Boolean).slice(-80).map(redactLogLine);
+  const errorCount = cleanLines.filter((line) => /error|failed|exception|fatal/i.test(line)).length;
+  const warningCount = cleanLines.filter((line) => /warn|warning|deprecated/i.test(line)).length;
   return {
     name,
     available: !error,
     error: error || undefined,
-    lines: cleanLines,
-    errorCount: cleanLines.filter((line) => /error|failed|exception|fatal/i.test(line)).length,
-    warningCount: cleanLines.filter((line) => /warn|warning|deprecated/i.test(line)).length,
+    errorCount,
+    warningCount,
+    action: error
+      ? '检查日志读取权限或对应服务状态'
+      : errorCount
+        ? '检查近期错误并确认核心功能是否受影响'
+        : warningCount
+          ? '有空时检查近期警告，无需立即处理'
+          : '',
   };
 }
 
@@ -6336,16 +6272,6 @@ function getOpsLogSummaryPayload(sessionRole = 'write') {
   const slowApi = opsRepository.listSlowApi(12);
   const apiMetrics = opsRepository.getApiMetrics();
   return { generatedAt: nowISO(), sources, auditEvents, slowApi, apiMetrics, readOnly: sessionRole === 'read' };
-}
-
-function queryLimit(searchParams, defaultLimit = 20, maxLimit = 100) {
-  const value = searchParams.get('limit');
-  if (!value) return null;
-  return Math.max(1, Math.min(maxLimit, Number(value) || defaultLimit));
-}
-
-function queryOffset(searchParams) {
-  return Math.max(0, Number(searchParams.get('offset') || 0) || 0);
 }
 
 function getGoalsList(sessionRole) {

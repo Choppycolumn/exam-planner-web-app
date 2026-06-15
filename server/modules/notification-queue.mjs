@@ -1,3 +1,5 @@
+import { classifyNotificationFailure } from './notification-policy.mjs';
+
 const DEFAULT_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 export function createNotificationQueue({
@@ -61,7 +63,8 @@ export function createNotificationQueue({
         }
 
         const attemptCount = delivery.attemptCount + 1;
-        const canRetry = attemptCount < delivery.maxAttempts;
+        const policy = classifyNotificationFailure(result?.error || '');
+        const canRetry = policy.retryable && attemptCount < delivery.maxAttempts;
         const retryDelay = retryDelaysMs[Math.max(0, attemptCount - 1)] ?? retryDelaysMs.at(-1) ?? 60_000;
         const nextAttemptAt = canRetry ? new Date(now().getTime() + retryDelay).toISOString() : null;
         const error = String(result?.error || '主动推送失败');

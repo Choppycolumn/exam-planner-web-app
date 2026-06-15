@@ -378,9 +378,9 @@ export interface OpsLogSource {
   name: string;
   available: boolean;
   error?: string;
-  lines: string[];
   errorCount: number;
   warningCount: number;
+  action?: string;
 }
 
 export interface OpsLogSummaryResponse {
@@ -503,6 +503,15 @@ export interface TaskRunSummary {
 
 export interface TaskCenterStatus {
   generatedAt: string;
+  unifiedHealth?: {
+    status: 'normal' | 'degraded' | 'failed';
+    summary: string;
+    actions: Array<{ id: string; level: 'degraded' | 'failed'; title: string; action: string }>;
+  };
+  externalApis?: {
+    cacheEntries: number;
+    openCircuits: Array<{ key: string; failures: number; openUntil: string }>;
+  };
   backup: BackupStatus & { nextWeeklyBackupAt: string | null };
   reports: {
     count: number;
