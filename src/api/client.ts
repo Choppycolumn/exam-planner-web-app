@@ -176,6 +176,8 @@ export interface DailyBrief {
         pe?: number;
         peRangeLow?: number;
         peRangeHigh?: number;
+        pePercentile5?: number;
+        pePercentile10?: number;
         valuation?: string;
         sma50Margin?: number;
         sma200Margin?: number;

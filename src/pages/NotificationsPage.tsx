@@ -107,7 +107,7 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
                 </div>
                 {item.ok ? (
                   <>
-                    <p className="mt-3 text-sm text-slate-700">PE {item.pe}，近 5 年常见区间 {item.peRangeLow}-{item.peRangeHigh}</p>
+                    <p className="mt-3 text-sm text-slate-700">PE {item.pe}，近 5 年百分位 {item.pePercentile5}%，近 10 年百分位 {item.pePercentile10}%</p>
                     <p className="mt-1 text-sm text-slate-700">距 50/200 日均线 {item.sma50Margin}% / {item.sma200Margin}%</p>
                     <p className="mt-2 text-xs font-semibold text-blue-700">定投强度参考：{item.intensity}</p>
                     <p className="mt-2 text-xs leading-5 text-slate-500">{item.reasons?.join('；') || '指标处于中性区间'}</p>

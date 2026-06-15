@@ -3007,22 +3007,26 @@ async function getBriefMarket(symbolItem) {
 function scoreIndexPurchaseAssessment(metrics) {
   let score = 0;
   const reasons = [];
-  const valuationPosition = (metrics.pe - metrics.peRangeLow) / Math.max(0.01, metrics.peRangeHigh - metrics.peRangeLow);
-  if (metrics.pe < metrics.peRangeLow) {
+  if (metrics.pePercentile5 <= 20) {
     score += 2;
-    reasons.push('PE 低于近 5 年常见估值区间');
-  } else if (valuationPosition <= 0.35) {
+    reasons.push(`近 5 年 PE 百分位仅 ${metrics.pePercentile5}%，估值处于历史低位`);
+  } else if (metrics.pePercentile5 <= 40) {
     score += 1;
-    reasons.push('PE 位于近 5 年常见区间偏低位置');
-  } else if (metrics.pe > metrics.peRangeHigh) {
+    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值相对偏低`);
+  } else if (metrics.pePercentile5 >= 90) {
     score -= 2;
-    reasons.push('PE 高于近 5 年常见估值区间');
+    reasons.push(`近 5 年 PE 百分位达到 ${metrics.pePercentile5}%，估值处于极高位置`);
+  } else if (metrics.pePercentile5 >= 75) {
+    score -= 1;
+    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值相对偏高`);
+  } else {
+    reasons.push(`近 5 年 PE 百分位为 ${metrics.pePercentile5}%，估值处于中性区间`);
   }
 
   if (metrics.sma200Margin <= -10) {
     score += 1;
     reasons.push('价格明显低于 200 日均线，仅适合分批承接');
-  } else if (metrics.sma200Margin >= 15) {
+  } else if (metrics.sma200Margin >= 20) {
     score -= 1;
     reasons.push('价格明显高于 200 日均线，长期趋势偏拥挤');
   }
@@ -3030,15 +3034,38 @@ function scoreIndexPurchaseAssessment(metrics) {
   if (metrics.sma50Margin <= -5) {
     score += 1;
     reasons.push('价格低于 50 日均线，短期已有回调');
-  } else if (metrics.sma50Margin >= 8) {
+  } else if (metrics.sma50Margin >= 10) {
     score -= 1;
     reasons.push('价格明显高于 50 日均线，短期不宜追高');
   }
 
   if (score >= 3) return { score, signal: '适合分批加仓', intensity: '高于常规定投', reasons };
   if (score >= 1) return { score, signal: '适合按计划定投', intensity: '常规定投', reasons };
-  if (score >= -1) return { score, signal: '中性，少量或按计划定投', intensity: '低于常规定投', reasons };
-  return { score, signal: '偏热，暂缓追高', intensity: '暂缓或仅小额定投', reasons };
+  if (score === 0) return { score, signal: '中性，可按计划定投', intensity: '常规定投，不额外加仓', reasons };
+  if (score >= -2) return { score, signal: '估值偏高，仍可按计划小额定投', intensity: '低于常规定投，不额外加仓', reasons };
+  return { score, signal: '估值与趋势同时过热，暂缓追高', intensity: '暂缓额外加仓，仅保留极小额定投', reasons };
+}
+
+function worldPeHistory(html) {
+  const match = String(html || '').match(/detailPE_data\s*=\s*\[(.*?)\];/s);
+  if (!match) return [];
+  return [...match[1].matchAll(/\[Date\.UTC\((\d{4}),\s*(\d{1,2}),\s*(\d{1,2})\),\s*([0-9.]+)\]/g)]
+    .map((item) => ({
+      date: new Date(Date.UTC(Number(item[1]), Number(item[2]), Number(item[3]))),
+      pe: Number(item[4]),
+    }))
+    .filter((item) => Number.isFinite(item.pe));
+}
+
+function peHistoryPercentile(history, currentPe, years) {
+  const latestDate = history.at(-1)?.date;
+  if (!latestDate) return null;
+  const cutoff = new Date(latestDate);
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - years);
+  const values = history.filter((item) => item.date >= cutoff).map((item) => item.pe);
+  if (!values.length) return null;
+  const rank = values.filter((value) => value <= currentPe).length / values.length;
+  return Number((rank * 100).toFixed(1));
 }
 
 function worldPeRatioText(html) {
@@ -3069,10 +3096,17 @@ async function getIndexPurchaseAssessment({ name, symbol, slug }) {
     const sma50Match = text.match(/Price vs SMA50\s*([+-]?[0-9.]+)%/i);
     const dateMatch = text.match(/calculated on\s*([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})/i);
     if (!peMatch || !rangeMatch || !sma200Match || !sma50Match) throw new Error('估值或均线数据解析失败');
+    const history = worldPeHistory(html);
+    const pe = Number(peMatch[1]);
+    const pePercentile5 = peHistoryPercentile(history, pe, 5);
+    const pePercentile10 = peHistoryPercentile(history, pe, 10);
+    if (pePercentile5 == null || pePercentile10 == null) throw new Error('PE 历史百分位计算失败');
     const metrics = {
-      pe: Number(peMatch[1]),
+      pe,
       peRangeLow: Number(rangeMatch[1]),
       peRangeHigh: Number(rangeMatch[2]),
+      pePercentile5,
+      pePercentile10,
       valuation: valuationMatch?.[1] || '',
       sma200Margin: Number(sma200Match[1]),
       sma50Margin: Number(sma50Match[1]),
@@ -3097,7 +3131,7 @@ async function getIndexPurchaseAssessments() {
     getIndexPurchaseAssessment({ name: '标普 500', symbol: '^GSPC', slug: 'sp-500' }),
   ]);
   return {
-    methodology: '基于当前 PE 相对近 5 年估值区间，以及价格相对 50/200 日均线的位置进行规则评分。',
+    methodology: '基于当前 PE 的近 5 年与近 10 年历史百分位，以及价格相对 50/200 日均线的位置进行平滑评分。',
     disclaimer: '仅作为长期定投节奏参考，不构成投资建议；避免一次性重仓，并结合自身现金流与风险承受能力。',
     items,
   };
@@ -3668,7 +3702,7 @@ function dailyBriefHtml(payload) {
   const markets = payload.markets || [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
   const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
-    ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（区间 ${escapeHtml(item.peRangeLow)}-${escapeHtml(item.peRangeHigh)}）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
+    ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（5 年 ${escapeHtml(item.pePercentile5)}% / 10 年 ${escapeHtml(item.pePercentile10)}%）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
     : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
   const learning = payload.learning || {};
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate)})</span></li>`).join('');
@@ -7021,7 +7055,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     : ['暂无指数配置。'];
   const assessmentLines = Array.isArray(indexPurchaseAssessment.items) && indexPurchaseAssessment.items.length
     ? indexPurchaseAssessment.items.map((item) => item.ok
-      ? `- ${item.name}：${item.signal}｜PE ${item.pe}（近 5 年区间 ${item.peRangeLow}-${item.peRangeHigh}）｜距 50/200 日均线 ${item.sma50Margin}%/${item.sma200Margin}%｜${item.intensity}`
+      ? `- ${item.name}：${item.signal}｜PE ${item.pe}（5 年百分位 ${item.pePercentile5}% / 10 年 ${item.pePercentile10}%）｜距 50/200 日均线 ${item.sma50Margin}%/${item.sma200Margin}%｜${item.intensity}`
       : `- ${item.name}：评估失败 ${item.error || ''}`)
     : ['暂无定投评估数据。'];
   const notificationLines = notificationMetrics.open
