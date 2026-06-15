@@ -28,7 +28,7 @@ data/exam-planner.sqlite
 - `precomputed_cache`：趋势、错因等预计算缓存。
 - `dictionary_entries`：ECDICT 词典索引。
 - `confusing_words_backup`：易混词浏览器备份。
-- `finance_vaults`：理财密文保险箱。
+- `finance_vaults`：已停用的历史理财密文表，仅保留旧数据，不再由当前代码创建或使用。
 - `backup_log`：备份/恢复日志。
 - `library_books`、`library_text_chunks`、`library_notes`、`library_bookmarks`、`library_reading_progress`：资料库。
 - `error_theme_batches`、`error_themes`、`error_theme_occurrences`、`review_sentence_embeddings`、`error_theme_corrections`：错因主题分析。

@@ -34,11 +34,6 @@
 - Confusing words：`/api/confusing-words/backup`
 - Library：`/api/library*`
 
-## 理财
-
-- Public quotes：`/api/finance-public/*`
-- Vault sync：`/api/finance-vault`
-
 ## 运维
 
 - Backups：`/api/backups/*`
@@ -55,6 +50,5 @@
 - `server/modules/db.js`：SQLite helper、schema、migration。
 - `server/modules/learning.js`：学习数据读写。
 - `server/modules/reports.js`：报告、简报、错因。
-- `server/modules/finance.js`：理财密文同步和行情。
 - `server/modules/library.js`：资料库。
 - `server/modules/ops.js`：备份、访问统计、日志摘要。

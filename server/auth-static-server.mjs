@@ -35,7 +35,7 @@ const libraryFilesDir = join(libraryDir, 'files');
 const migrationsDir = resolve(fileURLToPath(new URL('./migrations', import.meta.url)));
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
-const exchangeApiEnvFile = process.env.EXCHANGE_API_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'exchange-api.env') : '/etc/exam-planner/exchange-api.env');
+const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
@@ -2053,7 +2053,7 @@ async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
 }
 
 function fetchTextWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-finance/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
     encoding: 'utf8',
     maxBuffer: 2 * 1024 * 1024,
   });
@@ -2286,28 +2286,20 @@ async function getPublicStablecoinRates() {
   };
 }
 
-const exchangeApiEnvKeys = [
-  'BINANCE_API_KEY',
-  'BINANCE_API_SECRET',
-  'BINANCE_BASE_URL',
-  'BITGET_API_KEY',
-  'BITGET_API_SECRET',
-  'BITGET_BASE_URL',
-  'BITGET_API_PASSPHRASE',
-  'EXCHANGE_API_PROXY_URL',
+const proxySettingsEnvKeys = [
   'MIHOMO_CONTROLLER_SECRET',
   'MIHOMO_SUBSCRIPTION_URL',
   'MIHOMO_SELECTED_PROXY',
   'MIHOMO_PROVIDER_MODE',
 ];
 
-function parseExchangeApiEnvText(text = '') {
+function parseProxySettingsEnvText(text = '') {
   const values = {};
   text.split(/\r?\n/).forEach((line) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return;
     const match = trimmed.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
-    if (!match || !exchangeApiEnvKeys.includes(match[1])) return;
+    if (!match || !proxySettingsEnvKeys.includes(match[1])) return;
     let value = match[2] || '';
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
@@ -2317,27 +2309,19 @@ function parseExchangeApiEnvText(text = '') {
   return values;
 }
 
-function readExchangeApiEnvValues() {
+function readProxySettingsEnvValues() {
   try {
-    if (!existsSync(exchangeApiEnvFile)) return {};
-    return parseExchangeApiEnvText(readFileSync(exchangeApiEnvFile, 'utf8'));
+    if (!existsSync(proxySettingsEnvFile)) return {};
+    return parseProxySettingsEnvText(readFileSync(proxySettingsEnvFile, 'utf8'));
   } catch (error) {
-    logStructured('warn', 'exchange_api_env_read_failed', { error: redactSecretText(error.message || String(error)) });
+    logStructured('warn', 'proxy_settings_env_read_failed', { error: redactSecretText(error.message || String(error)) });
     return {};
   }
 }
 
-function exchangeApiCurrentValues() {
-  const fileValues = readExchangeApiEnvValues();
+function proxySettingsCurrentValues() {
+  const fileValues = readProxySettingsEnvValues();
   return {
-    BINANCE_API_KEY: String(process.env.BINANCE_API_KEY || fileValues.BINANCE_API_KEY || ''),
-    BINANCE_API_SECRET: String(process.env.BINANCE_API_SECRET || fileValues.BINANCE_API_SECRET || ''),
-    BINANCE_BASE_URL: String(process.env.BINANCE_BASE_URL || fileValues.BINANCE_BASE_URL || 'https://api.binance.com'),
-    BITGET_API_KEY: String(process.env.BITGET_API_KEY || fileValues.BITGET_API_KEY || ''),
-    BITGET_API_SECRET: String(process.env.BITGET_API_SECRET || fileValues.BITGET_API_SECRET || ''),
-    BITGET_BASE_URL: String(process.env.BITGET_BASE_URL || fileValues.BITGET_BASE_URL || 'https://api.bitget.com'),
-    BITGET_API_PASSPHRASE: String(process.env.BITGET_API_PASSPHRASE || fileValues.BITGET_API_PASSPHRASE || ''),
-    EXCHANGE_API_PROXY_URL: String(process.env.EXCHANGE_API_PROXY_URL || fileValues.EXCHANGE_API_PROXY_URL || ''),
     MIHOMO_CONTROLLER_SECRET: String(process.env.MIHOMO_CONTROLLER_SECRET || fileValues.MIHOMO_CONTROLLER_SECRET || ''),
     MIHOMO_SUBSCRIPTION_URL: String(process.env.MIHOMO_SUBSCRIPTION_URL || fileValues.MIHOMO_SUBSCRIPTION_URL || ''),
     MIHOMO_SELECTED_PROXY: String(process.env.MIHOMO_SELECTED_PROXY || fileValues.MIHOMO_SELECTED_PROXY || ''),
@@ -2345,194 +2329,35 @@ function exchangeApiCurrentValues() {
   };
 }
 
-function maskExchangeSecret(value = '') {
-  const secret = String(value || '').trim();
-  return {
-    configured: Boolean(secret),
-    last4: secret ? secret.slice(-4) : '',
-  };
-}
-
-function maskExchangeProxyUrl(value = '') {
-  const raw = String(value || '').trim();
-  if (!raw) return { configured: false, label: '', hasCredentials: false };
-  try {
-    const url = new URL(raw);
-    const hasCredentials = Boolean(url.username || url.password);
-    url.username = '';
-    url.password = '';
-    return { configured: true, label: url.toString().replace(/\/$/, ''), hasCredentials };
-  } catch {
-    return { configured: true, label: '已配置代理 URL', hasCredentials: raw.includes('@') };
-  }
-}
-
-function exchangeProviderConfigStatus(provider, values = exchangeApiCurrentValues()) {
-  if (provider === 'binance') {
-    const apiKey = maskExchangeSecret(values.BINANCE_API_KEY);
-    const apiSecret = maskExchangeSecret(values.BINANCE_API_SECRET);
-    return {
-      provider,
-      apiKeyConfigured: apiKey.configured,
-      apiKeyLast4: apiKey.last4,
-      apiSecretConfigured: apiSecret.configured,
-      apiSecretLast4: apiSecret.last4,
-      passphraseConfigured: false,
-      passphraseLast4: '',
-      baseUrl: values.BINANCE_BASE_URL || 'https://api.binance.com',
-      supportsBalances: apiKey.configured && apiSecret.configured,
-      supportsTaxRecords: apiKey.configured && apiSecret.configured,
-      message: apiKey.configured && apiSecret.configured ? '已配置 Binance 税务 API' : '缺少 Binance API Key 或 Secret',
-    };
-  }
-  const apiKey = maskExchangeSecret(values.BITGET_API_KEY);
-  const apiSecret = maskExchangeSecret(values.BITGET_API_SECRET);
-  const passphrase = maskExchangeSecret(values.BITGET_API_PASSPHRASE);
-  return {
-    provider: 'bitget',
-    apiKeyConfigured: apiKey.configured,
-    apiKeyLast4: apiKey.last4,
-    apiSecretConfigured: apiSecret.configured,
-    apiSecretLast4: apiSecret.last4,
-    passphraseConfigured: passphrase.configured,
-    passphraseLast4: passphrase.last4,
-    baseUrl: values.BITGET_BASE_URL || 'https://api.bitget.com',
-    supportsBalances: apiKey.configured && apiSecret.configured && passphrase.configured,
-    supportsTaxRecords: apiKey.configured && apiSecret.configured,
-    message: apiKey.configured && apiSecret.configured
-      ? passphrase.configured
-        ? '已配置 Bitget API，支持现货/Earn 余额和税务流水'
-        : '已配置 Bitget 税务 API；未配置 passphrase，将跳过现货/Earn 余额接口'
-      : '缺少 Bitget API Key 或 Secret',
-  };
-}
-
-function getFinanceExchangeApiSettings() {
-  const values = exchangeApiCurrentValues();
-  const proxy = maskExchangeProxyUrl(values.EXCHANGE_API_PROXY_URL);
-  return {
-    ok: true,
-    envFile: exchangeApiEnvFile,
-    proxyConfigured: proxy.configured,
-    proxyLabel: proxy.label,
-    proxyHasCredentials: proxy.hasCredentials,
-    providers: financeExchangeProviders.map((provider) => exchangeProviderConfigStatus(provider, values)),
-  };
-}
-
-function sanitizeExchangeBaseUrl(value, fallback) {
-  const url = String(value || '').trim() || fallback;
-  if (!/^https?:\/\/[a-z0-9.-]+(?::\d+)?(?:\/)?$/i.test(url)) {
-    const error = new Error('交易所 API 地址格式不正确');
-    error.statusCode = 400;
-    throw error;
-  }
-  return url.replace(/\/+$/, '');
-}
-
-function sanitizeExchangeProxyUrl(value) {
-  const proxy = String(value || '').trim();
-  if (!proxy) return '';
-  let url;
-  try {
-    url = new URL(proxy);
-  } catch {
-    const error = new Error('交易所代理 URL 格式不正确');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) {
-    const error = new Error('交易所代理 URL 仅支持 http:// 或 https://');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!url.hostname) {
-    const error = new Error('交易所代理 URL 缺少主机名');
-    error.statusCode = 400;
-    throw error;
-  }
-  return url.toString();
-}
-
-function escapeExchangeEnvValue(value = '') {
+function escapeProxySettingsEnvValue(value = '') {
   const text = String(value || '');
   if (/^[A-Za-z0-9_./:=+\-@]*$/.test(text)) return text;
   return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`;
 }
 
-function writeExchangeApiEnvValues(values) {
-  mkdirSync(dirname(exchangeApiEnvFile), { recursive: true });
+function writeProxySettingsEnvValues(values) {
+  mkdirSync(dirname(proxySettingsEnvFile), { recursive: true });
   const text = [
-    '# Exam Planner finance exchange tax API keys.',
-    '# Keep trading, transfer, and withdrawal permissions disabled.',
-    `BINANCE_API_KEY=${escapeExchangeEnvValue(values.BINANCE_API_KEY)}`,
-    `BINANCE_API_SECRET=${escapeExchangeEnvValue(values.BINANCE_API_SECRET)}`,
-    `BINANCE_BASE_URL=${escapeExchangeEnvValue(values.BINANCE_BASE_URL || 'https://api.binance.com')}`,
-    `BITGET_API_KEY=${escapeExchangeEnvValue(values.BITGET_API_KEY)}`,
-    `BITGET_API_SECRET=${escapeExchangeEnvValue(values.BITGET_API_SECRET)}`,
-    `BITGET_BASE_URL=${escapeExchangeEnvValue(values.BITGET_BASE_URL || 'https://api.bitget.com')}`,
-    '# Optional only for normal Bitget account API keys that include a passphrase.',
-    `BITGET_API_PASSPHRASE=${escapeExchangeEnvValue(values.BITGET_API_PASSPHRASE)}`,
-    '# Optional outbound HTTP(S) proxy for exchange API calls, for example http://user:pass@host:port',
-    `EXCHANGE_API_PROXY_URL=${escapeExchangeEnvValue(values.EXCHANGE_API_PROXY_URL)}`,
-    '',
-    '# Mihomo local proxy core settings.',
-    `MIHOMO_CONTROLLER_SECRET=${escapeExchangeEnvValue(values.MIHOMO_CONTROLLER_SECRET)}`,
-    `MIHOMO_SUBSCRIPTION_URL=${escapeExchangeEnvValue(values.MIHOMO_SUBSCRIPTION_URL)}`,
-    `MIHOMO_SELECTED_PROXY=${escapeExchangeEnvValue(values.MIHOMO_SELECTED_PROXY)}`,
-    `MIHOMO_PROVIDER_MODE=${escapeExchangeEnvValue(values.MIHOMO_PROVIDER_MODE)}`,
+    '# Exam Planner Mihomo proxy settings.',
+    `MIHOMO_CONTROLLER_SECRET=${escapeProxySettingsEnvValue(values.MIHOMO_CONTROLLER_SECRET)}`,
+    `MIHOMO_SUBSCRIPTION_URL=${escapeProxySettingsEnvValue(values.MIHOMO_SUBSCRIPTION_URL)}`,
+    `MIHOMO_SELECTED_PROXY=${escapeProxySettingsEnvValue(values.MIHOMO_SELECTED_PROXY)}`,
+    `MIHOMO_PROVIDER_MODE=${escapeProxySettingsEnvValue(values.MIHOMO_PROVIDER_MODE)}`,
     '',
   ].join('\n');
-  writeFileSync(exchangeApiEnvFile, text, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(proxySettingsEnvFile, text, { encoding: 'utf8', mode: 0o600 });
   try {
-    chmodSync(exchangeApiEnvFile, 0o600);
+    chmodSync(proxySettingsEnvFile, 0o600);
   } catch {
     // Windows local development can ignore chmod.
   }
 }
 
-function applyExchangeProcessEnvValues(values) {
-  exchangeApiEnvKeys.forEach((key) => {
+function applyProxySettingsProcessEnvValues(values) {
+  proxySettingsEnvKeys.forEach((key) => {
     if (values[key]) process.env[key] = values[key];
     else delete process.env[key];
   });
-}
-
-function applyExchangeApiSettings(input = {}) {
-  const current = exchangeApiCurrentValues();
-  const next = { ...current };
-  const assignSecret = (field, envKey) => {
-    if (typeof input[field] === 'string' && input[field].trim()) next[envKey] = input[field].trim();
-  };
-
-  if (input.clearBinance) {
-    next.BINANCE_API_KEY = '';
-    next.BINANCE_API_SECRET = '';
-  }
-  if (input.clearBitget) {
-    next.BITGET_API_KEY = '';
-    next.BITGET_API_SECRET = '';
-    next.BITGET_API_PASSPHRASE = '';
-  }
-  if (input.clearBitgetPassphrase) next.BITGET_API_PASSPHRASE = '';
-  if (input.clearExchangeProxy) next.EXCHANGE_API_PROXY_URL = '';
-
-  assignSecret('binanceApiKey', 'BINANCE_API_KEY');
-  assignSecret('binanceApiSecret', 'BINANCE_API_SECRET');
-  assignSecret('bitgetApiKey', 'BITGET_API_KEY');
-  assignSecret('bitgetApiSecret', 'BITGET_API_SECRET');
-  assignSecret('bitgetApiPassphrase', 'BITGET_API_PASSPHRASE');
-  assignSecret('exchangeApiProxyUrl', 'EXCHANGE_API_PROXY_URL');
-  next.BINANCE_BASE_URL = sanitizeExchangeBaseUrl(input.binanceBaseUrl ?? next.BINANCE_BASE_URL, 'https://api.binance.com');
-  next.BITGET_BASE_URL = sanitizeExchangeBaseUrl(input.bitgetBaseUrl ?? next.BITGET_BASE_URL, 'https://api.bitget.com');
-  next.EXCHANGE_API_PROXY_URL = sanitizeExchangeProxyUrl(next.EXCHANGE_API_PROXY_URL);
-
-  writeExchangeApiEnvValues(next);
-  applyExchangeProcessEnvValues(next);
-  return {
-    ...getFinanceExchangeApiSettings(),
-    updatedAt: nowISO(),
-  };
 }
 
 const mihomoBinary = process.platform === 'win32' ? '' : '/usr/local/bin/mihomo';
@@ -2633,9 +2458,9 @@ function buildMihomoConfig(values) {
     ...providerBlock,
     ...groupBlock,
     'rules:',
-    '  - DOMAIN-SUFFIX,binance.com,SELECT',
-    '  - DOMAIN-SUFFIX,binance.vision,SELECT',
-    '  - DOMAIN-SUFFIX,bitget.com,SELECT',
+    '  - DOMAIN-SUFFIX,worldperatio.com,SELECT',
+    '  - DOMAIN-SUFFIX,api.telegram.org,SELECT',
+    '  - DOMAIN-SUFFIX,gstatic.com,SELECT',
     '  - MATCH,DIRECT',
     '',
   ].join('\n');
@@ -2710,7 +2535,7 @@ function restartMihomoService() {
 }
 
 async function mihomoControllerRequest(pathname, options = {}) {
-  const values = exchangeApiCurrentValues();
+  const values = proxySettingsCurrentValues();
   const secret = values.MIHOMO_CONTROLLER_SECRET;
   if (!secret) throw new Error('mihomo 控制密钥未配置');
   const response = await fetch(`${mihomoControllerUrl}${pathname}`, {
@@ -2744,7 +2569,7 @@ function mihomoServiceStatus() {
 }
 
 async function getMihomoSettings() {
-  const values = exchangeApiCurrentValues();
+  const values = proxySettingsCurrentValues();
   const subscription = maskMihomoSubscriptionUrl(values.MIHOMO_SUBSCRIPTION_URL);
   const service = mihomoServiceStatus();
   let controllerOk = false;
@@ -2785,12 +2610,11 @@ async function getMihomoSettings() {
     current,
     nodes,
     error,
-    exchangeProxyUsingMihomo: exchangeApiCurrentValues().EXCHANGE_API_PROXY_URL === mihomoProxyUrl,
   };
 }
 
 async function saveMihomoSubscriptionSettings(input = {}) {
-  const values = exchangeApiCurrentValues();
+  const values = proxySettingsCurrentValues();
   ensureMihomoSecret(values);
   if (input.clearSubscription) {
     values.MIHOMO_SUBSCRIPTION_URL = '';
@@ -2803,10 +2627,9 @@ async function saveMihomoSubscriptionSettings(input = {}) {
     values.MIHOMO_PROVIDER_MODE = 'http';
     removeMihomoProviderContent();
   }
-  values.EXCHANGE_API_PROXY_URL = mihomoProxyUrl;
   writeMihomoConfig(values);
-  writeExchangeApiEnvValues(values);
-  applyExchangeProcessEnvValues(values);
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
   const restart = restartMihomoService();
   await wait(800);
   const status = await getMihomoSettings();
@@ -2816,13 +2639,12 @@ async function saveMihomoSubscriptionSettings(input = {}) {
 async function importMihomoProviderSettings(input = {}) {
   const content = typeof input.subscriptionContent === 'string' ? input.subscriptionContent : input.content;
   writeMihomoProviderContent(content);
-  const values = exchangeApiCurrentValues();
+  const values = proxySettingsCurrentValues();
   ensureMihomoSecret(values);
   values.MIHOMO_PROVIDER_MODE = 'file';
-  values.EXCHANGE_API_PROXY_URL = mihomoProxyUrl;
   writeMihomoConfig(values);
-  writeExchangeApiEnvValues(values);
-  applyExchangeProcessEnvValues(values);
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
   const restart = restartMihomoService();
   await wait(800);
   const status = await getMihomoSettings();
@@ -2837,11 +2659,10 @@ async function selectMihomoProxy(input = {}) {
     throw error;
   }
   await mihomoControllerRequest('/proxies/SELECT', { method: 'PUT', body: { name }, timeoutMs: 10_000 });
-  const values = exchangeApiCurrentValues();
+  const values = proxySettingsCurrentValues();
   values.MIHOMO_SELECTED_PROXY = name;
-  values.EXCHANGE_API_PROXY_URL = mihomoProxyUrl;
-  writeExchangeApiEnvValues(values);
-  applyExchangeProcessEnvValues(values);
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
   const status = await getMihomoSettings();
   return { ...status, selected: name, updatedAt: nowISO() };
 }
@@ -2850,8 +2671,8 @@ async function testMihomoProxy() {
   const { ProxyAgent } = require('undici');
   const dispatcher = new ProxyAgent(mihomoProxyUrl);
   const targets = [
-    { id: 'binance', label: 'Binance', url: 'https://api.binance.com/api/v3/time' },
-    { id: 'bitget', label: 'Bitget', url: 'https://api.bitget.com/api/v2/public/time' },
+    { id: 'brief-pe', label: '简报 PE 数据源', url: 'https://www.worldperatio.com/' },
+    { id: 'telegram', label: 'Telegram API', url: 'https://api.telegram.org/' },
   ];
   const results = [];
   for (const target of targets) {
@@ -2884,8 +2705,6 @@ async function testMihomoProxy() {
   }
   return { ok: results.every((result) => result.ok), testedAt: nowISO(), results };
 }
-
-const financeExchangeProviders = ['binance', 'bitget'];
 
 function weatherCodeText(code) {
   const labels = {
@@ -4606,15 +4425,6 @@ CREATE TABLE IF NOT EXISTS app_metadata (
 CREATE TABLE IF NOT EXISTS app_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS finance_vaults (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  vault_json TEXT NOT NULL,
-  client_updated_at TEXT NOT NULL,
-  device_id TEXT NOT NULL DEFAULT '',
-  byte_size INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dictionary_entries (
@@ -7831,21 +7641,6 @@ async function handleApi(req, res) {
     return;
   }
 
-  if (req.url?.startsWith('/api/finance-public/') && req.method === 'GET') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/settings/finance-exchange-api' && req.method === 'GET') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/settings/finance-exchange-api' && req.method === 'POST') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
   if (req.url === '/api/settings/mihomo' && req.method === 'GET') {
     if (sessionRole !== 'write') {
       sendJson(res, { error: 'Mihomo settings require write session' }, 403);
@@ -7909,31 +7704,6 @@ async function handleApi(req, res) {
     const result = await testMihomoProxy();
     writeAuditEvent({ action: 'mihomo_proxy_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
     sendJson(res, result);
-    return;
-  }
-
-  if (req.url === '/api/finance-exchange/status' && req.method === 'GET') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/finance-exchange/sync' && req.method === 'POST') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/finance-vault' && req.method === 'GET') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/finance-vault' && req.method === 'POST') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
-    return;
-  }
-
-  if (req.url === '/api/finance-vault' && req.method === 'DELETE') {
-    sendJson(res, { error: 'Finance module is disabled', disabled: true }, 410);
     return;
   }
 

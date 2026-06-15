@@ -277,7 +277,6 @@ export interface MihomoSettingsResponse {
   current: string;
   nodes: MihomoNode[];
   error: string;
-  exchangeProxyUsingMihomo: boolean;
   restarted?: boolean;
   selected?: string;
   imported?: boolean;

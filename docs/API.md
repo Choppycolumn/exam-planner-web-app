@@ -61,34 +61,6 @@
 - `POST /api/briefs/generate`
 - `POST /api/briefs/send-latest`
 
-## 理财
-
-- `GET /api/finance-public/fund`
-- `GET /api/finance-public/usd-cny`
-- `GET /api/finance-public/stablecoin-rates`
-- `GET /api/finance-exchange/status`
-- `POST /api/finance-exchange/sync`
-- `GET /api/finance-vault`
-- `POST /api/finance-vault`
-- `DELETE /api/finance-vault`
-
-理财明文数据只在浏览器解密；服务端只保存 AES-GCM 密文与同步元数据。
-
-交易所同步接口只在写入会话下可用，API Key 只从服务端环境变量读取，不返回给前端。Binance 和 Bitget 税务 Key 都按服务端密钥调用；Binance `LD*` 理财资产会按底层币种估值并归类为 Earn。Bitget Earn/活期理财余额来自 `/api/v2/earn/account/assets` 和 `/api/v2/earn/savings/assets`，需要带 passphrase 的只读 API；没有 passphrase 时会跳过现货/Earn 余额接口，只同步税务流水，并优先用流水里的 `balance` 字段生成资产快照；若没有 `balance` 字段，则按所选时间窗口内的税务流水金额累计生成估算资产。
-
-- `GET /api/finance-exchange/status`：返回 Binance / Bitget 是否已配置、是否支持余额和税务流水同步。
-- `POST /api/finance-exchange/sync`：请求体示例：
-
-```json
-{
-  "providers": ["binance", "bitget"],
-  "historyDays": 7,
-  "includeTaxRecords": true
-}
-```
-
-返回值包含规范化后的 `assets` 和 `transactions`。前端在浏览器中把它们合并进已解密的理财保险箱，再重新加密保存。
-
 ## 资料库与词典
 
 - `GET /api/dictionary/lookup`

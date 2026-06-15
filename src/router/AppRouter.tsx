@@ -48,7 +48,6 @@ export const router = createBrowserRouter([
       { path: 'project-progress', element: lazyElement(<ProjectProgressPage />) },
       { path: 'goal-review', element: lazyElement(<GoalReviewPage />) },
       { path: 'notifications', element: lazyElement(<NotificationsPage />) },
-      { path: 'finance', element: <Navigate to="/operations" replace /> },
       { path: 'task-center', element: <Navigate to="/operations" replace /> },
       { path: 'operations', element: lazyElement(<OperationsPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
