@@ -18,6 +18,7 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
   const weather = brief.payload.weather;
   const learning = brief.payload.learning;
   const markets = brief.payload.markets ?? [];
+  const indexAssessment = brief.payload.indexPurchaseAssessment;
 
   return (
     <section className="card p-5">
@@ -89,6 +90,35 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
           </div>
         </div>
       </div>
+
+      {indexAssessment?.items?.length ? (
+        <div className="mt-5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><TrendingUp size={16} />美股指数定投评估</h3>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{indexAssessment.methodology}</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {indexAssessment.items.map((item) => (
+              <div key={item.symbol} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{item.name}</p>
+                    <p className="mt-1 text-xs text-slate-500">{item.symbol} · {item.asOf || '数据日期未知'}</p>
+                  </div>
+                  <span className="rounded bg-white px-2 py-1 text-xs font-semibold text-blue-700">{item.ok ? item.signal : '评估失败'}</span>
+                </div>
+                {item.ok ? (
+                  <>
+                    <p className="mt-3 text-sm text-slate-700">PE {item.pe}，近 5 年常见区间 {item.peRangeLow}-{item.peRangeHigh}</p>
+                    <p className="mt-1 text-sm text-slate-700">距 50/200 日均线 {item.sma50Margin}% / {item.sma200Margin}%</p>
+                    <p className="mt-2 text-xs font-semibold text-blue-700">定投强度参考：{item.intensity}</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">{item.reasons?.join('；') || '指标处于中性区间'}</p>
+                  </>
+                ) : <p className="mt-3 text-sm text-rose-600">{item.error}</p>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">{indexAssessment.disclaimer}</p>
+        </div>
+      ) : null}
     </section>
   );
 }

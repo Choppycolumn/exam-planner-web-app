@@ -164,6 +164,28 @@ export interface DailyBrief {
       error?: string;
     };
     markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number | null; changePercent?: number; currency?: string; error?: string }>;
+    indexPurchaseAssessment?: {
+      methodology: string;
+      disclaimer: string;
+      items: Array<{
+        ok: boolean;
+        name: string;
+        symbol: string;
+        asOf?: string;
+        source?: string;
+        pe?: number;
+        peRangeLow?: number;
+        peRangeHigh?: number;
+        valuation?: string;
+        sma50Margin?: number;
+        sma200Margin?: number;
+        score?: number;
+        signal?: string;
+        intensity?: string;
+        reasons?: string[];
+        error?: string;
+      }>;
+    };
     learning?: {
       activeGoal: { name: string; deadline: string; daysLeft: number } | null;
       yesterday: string;

@@ -2056,6 +2056,16 @@ function fetchTextWithCurl(url, timeoutSeconds = 9) {
   return result.stdout;
 }
 
+function fetchTextWithProxyCurl(url, timeoutSeconds = 45) {
+  const result = spawnSync('curl', ['-4', '-fsSL', '--compressed', '--proxy', 'http://127.0.0.1:7890', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `proxy curl exited ${result.status}`);
+  return result.stdout;
+}
+
 async function fetchTextWithFallback(url, timeoutMs = 9000, headers = {}) {
   const errors = [];
   try {
@@ -2994,6 +3004,105 @@ async function getBriefMarket(symbolItem) {
   }
 }
 
+function scoreIndexPurchaseAssessment(metrics) {
+  let score = 0;
+  const reasons = [];
+  const valuationPosition = (metrics.pe - metrics.peRangeLow) / Math.max(0.01, metrics.peRangeHigh - metrics.peRangeLow);
+  if (metrics.pe < metrics.peRangeLow) {
+    score += 2;
+    reasons.push('PE 低于近 5 年常见估值区间');
+  } else if (valuationPosition <= 0.35) {
+    score += 1;
+    reasons.push('PE 位于近 5 年常见区间偏低位置');
+  } else if (metrics.pe > metrics.peRangeHigh) {
+    score -= 2;
+    reasons.push('PE 高于近 5 年常见估值区间');
+  }
+
+  if (metrics.sma200Margin <= -10) {
+    score += 1;
+    reasons.push('价格明显低于 200 日均线，仅适合分批承接');
+  } else if (metrics.sma200Margin >= 15) {
+    score -= 1;
+    reasons.push('价格明显高于 200 日均线，长期趋势偏拥挤');
+  }
+
+  if (metrics.sma50Margin <= -5) {
+    score += 1;
+    reasons.push('价格低于 50 日均线，短期已有回调');
+  } else if (metrics.sma50Margin >= 8) {
+    score -= 1;
+    reasons.push('价格明显高于 50 日均线，短期不宜追高');
+  }
+
+  if (score >= 3) return { score, signal: '适合分批加仓', intensity: '高于常规定投', reasons };
+  if (score >= 1) return { score, signal: '适合按计划定投', intensity: '常规定投', reasons };
+  if (score >= -1) return { score, signal: '中性，少量或按计划定投', intensity: '低于常规定投', reasons };
+  return { score, signal: '偏热，暂缓追高', intensity: '暂缓或仅小额定投', reasons };
+}
+
+function worldPeRatioText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&mu;/gi, 'μ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function getIndexPurchaseAssessment({ name, symbol, slug }) {
+  try {
+    const url = `https://worldperatio.com/index/${slug}/`;
+    let html;
+    try {
+      html = fetchTextWithProxyCurl(url, 45);
+    } catch {
+      html = await fetchTextWithFallback(url, 15000);
+    }
+    const text = worldPeRatioText(html);
+    const peMatch = text.match(/estimated Price-to-Earnings \(P\/E\) Ratio for .*? is\s*([0-9.]+)/i);
+    const rangeMatch = text.match(/average P\/E interval is\s*\[\s*([0-9.]+)\s*,\s*([0-9.]+)\s*\]/i);
+    const valuationMatch = text.match(/current P\/E can be considered\s*([A-Za-z]+)/i);
+    const sma200Match = text.match(/Price vs SMA200\s*([+-]?[0-9.]+)%/i);
+    const sma50Match = text.match(/Price vs SMA50\s*([+-]?[0-9.]+)%/i);
+    const dateMatch = text.match(/calculated on\s*([0-9]{1,2}\s+[A-Za-z]+\s+[0-9]{4})/i);
+    if (!peMatch || !rangeMatch || !sma200Match || !sma50Match) throw new Error('估值或均线数据解析失败');
+    const metrics = {
+      pe: Number(peMatch[1]),
+      peRangeLow: Number(rangeMatch[1]),
+      peRangeHigh: Number(rangeMatch[2]),
+      valuation: valuationMatch?.[1] || '',
+      sma200Margin: Number(sma200Match[1]),
+      sma50Margin: Number(sma50Match[1]),
+    };
+    return {
+      ok: true,
+      name,
+      symbol,
+      asOf: dateMatch?.[1] || '',
+      source: 'World P/E Ratio',
+      ...metrics,
+      ...scoreIndexPurchaseAssessment(metrics),
+    };
+  } catch (error) {
+    return { ok: false, name, symbol, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function getIndexPurchaseAssessments() {
+  const items = await Promise.all([
+    getIndexPurchaseAssessment({ name: '纳指 100', symbol: '^NDX', slug: 'nasdaq-100' }),
+    getIndexPurchaseAssessment({ name: '标普 500', symbol: '^GSPC', slug: 'sp-500' }),
+  ]);
+  return {
+    methodology: '基于当前 PE 相对近 5 年估值区间，以及价格相对 50/200 日均线的位置进行规则评分。',
+    disclaimer: '仅作为长期定投节奏参考，不构成投资建议；避免一次性重仓，并结合自身现金流与风险承受能力。',
+    items,
+  };
+}
+
 const cryptoIdMap = {
   BTC: 'bitcoin',
   BITCOIN: 'bitcoin',
@@ -3391,9 +3500,10 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
   const settings = getDailyBriefSettings({ includeSecret: true });
   const generatedAt = nowISO();
   const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
-  const [weather, markets] = await Promise.all([
+  const [weather, markets, indexPurchaseAssessment] = await Promise.all([
     getBriefWeather(settings),
     Promise.all(marketSymbols.map(getBriefMarket)),
+    getIndexPurchaseAssessments(),
   ]);
   const payload = {
     date,
@@ -3402,6 +3512,7 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     trigger,
     weather,
     markets,
+    indexPurchaseAssessment,
     learning: getDailyBriefLearningSummary(date),
   };
 
@@ -3555,6 +3666,10 @@ function dailyBriefStudyPushHtml(learning = {}) {
 function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
+  const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
+    ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（区间 ${escapeHtml(item.peRangeLow)}-${escapeHtml(item.peRangeHigh)}）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
+    : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
   const learning = payload.learning || {};
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
@@ -3573,6 +3688,10 @@ function dailyBriefHtml(payload) {
   ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
   <h2>指数与资产</h2>
   <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>名称</th><th>代码</th><th>最新</th><th>涨跌</th></tr></thead><tbody>${marketRows || '<tr><td colspan="4">暂无配置</td></tr>'}</tbody></table>
+  <h2>纳指 100 / 标普 500 定投评估</h2>
+  <p>${escapeHtml(indexPurchaseAssessment.methodology || '')}</p>
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>指数</th><th>结论</th><th>PE</th><th>距 50/200 日均线</th><th>定投强度参考</th></tr></thead><tbody>${assessmentRows || '<tr><td colspan="5">暂无评估数据</td></tr>'}</tbody></table>
+  <p style="color:#64748b">${escapeHtml(indexPurchaseAssessment.disclaimer || '')}</p>
 </body></html>`;
 }
 
@@ -6881,6 +7000,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const weather = payload.weather || {};
   const learning = payload.learning || {};
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
+  const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
   const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
   const weatherLine = weather.ok
     ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
@@ -6899,6 +7019,11 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
       ? `- ${item.name}：${item.price}（${item.changePercent ?? 0}%）`
       : `- ${item.name}：更新失败 ${item.error || ''}`)
     : ['暂无指数配置。'];
+  const assessmentLines = Array.isArray(indexPurchaseAssessment.items) && indexPurchaseAssessment.items.length
+    ? indexPurchaseAssessment.items.map((item) => item.ok
+      ? `- ${item.name}：${item.signal}｜PE ${item.pe}（近 5 年区间 ${item.peRangeLow}-${item.peRangeHigh}）｜距 50/200 日均线 ${item.sma50Margin}%/${item.sma200Margin}%｜${item.intensity}`
+      : `- ${item.name}：评估失败 ${item.error || ''}`)
+    : ['暂无定投评估数据。'];
   const notificationLines = notificationMetrics.open
     ? [`待处理 ${notificationMetrics.open} 条，其中 warning ${notificationMetrics.warnings}，critical ${notificationMetrics.critical}`]
     : ['暂无待处理通知。'];
@@ -6913,6 +7038,11 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     ...clawbotSection('今日待办', taskLines),
     '',
     ...clawbotSection('指数', marketLines),
+    '',
+    ...clawbotSection('美股指数定投评估', [
+      ...assessmentLines,
+      indexPurchaseAssessment.disclaimer || '',
+    ]),
     '',
     ...clawbotSection('通知', notificationLines),
     '',
