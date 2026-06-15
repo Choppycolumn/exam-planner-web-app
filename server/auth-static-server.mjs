@@ -16,6 +16,7 @@ import { parseWorldPeRatio, scoreIndexPurchaseAssessment } from './modules/index
 import { summarizeHealth } from './modules/health-status.mjs';
 import { resolveBackupPath } from './modules/backup-validation.mjs';
 import { queryLimit, queryOffset } from './modules/api-helpers.mjs';
+import { isTelegramAuthorized, readTelegramConfig, saveTelegramConfig, telegramConfigStatus, telegramConfirmKeyboard, telegramTaskKeyboard, telegramUpdateContext } from './modules/telegram-bot.mjs';
 import { createNotificationRepository } from './modules/notification-repository.mjs';
 import { createNotificationQueue } from './modules/notification-queue.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
@@ -36,6 +37,7 @@ const migrationsDir = resolve(fileURLToPath(new URL('./migrations', import.meta.
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
+const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
@@ -78,6 +80,7 @@ const notificationQueue = createNotificationQueue({
   notifyEvent: (payload) => notifyEvent(payload),
   log: (level, event, detail) => logStructured(level, event, detail),
 });
+const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
 
 if (!appPassword) {
@@ -4319,6 +4322,7 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
     metrics: notificationRepository.metrics(),
     wechatClawbot,
     bark: resolveBarkConfig(),
+    telegram: telegramConfigStatus(readTelegramConfig(telegramEnvFile)),
     notificationSemantics: {
       reply: '收到微信指令后在同一会话中即时回复，不进入主动通知队列。',
       proactive: '日报、待办提醒和测试消息先进入持久化队列，失败后自动重试并站内兜底。',
@@ -4336,8 +4340,8 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         method: 'POST Bark API V2 /push',
       },
       telegram: {
-        enabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
-        requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+        enabled: telegramConfigStatus(readTelegramConfig(telegramEnvFile)).configured,
+        requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALLOWED_USER_ID'],
         method: 'POST https://api.telegram.org/bot<token>/sendMessage',
       },
       wecomWebhook: {
@@ -7214,15 +7218,62 @@ async function sendBarkNotification(text, delivery) {
   }
 }
 
+function applyTelegramProcessEnv(config) {
+  Object.entries(config).forEach(([key, value]) => {
+    if (value) process.env[key] = value;
+    else delete process.env[key];
+  });
+}
+
+async function telegramApi(method, body = {}, { config = readTelegramConfig(telegramEnvFile), timeoutMs = 15_000 } = {}) {
+  if (!config.TELEGRAM_BOT_TOKEN) throw new Error('Telegram Bot Token is not configured');
+  const { ProxyAgent } = require('undici');
+  const dispatcher = new ProxyAgent(mihomoProxyUrl);
+  const response = await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST',
+    dispatcher,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) throw new Error(`Telegram ${method} failed: ${payload.description || response.status}`);
+  return payload.result;
+}
+
+async function sendTelegramMessage(text, { chatId, replyMarkup, disableNotification = false } = {}) {
+  const config = readTelegramConfig(telegramEnvFile);
+  const targetChatId = String(chatId || config.TELEGRAM_CHAT_ID || '');
+  if (!targetChatId) throw new Error('Telegram Chat ID is not configured');
+  return telegramApi('sendMessage', {
+    chat_id: targetChatId,
+    text: String(text || '').slice(0, 4096),
+    disable_notification: disableNotification,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  }, { config });
+}
+
+async function sendTelegramNotification(text, delivery) {
+  try {
+    await sendTelegramMessage(text, { disableNotification: delivery?.payload?.severity === 'info' });
+    return { ok: true, method: 'telegram', channel: 'telegram_default' };
+  } catch (error) {
+    return { ok: false, method: 'telegram', channel: 'telegram_default', error: redactSecretText(error.message || String(error)) };
+  }
+}
+
 async function sendProactiveNotification(text, delivery) {
   if (delivery?.channelKey === 'bark_default') return sendBarkNotification(text, delivery);
+  if (delivery?.channelKey === 'telegram_default') return sendTelegramNotification(text, delivery);
   return sendProactiveClawbotText(text);
 }
 
 function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
+  const telegramReady = telegramConfigStatus(readTelegramConfig(telegramEnvFile)).configured;
   const channels = channelKeys || [
     'clawbot_weixin',
     ...(resolveBarkConfig().configured ? ['bark_default'] : []),
+    ...(telegramReady ? ['telegram_default'] : []),
   ];
   const deliveries = channels.map((channelKey) => notificationQueue.enqueueProactive({
     eventKey,
@@ -7461,6 +7512,163 @@ async function handleClawbotApi(req, res) {
   sendJson(res, { ok: false, error: 'Not found' }, 404);
 }
 
+function telegramHelpText() {
+  return [
+    'Telegram 助手命令：',
+    '/today - 今日待办',
+    '/week - 本周待办',
+    '/todo 明天 15:30 高 背单词 - 创建待办',
+    '/brief - 最新简报',
+    '/health - 系统健康结论',
+    '/backup - 创建备份（二次确认）',
+    '/maintenance - SQLite 维护（二次确认）',
+    '/resendbrief - 重发最新简报（二次确认）',
+  ].join('\n');
+}
+
+function telegramCommandText(text = '') {
+  const value = String(text).trim();
+  if (/^\/(?:start|help)(?:@\w+)?$/i.test(value)) return '帮助';
+  if (/^\/today(?:@\w+)?$/i.test(value)) return '今日待办';
+  if (/^\/week(?:@\w+)?$/i.test(value)) return '本周待办';
+  if (/^\/brief(?:@\w+)?$/i.test(value)) return '每日简报';
+  const todo = value.match(/^\/todo(?:@\w+)?\s+(.+)$/is);
+  return todo ? `待办 ${todo[1]}` : value;
+}
+
+function telegramHealthText() {
+  const health = getHealthPayload();
+  const status = health.unified.status === 'normal' ? '正常' : health.unified.status === 'degraded' ? '降级' : '故障';
+  const actions = health.unified.actions.length ? health.unified.actions.map((item) => `- ${item.action}`).join('\n') : '无需处理';
+  return `系统健康：${status}\n${health.unified.summary}\n\n处理建议：\n${actions}`;
+}
+
+async function executeTelegramOps(action, req) {
+  if (action === 'backup') {
+    const backup = createBackupFile('telegram-manual', 'manual backup from Telegram');
+    writeAuditEvent({ action: 'telegram_backup', req, actorRole: 'telegram', detail: { createdAt: backup.createdAt } });
+    return `备份完成：${backup.createdAt}`;
+  }
+  if (action === 'maintenance') {
+    const result = await runSqliteMaintenance('telegram');
+    writeAuditEvent({ action: 'telegram_sqlite_maintenance', req, actorRole: 'telegram', detail: { ok: result.ok } });
+    return result.ok ? `SQLite 维护完成：${result.ranAt}` : `SQLite 维护失败：${result.error || '未知错误'}`;
+  }
+  if (action === 'resendbrief') {
+    const digest = buildClawbotDailyDigest(todayISO());
+    await sendTelegramMessage(digest.text);
+    writeAuditEvent({ action: 'telegram_brief_resend', req, actorRole: 'telegram', detail: { date: digest.date } });
+    return '最新简报已重发。';
+  }
+  return '未知运维操作。';
+}
+
+async function handleTelegramUpdate(update, req) {
+  const config = readTelegramConfig(telegramEnvFile);
+  const context = telegramUpdateContext(update);
+  if (!isTelegramAuthorized(context, config)) {
+    logStructured('warn', 'telegram_unauthorized_update', { userId: context.userId, chatId: context.chatId });
+    return;
+  }
+  if (context.callbackId) {
+    await telegramApi('answerCallbackQuery', { callback_query_id: context.callbackId }).catch(() => {});
+    const complete = context.callbackData.match(/^task:complete:(\d+)$/);
+    const delay = context.callbackData.match(/^task:delay:(\d+)$/);
+    const confirm = context.callbackData.match(/^ops:confirm:(backup|maintenance|resendbrief):([A-Za-z0-9_-]+)$/);
+    if (complete) {
+      const command = parseClawbotCommand(`完成 #${complete[1]}`, { today: todayISO() });
+      const result = await executeClawbotCommand(command, req);
+      await sendTelegramMessage(result.reply, { chatId: context.chatId });
+      return;
+    }
+    if (delay) {
+      const task = findClawbotTasks(`#${delay[1]}`)[0];
+      if (!task) return sendTelegramMessage('待办不存在或已完成。', { chatId: context.chatId });
+      const nextDate = addDaysISO(task.dueDate, 1);
+      runSqlite(`UPDATE short_term_tasks SET due_date = ${sqlString(nextDate)}, updated_at = ${sqlString(nowISO())} WHERE id = ${sqlValue(task.id)};`);
+      tableChanged();
+      writeAuditEvent({ action: 'telegram_task_delay', req, actorRole: 'telegram', detail: { id: task.id, dueDate: nextDate } });
+      await sendTelegramMessage(`已延期一天：#${task.id} ${task.title}｜${nextDate}`, { chatId: context.chatId });
+      return;
+    }
+    if (confirm) {
+      const pending = telegramOpsConfirmations.get(confirm[2]);
+      telegramOpsConfirmations.delete(confirm[2]);
+      if (!pending || pending.action !== confirm[1] || pending.userId !== context.userId || pending.expiresAt < Date.now()) {
+        await sendTelegramMessage('确认已失效，请重新发送运维命令。', { chatId: context.chatId });
+        return;
+      }
+      await sendTelegramMessage(await executeTelegramOps(confirm[1], req), { chatId: context.chatId });
+      return;
+    }
+    if (context.callbackData === 'ops:cancel') await sendTelegramMessage('已取消。', { chatId: context.chatId });
+    return;
+  }
+
+  const raw = String(context.text || '').trim();
+  if (!raw) return;
+  if (/^\/health(?:@\w+)?$/i.test(raw)) return sendTelegramMessage(telegramHealthText(), { chatId: context.chatId });
+  const ops = raw.match(/^\/(backup|maintenance|resendbrief)(?:@\w+)?$/i);
+  if (ops) {
+    const action = ops[1].toLowerCase();
+    const token = randomBytes(9).toString('base64url');
+    telegramOpsConfirmations.set(token, { action, userId: context.userId, expiresAt: Date.now() + 5 * 60_000 });
+    return sendTelegramMessage(`即将执行：${action}。确认按钮 5 分钟内有效且只能使用一次。`, { chatId: context.chatId, replyMarkup: telegramConfirmKeyboard(action, token) });
+  }
+  if (/^\/(?:start|help)(?:@\w+)?$/i.test(raw)) return sendTelegramMessage(telegramHelpText(), { chatId: context.chatId });
+
+  const command = parseClawbotCommand(telegramCommandText(raw), { today: todayISO() });
+  const result = await executeClawbotCommand(command, req);
+  const tasks = result.tasks || (result.task && !result.task.isCompleted ? [result.task] : []);
+  await sendTelegramMessage(result.reply, { chatId: context.chatId, replyMarkup: tasks.length ? telegramTaskKeyboard(tasks) : undefined });
+}
+
+async function handleTelegramWebhook(req, res) {
+  const config = readTelegramConfig(telegramEnvFile);
+  if (!config.TELEGRAM_WEBHOOK_SECRET || req.headers['x-telegram-bot-api-secret-token'] !== config.TELEGRAM_WEBHOOK_SECRET) {
+    sendJson(res, { ok: false }, 403);
+    return;
+  }
+  const update = await readJsonBody(req);
+  await handleTelegramUpdate(update, req);
+  sendJson(res, { ok: true });
+}
+
+function saveTelegramSettings(input = {}) {
+  const current = readTelegramConfig(telegramEnvFile);
+  const webhookUrl = String(input.webhookUrl || '').trim();
+  if (webhookUrl && !/^https:\/\//i.test(webhookUrl)) {
+    const error = new Error('Telegram Webhook 必须使用 HTTPS');
+    error.statusCode = 400;
+    throw error;
+  }
+  const config = saveTelegramConfig(telegramEnvFile, current, input);
+  applyTelegramProcessEnv(config);
+  return telegramConfigStatus(config);
+}
+
+async function registerTelegramWebhook() {
+  const config = readTelegramConfig(telegramEnvFile);
+  const status = telegramConfigStatus(config);
+  if (!status.configured || !config.TELEGRAM_WEBHOOK_URL || !config.TELEGRAM_WEBHOOK_SECRET) throw new Error('请先配置 Token、Chat ID、授权用户和 Webhook URL');
+  const url = `${config.TELEGRAM_WEBHOOK_URL.replace(/\/+$/, '')}/api/telegram/webhook`;
+  await telegramApi('setWebhook', {
+    url,
+    secret_token: config.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ['message', 'callback_query'],
+    drop_pending_updates: false,
+  }, { config });
+  await telegramApi('setMyCommands', { commands: [
+    { command: 'today', description: '查看今日待办' },
+    { command: 'week', description: '查看本周待办' },
+    { command: 'brief', description: '查看最新简报' },
+    { command: 'health', description: '查看系统健康' },
+    { command: 'backup', description: '创建服务器备份' },
+    { command: 'maintenance', description: '执行 SQLite 维护' },
+  ] }, { config });
+  return { ...status, registered: true, bot: await telegramApi('getMe', {}, { config }) };
+}
+
 function sendHtml(res, html, status = 200) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
   res.end(html);
@@ -7628,6 +7836,11 @@ async function handleApi(req, res) {
 
   if (req.url?.startsWith('/api/clawbot/')) {
     await handleClawbotApi(req, res);
+    return;
+  }
+
+  if (req.url === '/api/telegram/webhook' && req.method === 'POST') {
+    await handleTelegramWebhook(req, res);
     return;
   }
 
@@ -7821,6 +8034,28 @@ async function handleApi(req, res) {
     });
     writeAuditEvent({ action: 'notifications_bark_test', req, actorRole: sessionRole, detail: { queued: true, deliveryId: delivery.deliveryId } });
     sendJson(res, { ok: true, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/settings' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const telegram = saveTelegramSettings(body);
+    writeAuditEvent({ action: 'notifications_telegram_settings', req, actorRole: sessionRole, detail: { configured: telegram.configured, webhookConfigured: telegram.webhookConfigured } });
+    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/register' && req.method === 'POST') {
+    const telegram = await registerTelegramWebhook();
+    writeAuditEvent({ action: 'notifications_telegram_register', req, actorRole: sessionRole, detail: { registered: true } });
+    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/test' && req.method === 'POST') {
+    const result = await sendTelegramNotification('Telegram 通知通道已接入 Exam Planner。', { payload: { severity: 'info' } });
+    writeAuditEvent({ action: 'notifications_telegram_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
+    sendJson(res, { ok: result.ok, result, center: getNotificationCenterPayload(sessionRole) }, result.ok ? 200 : 502);
     return;
   }
 

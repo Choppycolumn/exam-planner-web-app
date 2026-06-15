@@ -163,6 +163,10 @@ export function NotificationsPage() {
   const [filter, setFilter] = useState<'all' | 'sent' | 'unsent' | 'failed'>('all');
   const [eventFilter, setEventFilter] = useState<'all' | 'warning' | 'critical'>('all');
   const [search, setSearch] = useState('');
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [telegramUserId, setTelegramUserId] = useState('');
+  const [telegramWebhookUrl, setTelegramWebhookUrl] = useState('');
   const { data: notificationData } = useQuery({
     queryKey: queryKeys.notifications(eventFilter),
     queryFn: () => serverApi.getNotificationCenter(eventFilter),
@@ -244,6 +248,61 @@ export function NotificationsPage() {
     }
   };
 
+  const saveTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.saveTelegramSettings({
+        botToken: telegramToken,
+        chatId: telegramChatId,
+        allowedUserId: telegramUserId,
+        webhookUrl: telegramWebhookUrl || window.location.origin,
+      });
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setTelegramToken('');
+      setTelegramChatId('');
+      setTelegramUserId('');
+      setToast('Telegram 安全配置已保存');
+    } catch {
+      setToast('Telegram 配置保存失败');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const registerTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.registerTelegramWebhook();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast('Telegram Webhook 与命令菜单已注册');
+    } catch {
+      setToast('Telegram 注册失败，请检查 Token、用户 ID 和代理');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2600);
+    }
+  };
+
+  const testTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.testTelegramNotification();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      setToast('Telegram 测试消息已发送');
+    } catch {
+      setToast('Telegram 测试失败，请检查配置和代理');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2400);
+    }
+  };
+
   const saveWechatPush = async (enabled: boolean) => {
     if (readOnly) return;
     setLoading(true);
@@ -279,6 +338,8 @@ export function NotificationsPage() {
   const wechatReady = Boolean(wechat?.enabled && wechat.configured);
   const bark = notificationData?.bark;
   const barkReady = Boolean(bark?.enabled && bark.configured);
+  const telegram = notificationData?.telegram;
+  const telegramReady = Boolean(telegram?.configured && telegram.webhookConfigured);
 
   return (
     <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，支持邮件与微信 ClawBot 推送。">
@@ -386,11 +447,32 @@ export function NotificationsPage() {
               </button>
             </div>
           </div>
+          <div className={`mt-3 rounded-lg border p-3 ${telegramReady ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-blue-100 bg-blue-50 text-blue-800'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold"><Send size={16} />Telegram Bot</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {telegramReady ? '通知、待办助手与受限运维控制台已就绪' : '配置 Token、Chat ID 与授权用户后注册 Webhook'}
+                </p>
+              </div>
+              <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{telegramReady ? '运行中' : '待配置'}</span>
+            </div>
+            <div className="mt-3 grid gap-2">
+              <input className="input text-xs" type="password" value={telegramToken} onChange={(event) => setTelegramToken(event.target.value)} placeholder={telegram?.tokenConfigured ? `Bot Token 已配置，尾号 ${telegram.tokenLast4}` : 'Bot Token'} />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input className="input text-xs" value={telegramChatId} onChange={(event) => setTelegramChatId(event.target.value)} placeholder={telegram?.chatIdConfigured ? `Chat ID 已配置，尾号 ${telegram.chatIdLast4}` : 'Chat ID'} />
+                <input className="input text-xs" value={telegramUserId} onChange={(event) => setTelegramUserId(event.target.value)} placeholder={telegram?.allowedUserIdConfigured ? `授权用户已配置，尾号 ${telegram.allowedUserIdLast4}` : '授权用户 ID'} />
+              </div>
+              <input className="input text-xs" value={telegramWebhookUrl} onChange={(event) => setTelegramWebhookUrl(event.target.value)} placeholder={telegram?.webhookUrl || window.location.origin} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading} onClick={() => void saveTelegram()}>保存配置</button>
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading || !telegram?.configured} onClick={() => void registerTelegram()}>注册 Webhook</button>
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading || !telegram?.configured} onClick={() => void testTelegram()}>立即测试</button>
+            </div>
+          </div>
           <div className="mt-4 space-y-2">
             {(notificationData?.channels ?? []).map((channel) => <ChannelBadge key={channel.channelKey} channel={channel} />)}
-          </div>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-600">
-            Telegram 需要 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`；企业微信/微信中转建议先走 `WECOM_WEBHOOK_URL` 或通用 `NOTIFICATION_WEBHOOK_URL`。
           </div>
         </section>
       </div>

@@ -61,6 +61,15 @@
 - `POST /api/briefs/generate`
 - `POST /api/briefs/send-latest`
 
+## Telegram Bot
+
+- `POST /api/telegram/webhook`：Telegram 更新入口，使用 Webhook Secret Header 校验。
+- `POST /api/notifications/telegram/settings`：保存 Bot Token、Chat ID、授权用户和 Webhook URL。
+- `POST /api/notifications/telegram/register`：注册 Webhook 与命令菜单。
+- `POST /api/notifications/telegram/test`：发送测试消息。
+
+支持待办创建、查询、完成、延期、简报查询、健康状态查询，以及经过一次性按钮确认的备份、SQLite 维护和简报重发。
+
 ## 资料库与词典
 
 - `GET /api/dictionary/lookup`

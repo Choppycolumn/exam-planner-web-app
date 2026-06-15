@@ -462,6 +462,17 @@ export interface NotificationCenterResponse {
     serverUrl: string;
     deviceKeyMasked: string;
   };
+  telegram?: {
+    configured: boolean;
+    tokenConfigured: boolean;
+    tokenLast4: string;
+    chatIdConfigured: boolean;
+    chatIdLast4: string;
+    allowedUserIdConfigured: boolean;
+    allowedUserIdLast4: string;
+    webhookUrl: string;
+    webhookConfigured: boolean;
+  };
   events: NotificationEvent[];
   deliveries: NotificationDelivery[];
   metrics: { total: number; open: number; warnings: number; critical: number };
@@ -987,6 +998,12 @@ export const serverApi = {
     cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
   testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
   testBarkNotification: () => apiRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/bark/test', { method: 'POST', body: {} }),
+  saveTelegramSettings: (settings: { botToken?: string; chatId?: string; allowedUserId?: string; webhookUrl?: string }) =>
+    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/settings', { method: 'POST', body: settings }),
+  registerTelegramWebhook: () =>
+    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/register', { method: 'POST', body: {} }),
+  testTelegramNotification: () =>
+    apiRequest<{ ok: boolean; center: NotificationCenterResponse }>('/notifications/telegram/test', { method: 'POST', body: {} }),
   saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
     apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
   getCalendarEvents: (from: string, to: string) =>
