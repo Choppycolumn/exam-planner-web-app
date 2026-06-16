@@ -183,14 +183,20 @@ export function OperationsPage() {
               <Archive size={16} />立即备份
             </button>
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="mt-4 grid gap-3 sm:grid-cols-4">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-xs font-semibold text-slate-500">最近备份</p>
               <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(status?.backup.lastBackup?.createdAt)}</p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">备份数量</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{status?.backup.backupCount ?? 0} 个</p>
+              <p className="text-xs font-semibold text-slate-500">最近校验</p>
+              <p className={`mt-1 text-sm font-semibold ${status?.backup.latestVerification?.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {status?.backup.latestVerification?.ok ? '通过' : '待处理'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold text-slate-500">下次日备份</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(status?.backup.nextDailyBackupAt)}</p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-xs font-semibold text-slate-500">下次周备份</p>

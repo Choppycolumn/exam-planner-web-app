@@ -149,6 +149,13 @@ SET status = 'notified', acknowledged_at = ${sqlString(timestamp)}, updated_at =
 WHERE id = ${sqlValue(Number(id))};`);
   };
 
+  const requeueDelivery = (id) => {
+    const timestamp = new Date().toISOString();
+    sqlite.run(`UPDATE notification_deliveries
+SET status = 'queued', next_attempt_at = ${sqlString(timestamp)}, error = NULL, updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(Number(id))} AND status = 'failed';`);
+  };
+
   const metrics = () => {
     const row = sqlite.json(`SELECT
 COUNT(*) AS total,
@@ -176,6 +183,7 @@ FROM notification_events;`)[0] || {};
     markDeliveryAccepted,
     markDeliveryFailed,
     acknowledge,
+    requeueDelivery,
     metrics,
   };
 }

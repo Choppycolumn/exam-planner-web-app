@@ -20,7 +20,7 @@ import { isTelegramAuthorized, readTelegramConfig, saveTelegramConfig, telegramC
 import { createNotificationRepository } from './modules/notification-repository.mjs';
 import { createNotificationQueue } from './modules/notification-queue.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
-import { notificationChannelReadiness } from './modules/notification-dispatcher.mjs';
+import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
 import { runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
 import { createRequire } from 'node:module';
@@ -123,6 +123,7 @@ let taskReminderTimerStarted = false;
 let taskReminderTimer = null;
 let notificationQueueTimerStarted = false;
 let notificationQueueTimer = null;
+let backupVerificationCache = null;
 let errorThemeBatchJob = null;
 let shuttingDown = false;
 let nextNightlyErrorThemeAt = null;
@@ -3908,9 +3909,15 @@ function createBackupFile(kind = 'manual', note = '') {
   }
   runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
+  backupVerificationCache = { ok: true, checkedAt: nowISO(), fileName: filePath.split(/[\\/]/).pop() || '', integrity: 'ok' };
   if (kind === 'weekly') {
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (kind === 'daily') {
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_daily_backup_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
   return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
@@ -3985,6 +3992,30 @@ function cleanupWeeklyBackups(keepCount = 12) {
   }
 }
 
+function cleanupDailyBackups(keepCount = 14) {
+  if (!existsSync(backupsDir)) return;
+  const dailyBackups = readdirSync(backupsDir)
+    .filter((name) => /^exam-planner-daily-.*\.sqlite$/.test(name))
+    .sort()
+    .reverse();
+  for (const name of dailyBackups.slice(keepCount)) {
+    try {
+      unlinkSync(join(backupsDir, name));
+    } catch {
+      // A stale backup failing to delete should not block the app.
+    }
+  }
+}
+
+function ensureDailyBackup() {
+  const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneDayMs) {
+    createBackupFile('daily', 'automatic daily backup');
+    cleanupDailyBackups();
+  }
+}
+
 function ensureWeeklyBackup() {
   const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
   const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
@@ -3994,7 +4025,25 @@ function ensureWeeklyBackup() {
   }
 }
 
-function getBackupStatus() {
+function latestBackupVerification(backups = [], { force = false } = {}) {
+  const latest = backups.find((backup) => backup.kind === 'manual' || backup.kind === 'daily' || backup.kind === 'weekly') || backups[0];
+  if (!latest) return { ok: false, checkedAt: nowISO(), fileName: '', integrity: 'missing' };
+  const cacheFreshMs = 6 * 60 * 60 * 1000;
+  if (!force && backupVerificationCache?.fileName === latest.fileName && Date.now() - new Date(backupVerificationCache.checkedAt).getTime() < cacheFreshMs) {
+    return backupVerificationCache;
+  }
+  if (!force) return backupVerificationCache?.fileName === latest.fileName ? backupVerificationCache : { ok: null, checkedAt: '', fileName: latest.fileName, integrity: 'not_checked' };
+  try {
+    const integrity = runSqliteFile(join(backupsDir, latest.fileName), 'PRAGMA integrity_check;').trim();
+    backupVerificationCache = { ok: integrity === 'ok', checkedAt: nowISO(), fileName: latest.fileName, integrity };
+    return backupVerificationCache;
+  } catch (error) {
+    backupVerificationCache = { ok: false, checkedAt: nowISO(), fileName: latest.fileName, integrity: redactSecretText(error.message || String(error)) };
+    return backupVerificationCache;
+  }
+}
+
+function getBackupStatus({ verifyLatest = false } = {}) {
   ensureSqliteStore();
   const backups = listBackupFiles();
   const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
@@ -4003,6 +4052,7 @@ ORDER BY datetime(created_at) DESC
 LIMIT 1;`);
   const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
   const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
   const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
   return {
     storage: 'sqlite-tables',
@@ -4011,6 +4061,8 @@ LIMIT 1;`);
     backupCount: backups.length,
     backups,
     lastBackup: backupRows[0] || null,
+    latestVerification: latestBackupVerification(backups, { force: verifyLatest }),
+    lastDailyBackupAt: lastDailyBackupAt || null,
     lastWeeklyBackupAt: lastWeeklyBackupAt || null,
     dictionaryCount,
     dictionaryIndexedAt: dictionaryIndexedAt || null,
@@ -4021,6 +4073,13 @@ function nextWeeklyBackupAt() {
   const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
   if (!lastWeeklyBackupAt) return nowISO();
   const next = new Date(new Date(lastWeeklyBackupAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  return next.toISOString();
+}
+
+function nextDailyBackupAt() {
+  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+  if (!lastDailyBackupAt) return nowISO();
+  const next = new Date(new Date(lastDailyBackupAt).getTime() + 24 * 60 * 60 * 1000);
   return next.toISOString();
 }
 
@@ -4075,6 +4134,7 @@ function scheduleDailyMaintenance() {
   setTimeout(async () => {
     try {
       await runExclusiveTask('nightly-maintenance', 'nightly', async () => {
+        ensureDailyBackup();
         ensureWeeklyBackup();
         await precomputeNightlyArtifacts('nightly');
         runSqliteMaintenance('nightly');
@@ -4136,8 +4196,8 @@ function getHealthPayload() {
   };
   try {
     ensureSqliteStore();
-    const integrity = sqliteScalar('PRAGMA integrity_check;');
-    addCheck('sqlite', integrity === 'ok' ? 'ok' : 'error', { integrity });
+    const probe = sqliteScalar('SELECT 1;');
+    addCheck('sqlite', Number(probe) === 1 ? 'ok' : 'error', { probe: Number(probe) });
   } catch (error) {
     addCheck('sqlite', 'error', { error: redactSecretText(error.message || String(error)) });
   }
@@ -4149,7 +4209,12 @@ function getHealthPayload() {
   }
   try {
     const backup = getBackupStatus();
-    addCheck('backup', backup.lastBackup ? 'ok' : 'warn', { backupCount: backup.backupCount, lastBackupAt: backup.lastBackup?.createdAt ?? null });
+    const backupStatus = !backup.lastBackup || backup.latestVerification?.ok === false ? 'warn' : 'ok';
+    addCheck('backup', backupStatus, {
+      backupCount: backup.backupCount,
+      lastBackupAt: backup.lastBackup?.createdAt ?? null,
+      latestVerification: backup.latestVerification,
+    });
   } catch (error) {
     addCheck('backup', 'error', { error: redactSecretText(error.message || String(error)) });
   }
@@ -4207,6 +4272,7 @@ LIMIT 1;`)[0] || null;
     generatedAt: nowISO(),
     backup: {
       ...getBackupStatus(),
+      nextDailyBackupAt: nextDailyBackupAt(),
       nextWeeklyBackupAt: nextWeeklyBackupAt(),
     },
     reports: {
@@ -4552,6 +4618,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   sqliteReady = true;
+  ensureDailyBackup();
   ensureWeeklyBackup();
   ensureDictionaryIndex();
   ensureStudySummariesReady();
@@ -4560,6 +4627,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   }
   if (!reportTimerStarted) {
     setInterval(() => {
+      ensureDailyBackup();
       ensureWeeklyBackup();
     }, 6 * 60 * 60 * 1000).unref();
     reportTimerStarted = true;
@@ -6053,9 +6121,8 @@ function summarizeLogLines(name, lines, error = '') {
       ? '检查日志读取权限或对应服务状态'
       : errorCount
         ? '检查近期错误并确认核心功能是否受影响'
-        : warningCount
-          ? '有空时检查近期警告，无需立即处理'
-          : '',
+        : '',
+    observation: !error && !errorCount && warningCount ? '发现少量 warning，暂列观察，不触发处理项' : '',
   };
 }
 
@@ -7263,9 +7330,11 @@ async function sendTelegramNotification(text, delivery) {
 }
 
 async function sendProactiveNotification(text, delivery) {
-  if (delivery?.channelKey === 'bark_default') return sendBarkNotification(text, delivery);
-  if (delivery?.channelKey === 'telegram_default') return sendTelegramNotification(text, delivery);
-  return sendProactiveClawbotText(text);
+  const plan = resolveProactiveDispatch(delivery, notificationRepository.listChannels(), process.env);
+  if (plan.kind === 'bark') return sendBarkNotification(text, delivery);
+  if (plan.kind === 'telegram') return sendTelegramNotification(text, delivery);
+  if (plan.kind === 'clawbot_weixin') return sendProactiveClawbotText(text);
+  return { ok: false, method: plan.kind, channel: plan.channelKey, error: `Unsupported notification channel: ${plan.type || plan.channelKey}` };
 }
 
 function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
@@ -7921,7 +7990,7 @@ async function handleApi(req, res) {
   }
 
   if (req.url === '/api/backups/status' && req.method === 'GET') {
-    sendJson(res, getBackupStatus());
+    sendJson(res, getBackupStatus({ verifyLatest: true }));
     return;
   }
 
@@ -7978,6 +8047,17 @@ async function handleApi(req, res) {
   if (req.url === '/api/notifications/ack' && req.method === 'POST') {
     const body = await readJsonBody(req);
     notificationRepository.acknowledge(body.id);
+    sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/retry-delivery' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    notificationRepository.requeueDelivery(body.id);
+    setImmediate(() => notificationQueue.processDue().catch((error) => {
+      logStructured('warn', 'notification_retry_kick_failed', { error: redactSecretText(error.message || String(error)) });
+    }));
+    writeAuditEvent({ action: 'notification_delivery_retry', req, actorRole: sessionRole, detail: { id: Number(body.id || 0) } });
     sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
     return;
   }

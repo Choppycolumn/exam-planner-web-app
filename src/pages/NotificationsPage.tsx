@@ -129,7 +129,7 @@ function severityClass(severity: string) {
   return 'border-blue-100 bg-blue-50 text-blue-700';
 }
 
-function NotificationEventRow({ event }: { event: NotificationEvent }) {
+function NotificationEventRow({ event, onAck, readOnly }: { event: NotificationEvent; onAck: (id: number) => void; readOnly?: boolean }) {
   return (
     <div className={`rounded-lg border p-3 ${severityClass(event.severity)}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -138,9 +138,12 @@ function NotificationEventRow({ event }: { event: NotificationEvent }) {
           <p className="mt-1 line-clamp-2 text-xs opacity-80">{event.content}</p>
           <p className="mt-2 text-xs opacity-70">{event.source} · {new Date(event.createdAt).toLocaleString()}</p>
         </div>
-        <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">
-          {event.severity === 'critical' ? '严重' : event.severity === 'warning' ? '预警' : '通知'}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">
+            {event.severity === 'critical' ? '严重' : event.severity === 'warning' ? '预警' : '通知'}
+          </span>
+          <button className="rounded bg-white/70 px-2 py-1 text-xs font-semibold" disabled={readOnly} onClick={() => onAck(event.id)}>已处理</button>
+        </div>
       </div>
     </div>
   );
@@ -230,6 +233,22 @@ export function NotificationsPage() {
       setLoading(false);
       window.setTimeout(() => setToast(''), 2200);
     }
+  };
+
+  const acknowledgeEvent = async (id: number) => {
+    if (readOnly) return;
+    const result = await serverApi.acknowledgeNotification(id);
+    queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+  };
+
+  const retryDelivery = async (id: number) => {
+    if (readOnly) return;
+    const result = await serverApi.retryNotificationDelivery(id);
+    queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+    setToast('失败通知已重新投递');
+    window.setTimeout(() => setToast(''), 2200);
   };
 
   const testBarkPush = async () => {
@@ -402,9 +421,22 @@ export function NotificationsPage() {
           </div>
           <div className="mt-4 space-y-2">
             {notificationData?.events.length ? notificationData.events.map((event) => (
-              <NotificationEventRow key={event.id} event={event} />
+              <NotificationEventRow key={event.id} event={event} readOnly={readOnly} onAck={(id) => void acknowledgeEvent(id)} />
             )) : <EmptyState title="暂无通知事件" description="日报、报告或系统预警生成后会出现在这里。" />}
           </div>
+          {notificationData?.deliveries?.some((delivery) => delivery.status === 'failed') ? (
+            <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 p-3">
+              <p className="text-sm font-semibold text-amber-800">失败投递</p>
+              <div className="mt-2 space-y-2">
+                {notificationData.deliveries.filter((delivery) => delivery.status === 'failed').slice(0, 5).map((delivery) => (
+                  <div key={delivery.id} className="flex items-center justify-between gap-3 rounded bg-white/80 px-3 py-2 text-xs text-amber-800">
+                    <span>{delivery.channelKey} · {delivery.error || '发送失败'}</span>
+                    <button className="rounded border border-amber-200 bg-white px-2 py-1 font-semibold" disabled={readOnly} onClick={() => void retryDelivery(delivery.id)}>重新投递</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="card p-5">

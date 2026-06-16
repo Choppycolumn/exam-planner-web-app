@@ -250,6 +250,8 @@ export interface BackupStatus {
   backupCount: number;
   backups: Array<{ fileName: string; kind: string; createdAt: string; sizeBytes: number }>;
   lastBackup: { kind: string; filePath: string; createdAt: string; note?: string } | null;
+  latestVerification?: { ok: boolean | null; checkedAt: string; fileName: string; integrity: string };
+  lastDailyBackupAt: string | null;
   lastWeeklyBackupAt: string | null;
   dictionaryCount: number;
   dictionaryIndexedAt: string | null;
@@ -522,7 +524,7 @@ export interface TaskCenterStatus {
     cacheEntries: number;
     openCircuits: Array<{ key: string; failures: number; openUntil: string }>;
   };
-  backup: BackupStatus & { nextWeeklyBackupAt: string | null };
+  backup: BackupStatus & { nextDailyBackupAt: string | null; nextWeeklyBackupAt: string | null };
   reports: {
     count: number;
     latestWeeklyReport: LearningReport | null;
@@ -996,6 +998,10 @@ export const serverApi = {
   getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
   getNotificationCenter: (status: 'all' | 'warning' | 'critical' | 'notified' = 'all') =>
     cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
+  acknowledgeNotification: (id: number) =>
+    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
+  retryNotificationDelivery: (id: number) =>
+    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/retry-delivery', { method: 'POST', body: { id } }),
   testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
   testBarkNotification: () => apiRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/bark/test', { method: 'POST', body: {} }),
   saveTelegramSettings: (settings: { botToken?: string; chatId?: string; allowedUserId?: string; webhookUrl?: string }) =>
