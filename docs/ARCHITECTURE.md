@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-Exam Planner 是一个个人学习与资产辅助管理 Web App。当前架构是 React/Vite 前端加一个轻量 Node.js HTTP 服务，生产数据落在 SQLite 中。项目不是多用户系统，登录只区分写入会话和只读会话。
+Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 React/Vite 前端加一个轻量 Node.js HTTP 服务，生产数据落在 SQLite 中。项目不是多用户系统，登录只区分写入会话和只读会话。
 
 ## 目录概览
 
@@ -11,9 +11,9 @@ Exam Planner 是一个个人学习与资产辅助管理 Web App。当前架构�
 - `src/components/`：通用 UI 与图表组件。
 - `src/hooks/`：前端数据读取与页面状态 Hook。
 - `src/api/`：前端请求封装、TanStack Query 缓存键。
-- `src/features/`：领域功能模块，目前包含易混词、资料库、理财。
+- `src/features/`：领域功能模块，目前包含易混词和资料库。
 - `src/db/`：历史本地 IndexedDB/Dexie 结构与迁移能力。
-- `server/auth-static-server.mjs`：生产 Node 服务，负责静态文件、登录、API、SQLite、备份、简报、报告、理财密文同步。
+- `server/auth-static-server.mjs`：生产 Node 服务，负责静态文件、登录、API、SQLite、备份、简报和报告。
 - `server/embedding_worker.py`：错因主题向量提取的 Python Worker。
 - `public/`：PWA manifest、图标、service worker。
 - `scripts/`：本地启动和部署辅助脚本。

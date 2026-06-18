@@ -1,6 +1,6 @@
-const CACHE_NAME = 'exam-planner-shell-v4';
-const ASSET_CACHE_NAME = 'exam-planner-assets-v4';
-const APP_SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/favicon.svg'];
+const CACHE_NAME = 'exam-planner-shell-v5';
+const ASSET_CACHE_NAME = 'exam-planner-assets-v5';
+const APP_SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/assets/pwa-icon-192.png', '/assets/pwa-icon-512.png', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

@@ -164,6 +164,30 @@ export interface DailyBrief {
       error?: string;
     };
     markets?: Array<{ ok: boolean; name: string; symbol: string; price?: number; change?: number | null; changePercent?: number; currency?: string; error?: string }>;
+    indexPurchaseAssessment?: {
+      methodology: string;
+      disclaimer: string;
+      items: Array<{
+        ok: boolean;
+        name: string;
+        symbol: string;
+        asOf?: string;
+        source?: string;
+        pe?: number;
+        peRangeLow?: number;
+        peRangeHigh?: number;
+        pePercentile5?: number;
+        pePercentile10?: number;
+        valuation?: string;
+        sma50Margin?: number;
+        sma200Margin?: number;
+        score?: number;
+        signal?: string;
+        intensity?: string;
+        reasons?: string[];
+        error?: string;
+      }>;
+    };
     learning?: {
       activeGoal: { name: string; deadline: string; daysLeft: number } | null;
       yesterday: string;
@@ -183,6 +207,62 @@ export interface StatisticsSummary {
   distribution: Array<{ name: string; value: number }>;
   last7: Array<{ date: string; minutes: number }>;
   last30: Array<{ name: string; minutes: number }>;
+}
+
+export type StudyPetCategory = 'study' | 'entertainment' | 'tool' | 'social' | 'unknown';
+
+export interface StudyPetSiteUsage {
+  date?: string;
+  deviceId?: string;
+  domain: string;
+  category: StudyPetCategory;
+  seconds: number;
+  visits: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudyPetDailyReport {
+  date: string;
+  timezone: string;
+  deviceId: string;
+  totalComputerSeconds: number;
+  studySeconds: number;
+  entertainmentSeconds: number;
+  toolSeconds: number;
+  socialSeconds: number;
+  unknownSeconds: number;
+  entertainmentOvertimeCount: number;
+  strongReminderCount: number;
+  studyGoal: {
+    targetStudySeconds: number;
+    completed: boolean;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudyPetReportPayload extends Omit<StudyPetDailyReport, 'createdAt' | 'updatedAt'> {
+  sites: StudyPetSiteUsage[];
+}
+
+export interface StudyPetTodayResponse {
+  generatedAt: string;
+  date: string;
+  timezone: string;
+  report: StudyPetDailyReport | null;
+  sites: StudyPetSiteUsage[];
+  readOnly?: boolean;
+}
+
+export interface StudyPetStatsResponse {
+  generatedAt: string;
+  timezone: string;
+  startDate: string;
+  endDate: string;
+  daily: StudyPetDailyReport[];
+  siteUsage: StudyPetSiteUsage[];
+  readOnly?: boolean;
 }
 
 export interface ReferenceList<T> {
@@ -226,9 +306,46 @@ export interface BackupStatus {
   backupCount: number;
   backups: Array<{ fileName: string; kind: string; createdAt: string; sizeBytes: number }>;
   lastBackup: { kind: string; filePath: string; createdAt: string; note?: string } | null;
+  latestVerification?: { ok: boolean | null; checkedAt: string; fileName: string; integrity: string };
+  lastDailyBackupAt: string | null;
   lastWeeklyBackupAt: string | null;
   dictionaryCount: number;
   dictionaryIndexedAt: string | null;
+}
+
+export interface MihomoNode {
+  name: string;
+  type: string;
+  udp: boolean;
+  delay: number | null;
+  alive: boolean | null;
+}
+
+export interface MihomoSettingsResponse {
+  ok: boolean;
+  installed: boolean;
+  active: boolean;
+  version: string;
+  controllerOk: boolean;
+  controllerUrl: string;
+  localProxyUrl: string;
+  subscriptionConfigured: boolean;
+  subscriptionLabel: string;
+  providerMode: '' | 'http' | 'file';
+  current: string;
+  nodes: MihomoNode[];
+  error: string;
+  restarted?: boolean;
+  selected?: string;
+  imported?: boolean;
+  message?: string;
+  updatedAt?: string;
+}
+
+export interface MihomoTestResponse {
+  ok: boolean;
+  testedAt: string;
+  results: Array<{ id: string; label: string; ok: boolean; status: number; durationMs: number; sample?: string; error?: string }>;
 }
 
 export interface RuntimeStatus {
@@ -318,9 +435,9 @@ export interface OpsLogSource {
   name: string;
   available: boolean;
   error?: string;
-  lines: string[];
   errorCount: number;
   warningCount: number;
+  action?: string;
 }
 
 export interface OpsLogSummaryResponse {
@@ -357,7 +474,7 @@ export interface NotificationEvent {
   severity: 'info' | 'warning' | 'critical' | string;
   title: string;
   content: string;
-  status: 'open' | 'acknowledged' | string;
+  status: 'notified' | string;
   scheduledAt: string | null;
   acknowledgedAt: string | null;
   payload: Record<string, unknown>;
@@ -372,6 +489,7 @@ export interface NotificationDelivery {
   channelType: string;
   status: string;
   attemptedAt: string | null;
+  acceptedAt?: string | null;
   deliveredAt: string | null;
   error: string;
   createdAt: string;
@@ -396,9 +514,27 @@ export interface NotificationCenterResponse {
     nextPushAt: string | null;
     scheduleTime: string;
   };
+  bark?: {
+    enabled: boolean;
+    configured: boolean;
+    serverUrl: string;
+    deviceKeyMasked: string;
+  };
+  telegram?: {
+    configured: boolean;
+    tokenConfigured: boolean;
+    tokenLast4: string;
+    chatIdConfigured: boolean;
+    chatIdLast4: string;
+    allowedUserIdConfigured: boolean;
+    allowedUserIdLast4: string;
+    webhookUrl: string;
+    webhookConfigured: boolean;
+  };
   events: NotificationEvent[];
   deliveries: NotificationDelivery[];
   metrics: { total: number; open: number; warnings: number; critical: number };
+  notificationSemantics?: { reply: string; proactive: string };
   channelPlan: Record<string, { enabled: boolean; requiredEnv: string[]; method: string }>;
   readOnly?: boolean;
 }
@@ -435,7 +571,16 @@ export interface TaskRunSummary {
 
 export interface TaskCenterStatus {
   generatedAt: string;
-  backup: BackupStatus & { nextWeeklyBackupAt: string | null };
+  unifiedHealth?: {
+    status: 'normal' | 'degraded' | 'failed';
+    summary: string;
+    actions: Array<{ id: string; level: 'degraded' | 'failed'; title: string; action: string }>;
+  };
+  externalApis?: {
+    cacheEntries: number;
+    openCircuits: Array<{ key: string; failures: number; openUntil: string }>;
+  };
+  backup: BackupStatus & { nextDailyBackupAt: string | null; nextWeeklyBackupAt: string | null };
   reports: {
     count: number;
     latestWeeklyReport: LearningReport | null;
@@ -811,6 +956,35 @@ function cachedDashboard() {
   return dashboardPromise;
 }
 
+async function postStudyPetReport(report: StudyPetReportPayload, apiToken: string) {
+  const response = await fetch('/api/study-pet/report', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${apiToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(report),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `Request failed with ${response.status}`;
+    try {
+      const payload = JSON.parse(text) as { error?: string; message?: string };
+      message = payload.error || payload.message || message;
+    } catch {
+      // Keep the plain response text when the server returns non-JSON.
+    }
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json() as Promise<{ ok: true; date: string; deviceId: string }>;
+}
+
 function uploadLibraryBook(formData: FormData, onProgress?: (percent: number) => void) {
   return new Promise<{ ok: true; detail: LibraryBookDetail }>((resolveUpload, rejectUpload) => {
     const request = new XMLHttpRequest();
@@ -871,6 +1045,16 @@ export const serverApi = {
   resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
   getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
   getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
+  postStudyPetReport,
+  getStudyPetToday: (date?: string) =>
+    cachedApiRequest<StudyPetTodayResponse>(`/study-pet/today${date ? `?date=${encodeURIComponent(date)}` : ''}`, 30_000),
+  getStudyPetStats: (params: { startDate?: string; endDate?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
+    const suffix = query.toString();
+    return cachedApiRequest<StudyPetStatsResponse>(`/study-pet/stats${suffix ? `?${suffix}` : ''}`, 30_000);
+  },
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
     apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
@@ -894,15 +1078,33 @@ export const serverApi = {
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
+  getMihomoSettings: () => apiRequest<MihomoSettingsResponse>('/settings/mihomo'),
+  saveMihomoSubscription: (subscriptionUrl: string, clearSubscription = false) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/subscription', { method: 'POST', body: { subscriptionUrl, clearSubscription } }),
+  importMihomoProvider: (subscriptionContent: string) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/import', { method: 'POST', body: { subscriptionContent } }),
+  selectMihomoProxy: (name: string) =>
+    apiRequest<MihomoSettingsResponse>('/settings/mihomo/select', { method: 'POST', body: { name } }),
+  testMihomoProxy: () => apiRequest<MihomoTestResponse>('/settings/mihomo/test', { method: 'POST' }),
   getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
   getLearningProgress: () => cachedApiRequest<LearningProgressResponse>('/learning-progress', 60_000),
   getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
   getVisitStats: () => cachedApiRequest<VisitStatsResponse>('/visits/summary', 30_000),
   getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
-  getNotificationCenter: (status: 'all' | 'open' | 'acknowledged' = 'all') =>
+  getNotificationCenter: (status: 'all' | 'warning' | 'critical' | 'notified' = 'all') =>
     cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
-  acknowledgeNotification: (id: number) => apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
+  acknowledgeNotification: (id: number) =>
+    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
+  retryNotificationDelivery: (id: number) =>
+    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/retry-delivery', { method: 'POST', body: { id } }),
   testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
+  testBarkNotification: () => apiRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/bark/test', { method: 'POST', body: {} }),
+  saveTelegramSettings: (settings: { botToken?: string; chatId?: string; allowedUserId?: string; webhookUrl?: string }) =>
+    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/settings', { method: 'POST', body: settings }),
+  registerTelegramWebhook: () =>
+    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/register', { method: 'POST', body: {} }),
+  testTelegramNotification: () =>
+    apiRequest<{ ok: boolean; center: NotificationCenterResponse }>('/notifications/telegram/test', { method: 'POST', body: {} }),
   saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
     apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
   getCalendarEvents: (from: string, to: string) =>

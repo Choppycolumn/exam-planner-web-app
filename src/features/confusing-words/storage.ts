@@ -89,3 +89,25 @@ export function saveGroups(groups: ConfusingWordGroup[]) {
 export function buildExport(groups: ConfusingWordGroup[]): ConfusingWordsExport {
   return { schemaVersion: SCHEMA_VERSION, exportedAt: nowISO(), groups };
 }
+
+export function countConfusingWords(groups: ConfusingWordGroup[]) {
+  return groups.reduce((sum, group) => sum + (Array.isArray(group.words) ? group.words.length : 0), 0);
+}
+
+export function loadConfusingWordsExport(): ConfusingWordsExport | null {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ConfusingWordsExport;
+    return Array.isArray(parsed.groups) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isDefaultConfusingWordsSeed(groups: ConfusingWordGroup[]) {
+  const words = groups.flatMap((group) => group.words.map((word) => word.word.toLowerCase())).sort();
+  return groups.length === 2
+    && words.length === 4
+    && ['adapt', 'adopt', 'affect', 'effect'].every((word, index) => words[index] === word);
+}

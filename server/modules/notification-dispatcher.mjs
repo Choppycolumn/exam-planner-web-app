@@ -87,5 +87,26 @@ export function notificationChannelReadiness(channel, env = process.env) {
       requiredEnv: [],
     };
   }
+  if (channel.type === 'bark') {
+    return {
+      ready: Boolean(env.BARK_DEVICE_KEY),
+      requiredEnv: ['BARK_DEVICE_KEY'],
+    };
+  }
   return { ready: channel.type === 'in_app', requiredEnv: [] };
+}
+
+export function resolveProactiveDispatch(delivery, channels = [], env = process.env) {
+  const channelKey = delivery?.channelKey || 'clawbot_weixin';
+  const stored = channels.find((channel) => channel.channelKey === channelKey);
+  const type = stored?.type || (
+    channelKey === 'bark_default' ? 'bark'
+      : channelKey === 'telegram_default' ? 'telegram'
+        : channelKey === 'clawbot_weixin' ? 'clawbot_weixin'
+          : channelKey
+  );
+  if (type === 'bark') return { kind: 'bark', channelKey };
+  if (type === 'telegram') return { kind: 'telegram', channelKey, ready: Boolean(env.TELEGRAM_BOT_TOKEN || channelKey === 'telegram_default') };
+  if (type === 'clawbot_weixin') return { kind: 'clawbot_weixin', channelKey };
+  return { kind: 'unsupported', channelKey, type };
 }

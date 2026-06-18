@@ -24,6 +24,8 @@ export const queryKeys = {
   briefs: ['server', 'briefs'] as const,
   todayBrief: ['server', 'briefs', 'today'] as const,
   statistics: ['server', 'statistics'] as const,
+  studyPetToday: (date?: string) => ['server', 'study-pet', 'today', date ?? ''] as const,
+  studyPetStats: (startDate?: string, endDate?: string) => ['server', 'study-pet', 'stats', startDate ?? '', endDate ?? ''] as const,
   taskCenter: ['server', 'task-center'] as const,
   learningProgress: ['server', 'learning-progress'] as const,
   projectProgress: ['server', 'project-progress'] as const,

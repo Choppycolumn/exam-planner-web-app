@@ -54,6 +54,8 @@ npm run build
 
 变量名见 `.env.example`。
 
+Telegram Bot 可以在通知中心配置。Webhook URL 填写网站 HTTPS 根地址，服务会注册 `/api/telegram/webhook`；只允许配置的 Telegram 用户和 Chat 操作，运维动作使用 5 分钟有效的一次性确认按钮。
+
 ## 推荐发布流程
 
 1. 本地确认 `npm run lint && npm test && npm run build` 通过。

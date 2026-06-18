@@ -1,6 +1,6 @@
-﻿import { createCipheriv, createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'node:crypto';
-import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { extname, join, normalize, resolve } from 'node:path';
+﻿import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { chmodSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
@@ -11,12 +11,22 @@ import { setDefaultResultOrder } from 'node:dns';
 import { createSqliteRepository } from './modules/sqlite-repository.mjs';
 import { createTaskRunsRepository } from './modules/task-runs-repository.mjs';
 import { createOpsRepository } from './modules/ops-repository.mjs';
+import { createExternalApiClient } from './modules/external-api-client.mjs';
+import { parseWorldPeRatio, scoreIndexPurchaseAssessment } from './modules/index-assessment.mjs';
+import { summarizeHealth } from './modules/health-status.mjs';
+import { resolveBackupPath } from './modules/backup-validation.mjs';
+import { queryLimit, queryOffset } from './modules/api-helpers.mjs';
+import { isTelegramAuthorized, readTelegramConfig, saveTelegramConfig, telegramConfigStatus, telegramConfirmKeyboard, telegramTaskKeyboard, telegramUpdateContext } from './modules/telegram-bot.mjs';
 import { createNotificationRepository } from './modules/notification-repository.mjs';
+import { createNotificationQueue } from './modules/notification-queue.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
-import { notificationChannelReadiness } from './modules/notification-dispatcher.mjs';
+import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
 import { runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
+import { createStudyPetRepository } from './modules/study-pet-repository.mjs';
+import { createRequire } from 'node:module';
 
+const require = createRequire(import.meta.url);
 const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
 const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
 const legacyDataFile = join(dataDir, 'db.json');
@@ -27,7 +37,12 @@ const libraryFilesDir = join(libraryDir, 'files');
 const migrationsDir = resolve(fileURLToPath(new URL('./migrations', import.meta.url)));
 const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
+const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
+const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
+const sqliteCommand = process.env.SQLITE3_BIN || 'sqlite3';
+const sqliteUseShell = process.env.SQLITE3_USE_SHELL === '1';
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
+const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
 const smallEmbeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
 const largeEmbeddingModelName = process.env.LARGE_EMBEDDING_MODEL_NAME || 'intfloat/multilingual-e5-large';
@@ -40,8 +55,10 @@ const corsOrigin = process.env.CORS_ORIGIN || '*';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const clawbotSecret = process.env.CLAWBOT_SECRET || '';
 const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
+const studyPetApiToken = process.env.STUDY_PET_API_TOKEN || '';
 const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
 const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
+const openClawNpmProjectsDir = process.env.OPENCLAW_NPM_PROJECTS_DIR || '/root/.openclaw/npm/projects';
 const openClawAccountId = process.env.OPENCLAW_CLAWBOT_ACCOUNT || process.env.OPENCLAW_WEIXIN_ACCOUNT_ID || '';
 const openClawTarget = process.env.OPENCLAW_CLAWBOT_TARGET || '';
 const openClawCli = process.env.OPENCLAW_CLI || (existsSync('/opt/node22/bin/openclaw') ? '/opt/node22/bin/openclaw' : 'openclaw');
@@ -56,11 +73,20 @@ const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
-const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
+const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir, sqliteCommand, sqliteUseShell });
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
+const externalApiClient = createExternalApiClient();
 const notificationRepository = createNotificationRepository(sqliteRepository);
+const notificationQueue = createNotificationQueue({
+  repository: notificationRepository,
+  sendProactive: (text, delivery) => sendProactiveNotification(text, delivery),
+  notifyEvent: (payload) => notifyEvent(payload),
+  log: (level, event, detail) => logStructured(level, event, detail),
+});
+const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
+const studyPetRepository = createStudyPetRepository(sqliteRepository);
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -100,6 +126,9 @@ let maintenanceTimerStarted = false;
 let dailyBriefTimer = null;
 let taskReminderTimerStarted = false;
 let taskReminderTimer = null;
+let notificationQueueTimerStarted = false;
+let notificationQueueTimer = null;
+let backupVerificationCache = null;
 let errorThemeBatchJob = null;
 let shuttingDown = false;
 let nextNightlyErrorThemeAt = null;
@@ -120,6 +149,21 @@ function localDateISO(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function dateISOInTimeZone(date = new Date(), timeZone = 'Asia/Shanghai') {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function shanghaiTodayISO() {
+  return dateISOInTimeZone(new Date(), 'Asia/Shanghai');
 }
 
 function todayISO() {
@@ -301,10 +345,11 @@ function sqlValue(value) {
 
 function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  const result = spawnSync('sqlite3', [databaseFile], {
+  const result = spawnSync(sqliteCommand, [databaseFile], {
     input: script,
     encoding: 'utf8',
     maxBuffer,
+    shell: sqliteUseShell,
   });
   if (result.error) {
     throw result.error;
@@ -377,7 +422,9 @@ function assertDiskSpace(minBytes = minFreeDiskBytes) {
 }
 
 function redactSecretText(value = '') {
-  return String(value)
+  const text = String(value);
+  const barkKey = String(process.env.BARK_DEVICE_KEY || '').trim();
+  return (barkKey ? text.replaceAll(barkKey, '[redacted-bark-device-key]') : text)
     .replace(/(password|passwd|token|secret|cookie|authorization)(=|:)\s*[^,\s;]+/gi, '$1$2 [redacted]')
     .replace(/exam_planner_session=[^;\s]+/gi, 'exam_planner_session=[redacted]')
     .replace(/APP_PASSWORD=[^,\s;]+/gi, 'APP_PASSWORD=[redacted]')
@@ -522,6 +569,18 @@ CREATE TABLE IF NOT EXISTS confusing_words_backup (
   exported_at TEXT,
   backed_up_at TEXT NOT NULL,
   payload_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS confusing_words_backup_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  exported_at TEXT,
+  backed_up_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'sync',
+  group_count INTEGER NOT NULL DEFAULT 0,
+  word_count INTEGER NOT NULL DEFAULT 0,
+  payload_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS learning_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -743,6 +802,8 @@ CREATE INDEX IF NOT EXISTS idx_mock_exam_records_subject_date_id ON mock_exam_re
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_due_date ON short_term_tasks(due_date);
 CREATE INDEX IF NOT EXISTS idx_short_term_tasks_visible ON short_term_tasks(is_completed, urgency, due_date);
 CREATE INDEX IF NOT EXISTS idx_water_intake_records_date ON water_intake_records(date);
+CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_created ON confusing_words_backup_versions(created_at);
+CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_hash ON confusing_words_backup_versions(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
@@ -2017,12 +2078,22 @@ async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
 }
 
 function fetchTextWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-finance/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
     encoding: 'utf8',
     maxBuffer: 2 * 1024 * 1024,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
+  return result.stdout;
+}
+
+function fetchTextWithProxyCurl(url, timeoutSeconds = 45) {
+  const result = spawnSync('curl', ['-4', '-fsSL', '--compressed', '--proxy', 'http://127.0.0.1:7890', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    encoding: 'utf8',
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr || `proxy curl exited ${result.status}`);
   return result.stdout;
 }
 
@@ -2240,6 +2311,426 @@ async function getPublicStablecoinRates() {
   };
 }
 
+const proxySettingsEnvKeys = [
+  'MIHOMO_CONTROLLER_SECRET',
+  'MIHOMO_SUBSCRIPTION_URL',
+  'MIHOMO_SELECTED_PROXY',
+  'MIHOMO_PROVIDER_MODE',
+];
+
+function parseProxySettingsEnvText(text = '') {
+  const values = {};
+  text.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return;
+    const match = trimmed.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
+    if (!match || !proxySettingsEnvKeys.includes(match[1])) return;
+    let value = match[2] || '';
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    values[match[1]] = value.replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  });
+  return values;
+}
+
+function readProxySettingsEnvValues() {
+  try {
+    if (!existsSync(proxySettingsEnvFile)) return {};
+    return parseProxySettingsEnvText(readFileSync(proxySettingsEnvFile, 'utf8'));
+  } catch (error) {
+    logStructured('warn', 'proxy_settings_env_read_failed', { error: redactSecretText(error.message || String(error)) });
+    return {};
+  }
+}
+
+function proxySettingsCurrentValues() {
+  const fileValues = readProxySettingsEnvValues();
+  return {
+    MIHOMO_CONTROLLER_SECRET: String(process.env.MIHOMO_CONTROLLER_SECRET || fileValues.MIHOMO_CONTROLLER_SECRET || ''),
+    MIHOMO_SUBSCRIPTION_URL: String(process.env.MIHOMO_SUBSCRIPTION_URL || fileValues.MIHOMO_SUBSCRIPTION_URL || ''),
+    MIHOMO_SELECTED_PROXY: String(process.env.MIHOMO_SELECTED_PROXY || fileValues.MIHOMO_SELECTED_PROXY || ''),
+    MIHOMO_PROVIDER_MODE: String(process.env.MIHOMO_PROVIDER_MODE || fileValues.MIHOMO_PROVIDER_MODE || ''),
+  };
+}
+
+function escapeProxySettingsEnvValue(value = '') {
+  const text = String(value || '');
+  if (/^[A-Za-z0-9_./:=+\-@]*$/.test(text)) return text;
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')}"`;
+}
+
+function writeProxySettingsEnvValues(values) {
+  mkdirSync(dirname(proxySettingsEnvFile), { recursive: true });
+  const text = [
+    '# Exam Planner Mihomo proxy settings.',
+    `MIHOMO_CONTROLLER_SECRET=${escapeProxySettingsEnvValue(values.MIHOMO_CONTROLLER_SECRET)}`,
+    `MIHOMO_SUBSCRIPTION_URL=${escapeProxySettingsEnvValue(values.MIHOMO_SUBSCRIPTION_URL)}`,
+    `MIHOMO_SELECTED_PROXY=${escapeProxySettingsEnvValue(values.MIHOMO_SELECTED_PROXY)}`,
+    `MIHOMO_PROVIDER_MODE=${escapeProxySettingsEnvValue(values.MIHOMO_PROVIDER_MODE)}`,
+    '',
+  ].join('\n');
+  writeFileSync(proxySettingsEnvFile, text, { encoding: 'utf8', mode: 0o600 });
+  try {
+    chmodSync(proxySettingsEnvFile, 0o600);
+  } catch {
+    // Windows local development can ignore chmod.
+  }
+}
+
+function applyProxySettingsProcessEnvValues(values) {
+  proxySettingsEnvKeys.forEach((key) => {
+    if (values[key]) process.env[key] = values[key];
+    else delete process.env[key];
+  });
+}
+
+const mihomoBinary = process.platform === 'win32' ? '' : '/usr/local/bin/mihomo';
+const mihomoConfigDir = process.platform === 'win32' ? join(dataDir, 'mihomo') : '/etc/mihomo';
+const mihomoConfigFile = join(mihomoConfigDir, 'config.yaml');
+const mihomoProviderDir = process.platform === 'win32' ? join(dataDir, 'mihomo-providers') : '/etc/mihomo/proxy-providers';
+const mihomoProviderFile = join(mihomoProviderDir, 'subscription.yaml');
+const mihomoProxyUrl = 'http://127.0.0.1:7890';
+const mihomoControllerUrl = 'http://127.0.0.1:9097';
+
+function yamlDouble(value = '') {
+  return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+}
+
+function maskMihomoSubscriptionUrl(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return { configured: false, label: '' };
+  try {
+    const url = new URL(raw);
+    return { configured: true, label: `${url.protocol}//${url.hostname}${url.port ? `:${url.port}` : ''}，尾号 ${raw.slice(-4)}` };
+  } catch {
+    return { configured: true, label: `已保存，尾号 ${raw.slice(-4)}` };
+  }
+}
+
+function sanitizeMihomoSubscriptionUrl(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  let url;
+  try {
+    url = new URL(text);
+  } catch {
+    const error = new Error('订阅链接格式不正确');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    const error = new Error('订阅链接仅支持 http:// 或 https://');
+    error.statusCode = 400;
+    throw error;
+  }
+  return url.toString();
+}
+
+function ensureMihomoSecret(values) {
+  if (values.MIHOMO_CONTROLLER_SECRET) return values.MIHOMO_CONTROLLER_SECRET;
+  values.MIHOMO_CONTROLLER_SECRET = randomBytes(24).toString('hex');
+  return values.MIHOMO_CONTROLLER_SECRET;
+}
+
+function buildMihomoConfig(values) {
+  const subscriptionUrl = String(values.MIHOMO_SUBSCRIPTION_URL || '').trim();
+  const secret = ensureMihomoSecret(values);
+  const providerPath = mihomoProviderFile.replace(/\\/g, '/');
+  const providerMode = String(values.MIHOMO_PROVIDER_MODE || '').trim() === 'file' ? 'file' : 'http';
+  const useFileProvider = providerMode === 'file' && existsSync(mihomoProviderFile);
+  const useHttpProvider = Boolean(subscriptionUrl) && !useFileProvider;
+  const useProvider = useFileProvider || useHttpProvider;
+  const providerBlock = useProvider ? [
+    'proxy-providers:',
+    '  subscription:',
+    `    type: ${useFileProvider ? 'file' : 'http'}`,
+    ...(useHttpProvider ? [
+      `    url: ${yamlDouble(subscriptionUrl)}`,
+      '    interval: 3600',
+    ] : []),
+    `    path: ${yamlDouble(providerPath)}`,
+    '    health-check:',
+    '      enable: true',
+    '      interval: 600',
+    '      url: https://www.gstatic.com/generate_204',
+  ] : ['proxies: []'];
+  const groupBlock = useProvider ? [
+    'proxy-groups:',
+    '  - name: SELECT',
+    '    type: select',
+    '    proxies:',
+    '      - DIRECT',
+    '    use:',
+    '      - subscription',
+  ] : [
+    'proxy-groups:',
+    '  - name: SELECT',
+    '    type: select',
+    '    proxies:',
+    '      - DIRECT',
+  ];
+  return [
+    'mixed-port: 7890',
+    'allow-lan: false',
+    'bind-address: 127.0.0.1',
+    'mode: rule',
+    'log-level: info',
+    'profile:',
+    '  store-selected: true',
+    'external-controller: 127.0.0.1:9097',
+    `secret: ${yamlDouble(secret)}`,
+    ...providerBlock,
+    ...groupBlock,
+    'rules:',
+    '  - DOMAIN-SUFFIX,worldperatio.com,SELECT',
+    '  - DOMAIN-SUFFIX,api.telegram.org,SELECT',
+    '  - DOMAIN-SUFFIX,gstatic.com,SELECT',
+    '  - MATCH,DIRECT',
+    '',
+  ].join('\n');
+}
+
+function writeMihomoConfig(values) {
+  ensureMihomoSecret(values);
+  mkdirSync(mihomoConfigDir, { recursive: true });
+  mkdirSync(mihomoProviderDir, { recursive: true });
+  writeFileSync(mihomoConfigFile, buildMihomoConfig(values), { encoding: 'utf8', mode: 0o600 });
+  try {
+    chmodSync(mihomoConfigFile, 0o600);
+  } catch {
+    // Windows local development can ignore chmod.
+  }
+}
+
+function normalizeMihomoProviderContent(value = '') {
+  const text = String(value || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim();
+  if (!text) {
+    const error = new Error('订阅内容为空');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (Buffer.byteLength(text, 'utf8') > 8 * 1024 * 1024) {
+    const error = new Error('订阅内容过大，请使用较小的 Clash/Mihomo 配置');
+    error.statusCode = 413;
+    throw error;
+  }
+  if (!/^proxies\s*:/m.test(text)) {
+    const error = new Error('订阅内容不是 Clash/Mihomo YAML（未找到 proxies 字段），请使用 Clash/Mihomo 配置订阅或转换后的内容');
+    error.statusCode = 400;
+    throw error;
+  }
+  return `${text}\n`;
+}
+
+function writeMihomoProviderContent(value = '') {
+  mkdirSync(mihomoProviderDir, { recursive: true });
+  writeFileSync(mihomoProviderFile, normalizeMihomoProviderContent(value), { encoding: 'utf8', mode: 0o600 });
+  try {
+    chmodSync(mihomoProviderFile, 0o600);
+  } catch {
+    // Windows local development can ignore chmod.
+  }
+}
+
+function removeMihomoProviderContent() {
+  try {
+    if (existsSync(mihomoProviderFile)) unlinkSync(mihomoProviderFile);
+  } catch (error) {
+    logStructured('warn', 'mihomo_provider_remove_failed', { error: redactSecretText(error.message || String(error)) });
+  }
+}
+
+function runCommand(command, args = [], timeout = 15_000) {
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout });
+  return {
+    ok: result.status === 0,
+    code: result.status ?? -1,
+    stdout: String(result.stdout || '').trim(),
+    stderr: redactSecretText(String(result.stderr || '').trim()),
+  };
+}
+
+function restartMihomoService() {
+  if (process.platform === 'win32') return { ok: false, message: '本地 Windows 环境未安装 mihomo systemd 服务' };
+  const result = runCommand('systemctl', ['restart', 'mihomo.service'], 30_000);
+  if (!result.ok) return { ok: false, message: result.stderr || result.stdout || 'mihomo 重启失败' };
+  const active = runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
+  return { ok: active.ok, message: active.stdout || active.stderr || 'mihomo 状态未知' };
+}
+
+async function mihomoControllerRequest(pathname, options = {}) {
+  const values = proxySettingsCurrentValues();
+  const secret = values.MIHOMO_CONTROLLER_SECRET;
+  if (!secret) throw new Error('mihomo 控制密钥未配置');
+  const response = await fetch(`${mihomoControllerUrl}${pathname}`, {
+    method: options.method || 'GET',
+    headers: {
+      Authorization: `Bearer ${secret}`,
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+    signal: AbortSignal.timeout(options.timeoutMs || 8000),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`mihomo controller HTTP ${response.status}: ${text.slice(0, 200)}`);
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
+}
+
+function mihomoServiceStatus() {
+  const installed = Boolean(mihomoBinary && existsSync(mihomoBinary));
+  const activeResult = process.platform === 'win32' ? { ok: false, stdout: '' } : runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
+  const versionResult = installed ? runCommand(mihomoBinary, ['-v'], 10_000) : { ok: false, stdout: '' };
+  return {
+    installed,
+    active: activeResult.stdout === 'active',
+    version: versionResult.stdout.split(/\r?\n/)[0] || '',
+  };
+}
+
+async function getMihomoSettings() {
+  const values = proxySettingsCurrentValues();
+  const subscription = maskMihomoSubscriptionUrl(values.MIHOMO_SUBSCRIPTION_URL);
+  const service = mihomoServiceStatus();
+  let controllerOk = false;
+  let current = '';
+  let nodes = [];
+  let error = '';
+  try {
+    const payload = await mihomoControllerRequest('/proxies');
+    const proxies = payload.proxies && typeof payload.proxies === 'object' ? payload.proxies : {};
+    const group = proxies.SELECT || proxies.GLOBAL || {};
+    const all = Array.isArray(group.all) ? group.all : [];
+    current = String(group.now || values.MIHOMO_SELECTED_PROXY || '');
+    nodes = all.map((name) => {
+      const proxy = proxies[name] || {};
+      const history = Array.isArray(proxy.history) ? proxy.history : [];
+      const latest = history.at(-1) || {};
+      return {
+        name,
+        type: String(proxy.type || ''),
+        udp: Boolean(proxy.udp),
+        delay: typeof latest.delay === 'number' ? latest.delay : null,
+        alive: latest.meanDelay !== undefined || latest.delay !== undefined ? latest.delay !== 0 : null,
+      };
+    });
+    controllerOk = true;
+  } catch (controllerError) {
+    error = redactSecretText(controllerError instanceof Error ? controllerError.message : String(controllerError));
+  }
+  return {
+    ok: true,
+    ...service,
+    controllerOk,
+    controllerUrl: mihomoControllerUrl,
+    localProxyUrl: mihomoProxyUrl,
+    subscriptionConfigured: subscription.configured,
+    subscriptionLabel: subscription.label,
+    providerMode: values.MIHOMO_PROVIDER_MODE === 'file' ? 'file' : subscription.configured ? 'http' : '',
+    current,
+    nodes,
+    error,
+  };
+}
+
+async function saveMihomoSubscriptionSettings(input = {}) {
+  const values = proxySettingsCurrentValues();
+  ensureMihomoSecret(values);
+  if (input.clearSubscription) {
+    values.MIHOMO_SUBSCRIPTION_URL = '';
+    values.MIHOMO_SELECTED_PROXY = '';
+    values.MIHOMO_PROVIDER_MODE = '';
+    removeMihomoProviderContent();
+  }
+  if (typeof input.subscriptionUrl === 'string' && input.subscriptionUrl.trim()) {
+    values.MIHOMO_SUBSCRIPTION_URL = sanitizeMihomoSubscriptionUrl(input.subscriptionUrl);
+    values.MIHOMO_PROVIDER_MODE = 'http';
+    removeMihomoProviderContent();
+  }
+  writeMihomoConfig(values);
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
+  const restart = restartMihomoService();
+  await wait(800);
+  const status = await getMihomoSettings();
+  return { ...status, restarted: restart.ok, message: restart.message, updatedAt: nowISO() };
+}
+
+async function importMihomoProviderSettings(input = {}) {
+  const content = typeof input.subscriptionContent === 'string' ? input.subscriptionContent : input.content;
+  writeMihomoProviderContent(content);
+  const values = proxySettingsCurrentValues();
+  ensureMihomoSecret(values);
+  values.MIHOMO_PROVIDER_MODE = 'file';
+  writeMihomoConfig(values);
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
+  const restart = restartMihomoService();
+  await wait(800);
+  const status = await getMihomoSettings();
+  return { ...status, restarted: restart.ok, message: restart.message, imported: true, updatedAt: nowISO() };
+}
+
+async function selectMihomoProxy(input = {}) {
+  const name = String(input.name || '').trim();
+  if (!name) {
+    const error = new Error('请选择一个节点');
+    error.statusCode = 400;
+    throw error;
+  }
+  await mihomoControllerRequest('/proxies/SELECT', { method: 'PUT', body: { name }, timeoutMs: 10_000 });
+  const values = proxySettingsCurrentValues();
+  values.MIHOMO_SELECTED_PROXY = name;
+  writeProxySettingsEnvValues(values);
+  applyProxySettingsProcessEnvValues(values);
+  const status = await getMihomoSettings();
+  return { ...status, selected: name, updatedAt: nowISO() };
+}
+
+async function testMihomoProxy() {
+  const { ProxyAgent } = require('undici');
+  const dispatcher = new ProxyAgent(mihomoProxyUrl);
+  const targets = [
+    { id: 'brief-pe', label: '简报 PE 数据源', url: 'https://www.worldperatio.com/' },
+    { id: 'telegram', label: 'Telegram API', url: 'https://api.telegram.org/' },
+  ];
+  const results = [];
+  for (const target of targets) {
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(target.url, {
+        dispatcher,
+        signal: AbortSignal.timeout(15_000),
+        headers: { 'user-agent': 'exam-planner-mihomo-test/1.0' },
+      });
+      const text = await response.text();
+      results.push({
+        id: target.id,
+        label: target.label,
+        ok: response.ok,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        sample: text.slice(0, 120),
+      });
+    } catch (error) {
+      results.push({
+        id: target.id,
+        label: target.label,
+        ok: false,
+        status: 0,
+        durationMs: Date.now() - startedAt,
+        error: redactSecretText(error instanceof Error ? error.message : String(error)),
+      });
+    }
+  }
+  return { ok: results.every((result) => result.ok), testedAt: nowISO(), results };
+}
+
 function weatherCodeText(code) {
   const labels = {
     0: '晴',
@@ -2324,10 +2815,10 @@ async function getBriefMarket(symbolItem) {
   if (fromCrypto) return fromCrypto;
   const fromWscn = await getWscnMarket(symbolItem);
   if (fromWscn) return fromWscn;
-  const fromTradingView = await getTradingViewMarket(symbolItem);
-  if (fromTradingView) return fromTradingView;
   const fromEastMoney = await getEastMoneyMarket(symbolItem);
   if (fromEastMoney) return fromEastMoney;
+  const fromTradingView = await getTradingViewMarket(symbolItem);
+  if (fromTradingView) return fromTradingView;
   const fromSina = await getSinaMarket(symbolItem);
   if (fromSina) return fromSina;
   const fromStooq = await getStooqMarket(symbolItem);
@@ -2361,6 +2852,50 @@ async function getBriefMarket(symbolItem) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function getIndexPurchaseAssessment({ name, symbol, slug }) {
+  try {
+    const url = `https://worldperatio.com/index/${slug}/`;
+    let result;
+    try {
+      result = await externalApiClient.text(url, {
+        timeoutMs: 20000,
+        retries: 1,
+        freshMs: 60 * 60 * 1000,
+        staleMs: 24 * 60 * 60 * 1000,
+        cacheKey: `pe:${slug}`,
+      });
+    } catch {
+      result = { value: fetchTextWithProxyCurl(url, 45), cacheStatus: 'proxy', fetchedAt: nowISO() };
+    }
+    const metrics = parseWorldPeRatio(result.value);
+    return {
+      ok: true,
+      name,
+      symbol,
+      asOf: metrics.asOf,
+      source: 'World P/E Ratio',
+      cacheStatus: result.cacheStatus,
+      fetchedAt: result.fetchedAt,
+      ...metrics,
+      ...scoreIndexPurchaseAssessment(metrics),
+    };
+  } catch (error) {
+    return { ok: false, name, symbol, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+async function getIndexPurchaseAssessments() {
+  const items = await Promise.all([
+    getIndexPurchaseAssessment({ name: '纳指 100', symbol: '^NDX', slug: 'nasdaq-100' }),
+    getIndexPurchaseAssessment({ name: '标普 500', symbol: '^GSPC', slug: 'sp-500' }),
+  ]);
+  return {
+    methodology: '基于当前 PE 的近 5 年与近 10 年历史百分位，以及价格相对 50/200 日均线的位置进行平滑评分。',
+    disclaimer: '仅作为长期定投节奏参考，不构成投资建议；避免一次性重仓，并结合自身现金流与风险承受能力。',
+    items,
+  };
 }
 
 const cryptoIdMap = {
@@ -2536,6 +3071,25 @@ async function getTradingViewMarket(symbolItem) {
 
 function eastMoneySecId(symbol) {
   const value = String(symbol || '').toUpperCase();
+  const globalMap = {
+    '^IXIC': '100.NDX',
+    '^NDX': '100.NDX',
+    NDX: '100.NDX',
+    '^GSPC': '100.SPX',
+    '^SPX': '100.SPX',
+    SPX: '100.SPX',
+    '^N225': '100.N225',
+    '^NIKKEI': '100.N225',
+    NIKKEI: '100.N225',
+    '^HSI': '100.HSI',
+    HSI: '100.HSI',
+    '^VN30': '100.VNINDEX',
+    VN30: '100.VNINDEX',
+    'VN30.VN': '100.VNINDEX',
+    '^VNI': '100.VNINDEX',
+    VNINDEX: '100.VNINDEX',
+  };
+  if (globalMap[value]) return globalMap[value];
   if (/^\d{6}\.(SS|SH)$/.test(value)) return `1.${value.slice(0, 6)}`;
   if (/^\d{6}\.SZ$/.test(value)) return `0.${value.slice(0, 6)}`;
   return '';
@@ -2557,14 +3111,17 @@ async function getEastMoneyMarket(symbolItem) {
     const change = Number(quote.f169 || 0) / 100;
     const changePercent = Number(quote.f170 || 0) / 100;
     if (!Number.isFinite(current) || !current) throw new Error('empty eastmoney market response');
+    const isVietnamProxy = ['^VN30', 'VN30', 'VN30.VN'].includes(String(symbolItem.symbol || '').toUpperCase().trim());
     return {
       ok: true,
-      name: symbolItem.name || quote.f58 || symbolItem.symbol,
+      name: isVietnamProxy
+        ? `${symbolItem.name || '越南VN30'} (VNINDEX proxy)`
+        : symbolItem.name || quote.f58 || symbolItem.symbol,
       symbol: symbolItem.symbol,
       price: Number(current.toFixed(2)),
       change: Number(change.toFixed(2)),
       changePercent: Number(changePercent.toFixed(2)),
-      currency: 'CNY',
+      currency: /^\d{6}\.(SS|SH|SZ)$/i.test(String(symbolItem.symbol || '')) ? 'CNY' : '',
     };
   } catch {
     return null;
@@ -2738,14 +3295,10 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
   const settings = getDailyBriefSettings({ includeSecret: true });
   const generatedAt = nowISO();
   const marketSymbols = parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
-  const [weather, markets, finance] = await Promise.all([
+  const [weather, markets, indexPurchaseAssessment] = await Promise.all([
     getBriefWeather(settings),
     Promise.all(marketSymbols.map(getBriefMarket)),
-    updateFinanceForDailyBrief().catch((error) => ({
-      ok: false,
-      skipped: false,
-      message: `理财自动更新失败：${error instanceof Error ? error.message : String(error)}`,
-    })),
+    getIndexPurchaseAssessments(),
   ]);
   const payload = {
     date,
@@ -2754,7 +3307,7 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     trigger,
     weather,
     markets,
-    finance,
+    indexPurchaseAssessment,
     learning: getDailyBriefLearningSummary(date),
   };
 
@@ -2789,8 +3342,19 @@ ON CONFLICT(date) DO UPDATE SET
   const brief = getDailyBriefByDate(date);
   if (sendWechat || (trigger === 'auto' && settings.wechat.enabled)) {
     const digest = buildClawbotDailyDigest(date);
-    wechatDelivery = await sendClawbotPushText(digest.text);
-    if (!wechatDelivery.ok) wechatError = wechatDelivery.error || '微信推送失败';
+    wechatDelivery = queueProactiveNotification({
+      eventKey: `brief:${date}`,
+      source: 'brief',
+      title: payload.title,
+      content: '每日简报已进入微信主动推送队列。',
+      text: digest.text,
+      payload: { date, trigger },
+    });
+    logStructured('info', 'daily_brief_wechat_queued', {
+      date,
+      trigger,
+      deliveryId: wechatDelivery.deliveryId,
+    });
   }
   const warningText = [emailError ? `邮件推送失败：${emailError}` : '', wechatError ? `微信推送失败：${wechatError}` : ''].filter(Boolean).join('；');
   notifyEvent({
@@ -2799,7 +3363,20 @@ ON CONFLICT(date) DO UPDATE SET
     severity: warningText ? 'warning' : 'info',
     title: payload.title,
     content: warningText ? `每日简报已生成，但${warningText}` : '每日简报已生成，可在通知中心查看。',
-    payload: { date, trigger, emailedAt, emailError, wechatPushed: Boolean(wechatDelivery?.ok), wechatError },
+    payload: {
+      date,
+      trigger,
+      emailedAt,
+      emailError,
+      wechatPushed: Boolean(wechatDelivery?.ok),
+      wechatError,
+      wechatDelivery: wechatDelivery ? {
+        method: wechatDelivery.method || '',
+        channel: wechatDelivery.channel || '',
+        messageId: wechatDelivery.messageId || null,
+        response: wechatDelivery.response || null,
+      } : null,
+    },
   });
   return brief;
 }
@@ -2881,35 +3458,14 @@ function dailyBriefStudyPushHtml(learning = {}) {
   return `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
 }
 
-function financePnlColor(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return '#334155';
-  return value > 0 ? '#dc2626' : '#16a34a';
-}
-
-function dailyBriefFinanceHtml(finance = null) {
-  if (!finance) return '';
-  if (!finance.ok) {
-    return `<h2>理财盈亏</h2><p style="color:#b45309">${escapeHtml(finance.message || '理财行情未更新。')}</p>`;
-  }
-  const alertItems = (finance.alerts || []).slice(0, 5).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
-  return `<h2>理财盈亏</h2>
-  <p style="color:#64748b">行情更新时间：${escapeHtml(new Date(finance.latestQuoteFetchedAt || finance.updatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p>
-  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0">
-    <tbody>
-      <tr><td>总资产估值</td><td style="text-align:right"><strong>${escapeHtml(financeFormatMoney(finance.totalAssetsCny, 'CNY'))}</strong></td></tr>
-      <tr><td>今日盈亏</td><td style="text-align:right;color:${financePnlColor(finance.todayPnlCny)}">${escapeHtml(financeFormatMoney(finance.todayPnlCny, 'CNY'))}</td></tr>
-      <tr><td>起算后盈亏</td><td style="text-align:right;color:${financePnlColor(finance.cumulativePnlCny)}">${escapeHtml(financeFormatMoney(finance.cumulativePnlCny, 'CNY'))}</td></tr>
-    </tbody>
-  </table>
-  ${alertItems ? `<p><strong>数据提示：</strong></p><ul>${alertItems}</ul>` : '<p style="color:#16a34a">暂无明显数据异常。</p>'}
-  <p style="color:#64748b">说明：这是基于公开行情和手动录入数据的估算，不是实时账户余额；稳定币参考年化不会自动计入收益。</p>`;
-}
-
 function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
+  const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
+    ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（5 年 ${escapeHtml(item.pePercentile5)}% / 10 年 ${escapeHtml(item.pePercentile10)}%）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
+    : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
   const learning = payload.learning || {};
-  const finance = payload.finance || null;
   const taskItems = (learning.todayTasks || []).map((task) => `<li>${escapeHtml(task.title)} <span style="color:#64748b">(${escapeHtml(task.urgency)} / ${escapeHtml(task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate)})</span></li>`).join('');
   const marketRows = markets.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.symbol)}</td><td>${item.ok ? escapeHtml(item.price) : '失败'}</td><td style="color:${Number(item.changePercent || 0) >= 0 ? '#16a34a' : '#dc2626'}">${item.ok ? `${escapeHtml(item.changePercent)}%` : escapeHtml(item.error || '')}</td></tr>`).join('');
   const studyPush = dailyBriefStudyPushHtml(learning);
@@ -2925,9 +3481,12 @@ function dailyBriefHtml(payload) {
   ${studyPush}
   ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
   ${taskItems ? `<p><strong>今日待推进：</strong></p><ul>${taskItems}</ul>` : '<p>今日暂无到期短期目标。</p>'}
-  ${dailyBriefFinanceHtml(finance)}
   <h2>指数与资产</h2>
   <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>名称</th><th>代码</th><th>最新</th><th>涨跌</th></tr></thead><tbody>${marketRows || '<tr><td colspan="4">暂无配置</td></tr>'}</tbody></table>
+  <h2>纳指 100 / 标普 500 定投评估</h2>
+  <p>${escapeHtml(indexPurchaseAssessment.methodology || '')}</p>
+  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;border-color:#e2e8f0"><thead><tr><th>指数</th><th>结论</th><th>PE</th><th>距 50/200 日均线</th><th>定投强度参考</th></tr></thead><tbody>${assessmentRows || '<tr><td colspan="5">暂无评估数据</td></tr>'}</tbody></table>
+  <p style="color:#64748b">${escapeHtml(indexPurchaseAssessment.disclaimer || '')}</p>
 </body></html>`;
 }
 
@@ -3371,9 +3930,15 @@ function createBackupFile(kind = 'manual', note = '') {
   }
   runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
+  backupVerificationCache = { ok: true, checkedAt: nowISO(), fileName: filePath.split(/[\\/]/).pop() || '', integrity: 'ok' };
   if (kind === 'weekly') {
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  }
+  if (kind === 'daily') {
+    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES ('last_daily_backup_at', ${sqlString(nowISO())}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   }
   return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
@@ -3400,11 +3965,8 @@ function listBackupFiles() {
 }
 
 function restoreBackupFile(fileName) {
-  if (!/^[a-zA-Z0-9._-]+$/.test(fileName || '')) {
-    throw new Error('Invalid backup file name');
-  }
-  const sourceFile = join(backupsDir, fileName);
-  if (!existsSync(sourceFile) || !sourceFile.startsWith(backupsDir)) {
+  const sourceFile = resolveBackupPath(backupsDir, fileName);
+  if (!existsSync(sourceFile)) {
     throw new Error('Backup file not found');
   }
   const integrity = runSqliteFile(sourceFile, 'PRAGMA integrity_check;').trim();
@@ -3451,6 +4013,30 @@ function cleanupWeeklyBackups(keepCount = 12) {
   }
 }
 
+function cleanupDailyBackups(keepCount = 14) {
+  if (!existsSync(backupsDir)) return;
+  const dailyBackups = readdirSync(backupsDir)
+    .filter((name) => /^exam-planner-daily-.*\.sqlite$/.test(name))
+    .sort()
+    .reverse();
+  for (const name of dailyBackups.slice(keepCount)) {
+    try {
+      unlinkSync(join(backupsDir, name));
+    } catch {
+      // A stale backup failing to delete should not block the app.
+    }
+  }
+}
+
+function ensureDailyBackup() {
+  const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneDayMs) {
+    createBackupFile('daily', 'automatic daily backup');
+    cleanupDailyBackups();
+  }
+}
+
 function ensureWeeklyBackup() {
   const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
   const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
@@ -3460,7 +4046,25 @@ function ensureWeeklyBackup() {
   }
 }
 
-function getBackupStatus() {
+function latestBackupVerification(backups = [], { force = false } = {}) {
+  const latest = backups.find((backup) => backup.kind === 'manual' || backup.kind === 'daily' || backup.kind === 'weekly') || backups[0];
+  if (!latest) return { ok: false, checkedAt: nowISO(), fileName: '', integrity: 'missing' };
+  const cacheFreshMs = 6 * 60 * 60 * 1000;
+  if (!force && backupVerificationCache?.fileName === latest.fileName && Date.now() - new Date(backupVerificationCache.checkedAt).getTime() < cacheFreshMs) {
+    return backupVerificationCache;
+  }
+  if (!force) return backupVerificationCache?.fileName === latest.fileName ? backupVerificationCache : { ok: null, checkedAt: '', fileName: latest.fileName, integrity: 'not_checked' };
+  try {
+    const integrity = runSqliteFile(join(backupsDir, latest.fileName), 'PRAGMA integrity_check;').trim();
+    backupVerificationCache = { ok: integrity === 'ok', checkedAt: nowISO(), fileName: latest.fileName, integrity };
+    return backupVerificationCache;
+  } catch (error) {
+    backupVerificationCache = { ok: false, checkedAt: nowISO(), fileName: latest.fileName, integrity: redactSecretText(error.message || String(error)) };
+    return backupVerificationCache;
+  }
+}
+
+function getBackupStatus({ verifyLatest = false } = {}) {
   ensureSqliteStore();
   const backups = listBackupFiles();
   const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
@@ -3469,6 +4073,7 @@ ORDER BY datetime(created_at) DESC
 LIMIT 1;`);
   const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
   const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
   const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
   return {
     storage: 'sqlite-tables',
@@ -3477,6 +4082,8 @@ LIMIT 1;`);
     backupCount: backups.length,
     backups,
     lastBackup: backupRows[0] || null,
+    latestVerification: latestBackupVerification(backups, { force: verifyLatest }),
+    lastDailyBackupAt: lastDailyBackupAt || null,
     lastWeeklyBackupAt: lastWeeklyBackupAt || null,
     dictionaryCount,
     dictionaryIndexedAt: dictionaryIndexedAt || null,
@@ -3487,6 +4094,13 @@ function nextWeeklyBackupAt() {
   const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
   if (!lastWeeklyBackupAt) return nowISO();
   const next = new Date(new Date(lastWeeklyBackupAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  return next.toISOString();
+}
+
+function nextDailyBackupAt() {
+  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+  if (!lastDailyBackupAt) return nowISO();
+  const next = new Date(new Date(lastDailyBackupAt).getTime() + 24 * 60 * 60 * 1000);
   return next.toISOString();
 }
 
@@ -3541,6 +4155,7 @@ function scheduleDailyMaintenance() {
   setTimeout(async () => {
     try {
       await runExclusiveTask('nightly-maintenance', 'nightly', async () => {
+        ensureDailyBackup();
         ensureWeeklyBackup();
         await precomputeNightlyArtifacts('nightly');
         runSqliteMaintenance('nightly');
@@ -3602,8 +4217,8 @@ function getHealthPayload() {
   };
   try {
     ensureSqliteStore();
-    const integrity = sqliteScalar('PRAGMA integrity_check;');
-    addCheck('sqlite', integrity === 'ok' ? 'ok' : 'error', { integrity });
+    const probe = sqliteScalar('SELECT 1;');
+    addCheck('sqlite', Number(probe) === 1 ? 'ok' : 'error', { probe: Number(probe) });
   } catch (error) {
     addCheck('sqlite', 'error', { error: redactSecretText(error.message || String(error)) });
   }
@@ -3615,17 +4230,34 @@ function getHealthPayload() {
   }
   try {
     const backup = getBackupStatus();
-    addCheck('backup', backup.lastBackup ? 'ok' : 'warn', { backupCount: backup.backupCount, lastBackupAt: backup.lastBackup?.createdAt ?? null });
+    const backupStatus = !backup.lastBackup || backup.latestVerification?.ok === false ? 'warn' : 'ok';
+    addCheck('backup', backupStatus, {
+      backupCount: backup.backupCount,
+      lastBackupAt: backup.lastBackup?.createdAt ?? null,
+      latestVerification: backup.latestVerification,
+    });
   } catch (error) {
     addCheck('backup', 'error', { error: redactSecretText(error.message || String(error)) });
   }
   addCheck('tasks', activeTaskLocks.size ? 'warn' : 'ok', { active: Array.from(activeTaskLocks) });
+  const externalApis = externalApiClient.status();
+  addCheck('external-api', externalApis.openCircuits.length ? 'warn' : 'ok', {
+    openCircuitCount: externalApis.openCircuits.length,
+  });
+  const unified = summarizeHealth(checks.map((check) => ({
+    id: check.name,
+    title: check.name,
+    status: check.status === 'error' ? 'failed' : check.status === 'warn' ? 'degraded' : 'normal',
+    action: check.status === 'ok' ? '' : `检查 ${check.name} 状态并处理异常。`,
+  })));
   return {
     ok,
     status: ok ? 'ok' : 'degraded',
+    unified,
     generatedAt: nowISO(),
     version: process.env.npm_package_version || '0.0.0',
     runtime: getRuntimeStatus(),
+    externalApis,
     checks,
   };
 }
@@ -3661,6 +4293,7 @@ LIMIT 1;`)[0] || null;
     generatedAt: nowISO(),
     backup: {
       ...getBackupStatus(),
+      nextDailyBackupAt: nextDailyBackupAt(),
       nextWeeklyBackupAt: nextWeeklyBackupAt(),
     },
     reports: {
@@ -3704,6 +4337,8 @@ LIMIT 1;`)[0] || null;
       metrics: taskMetrics,
     },
     runtime: getRuntimeStatus(),
+    unifiedHealth: getHealthPayload().unified,
+    externalApis: externalApiClient.status(),
   };
 }
 
@@ -3773,6 +4408,12 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
     deliveries: notificationRepository.listDeliveries(80),
     metrics: notificationRepository.metrics(),
     wechatClawbot,
+    bark: resolveBarkConfig(),
+    telegram: telegramConfigStatus(readTelegramConfig(telegramEnvFile)),
+    notificationSemantics: {
+      reply: '收到微信指令后在同一会话中即时回复，不进入主动通知队列。',
+      proactive: '日报、待办提醒和测试消息先进入持久化队列，失败后自动重试并站内兜底。',
+    },
     readOnly: sessionRole === 'read',
     channelPlan: {
       clawbotWeixin: {
@@ -3780,9 +4421,14 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         requiredEnv: ['OPENCLAW_CLAWBOT_CHANNEL', 'OPENCLAW_CLAWBOT_ACCOUNT', 'OPENCLAW_CLAWBOT_TARGET'],
         method: 'openclaw message send via local OpenClaw gateway',
       },
+      bark: {
+        enabled: Boolean(process.env.BARK_DEVICE_KEY),
+        requiredEnv: ['BARK_DEVICE_KEY'],
+        method: 'POST Bark API V2 /push',
+      },
       telegram: {
-        enabled: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
-        requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
+        enabled: telegramConfigStatus(readTelegramConfig(telegramEnvFile)).configured,
+        requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALLOWED_USER_ID'],
         method: 'POST https://api.telegram.org/bot<token>/sendMessage',
       },
       wecomWebhook: {
@@ -3856,7 +4502,7 @@ function ensureSqliteStore() {
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
   mkdirSync(libraryFilesDir, { recursive: true });
-  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
+  const versionCheck = spawnSync(sqliteCommand, ['--version'], { encoding: 'utf8', shell: sqliteUseShell });
   if (versionCheck.error || versionCheck.status !== 0) {
     throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
   }
@@ -3870,15 +4516,6 @@ CREATE TABLE IF NOT EXISTS app_metadata (
 CREATE TABLE IF NOT EXISTS app_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   state_json TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS finance_vaults (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  vault_json TEXT NOT NULL,
-  client_updated_at TEXT NOT NULL,
-  device_id TEXT NOT NULL DEFAULT '',
-  byte_size INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dictionary_entries (
@@ -3901,6 +4538,7 @@ CREATE TABLE IF NOT EXISTS backup_log (
 CREATE INDEX IF NOT EXISTS idx_backup_log_created_at ON backup_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_dictionary_entries_frequency ON dictionary_entries(frequency);`);
   createStructuredTables();
+  seedCurrentConfusingWordsBackupVersionIfNeeded();
 
   const stateCount = Number(sqliteScalar('SELECT COUNT(*) FROM app_state WHERE id = 1;') || 0);
   if (!stateCount && existsSync(legacyDataFile)) {
@@ -4001,6 +4639,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   sqliteReady = true;
+  ensureDailyBackup();
   ensureWeeklyBackup();
   ensureDictionaryIndex();
   ensureStudySummariesReady();
@@ -4009,6 +4648,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   }
   if (!reportTimerStarted) {
     setInterval(() => {
+      ensureDailyBackup();
       ensureWeeklyBackup();
     }, 6 * 60 * 60 * 1000).unref();
     reportTimerStarted = true;
@@ -4029,6 +4669,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     scheduleTaskReminderScan();
     taskReminderTimerStarted = true;
   }
+  if (!notificationQueueTimerStarted) {
+    scheduleNotificationQueue();
+    notificationQueueTimerStarted = true;
+  }
 }
 
 function readState() {
@@ -4040,6 +4684,121 @@ function writeState(state) {
   ensureSqliteStore();
   writeStateToTables(state);
   tableChanged();
+}
+
+function countConfusingWordsGroups(groups = []) {
+  const safeGroups = Array.isArray(groups) ? groups : [];
+  return {
+    groupCount: safeGroups.length,
+    wordCount: safeGroups.reduce((sum, group) => sum + (Array.isArray(group?.words) ? group.words.length : 0), 0),
+  };
+}
+
+function normalizeConfusingWordsPayload(input = {}, timestamp = nowISO()) {
+  const groups = Array.isArray(input.groups) ? input.groups : [];
+  return {
+    schemaVersion: Number(input.schemaVersion || entitySchemaVersion),
+    exportedAt: input.exportedAt || timestamp,
+    backedUpAt: input.backedUpAt || timestamp,
+    groups,
+  };
+}
+
+function hashConfusingWordsPayload(payload) {
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+}
+
+function summarizeConfusingWordsPayload(payload) {
+  const counts = countConfusingWordsGroups(payload?.groups);
+  const payloadText = JSON.stringify(payload || {});
+  return {
+    ...counts,
+    payloadBytes: Buffer.byteLength(payloadText, 'utf8'),
+    payloadHash: hashConfusingWordsPayload(payload || {}),
+  };
+}
+
+function readConfusingWordsBackupPayload() {
+  const rows = sqliteJson('SELECT payload_json AS payloadJson FROM confusing_words_backup WHERE id = 1 LIMIT 1;');
+  if (!rows[0]?.payloadJson) return null;
+  try {
+    return JSON.parse(rows[0].payloadJson);
+  } catch {
+    return null;
+  }
+}
+
+function insertConfusingWordsBackupVersion(payload, source = 'sync') {
+  if (!payload) return null;
+  const timestamp = nowISO();
+  const summary = summarizeConfusingWordsPayload(payload);
+  const latestHash = sqliteScalar('SELECT payload_hash FROM confusing_words_backup_versions ORDER BY created_at DESC, id DESC LIMIT 1;');
+  if (latestHash === summary.payloadHash) return { skipped: true, ...summary };
+  runSqlite(`INSERT INTO confusing_words_backup_versions (
+  schema_version, exported_at, backed_up_at, payload_json, source, group_count, word_count, payload_hash, created_at
+) VALUES (
+  ${sqlString(String(payload.schemaVersion || entitySchemaVersion))},
+  ${sqlString(payload.exportedAt || timestamp)},
+  ${sqlString(payload.backedUpAt || timestamp)},
+  ${sqlString(JSON.stringify(payload))},
+  ${sqlString(source)},
+  ${summary.groupCount},
+  ${summary.wordCount},
+  ${sqlString(summary.payloadHash)},
+  ${sqlString(timestamp)}
+);`);
+  runSqlite(`DELETE FROM confusing_words_backup_versions
+WHERE id NOT IN (
+  SELECT id FROM confusing_words_backup_versions ORDER BY created_at DESC, id DESC LIMIT 80
+);`);
+  return { skipped: false, ...summary };
+}
+
+function saveConfusingWordsBackupPayload(payload, source = 'sync') {
+  ensureSqliteStore();
+  const timestamp = nowISO();
+  const normalized = normalizeConfusingWordsPayload(payload, timestamp);
+  const summary = summarizeConfusingWordsPayload(normalized);
+  const current = readConfusingWordsBackupPayload();
+  if (current) insertConfusingWordsBackupVersion(current, 'before-' + source);
+  insertConfusingWordsBackupVersion(normalized, source);
+  runSqlite(`INSERT INTO confusing_words_backup (id, schema_version, exported_at, backed_up_at, payload_json)
+VALUES (1, ${Number(normalized.schemaVersion || entitySchemaVersion)}, ${sqlString(normalized.exportedAt)}, ${sqlString(normalized.backedUpAt)}, ${sqlString(JSON.stringify(normalized))})
+ON CONFLICT(id) DO UPDATE SET
+  schema_version = excluded.schema_version,
+  exported_at = excluded.exported_at,
+  backed_up_at = excluded.backed_up_at,
+  payload_json = excluded.payload_json;`);
+  runSqlite(`INSERT INTO app_state (id, state_json, updated_at)
+VALUES (1, ${sqlString(JSON.stringify(readStateFromTables()))}, datetime('now'))
+ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;`);
+  tableChanged();
+  return { payload: normalized, summary };
+}
+
+function listConfusingWordsBackupVersions(limit = 20) {
+  ensureSqliteStore();
+  const safeLimit = Math.max(1, Math.min(80, Number(limit) || 20));
+  return sqliteJson(`SELECT id, schema_version AS schemaVersion, exported_at AS exportedAt,
+backed_up_at AS backedUpAt, source, group_count AS groupCount, word_count AS wordCount,
+length(payload_json) AS payloadBytes, payload_hash AS payloadHash, created_at AS createdAt
+FROM confusing_words_backup_versions
+ORDER BY created_at DESC, id DESC
+LIMIT ${safeLimit};`).map((item) => ({
+    ...item,
+    groupCount: Number(item.groupCount || 0),
+    wordCount: Number(item.wordCount || 0),
+    payloadBytes: Number(item.payloadBytes || 0),
+    payloadHash: String(item.payloadHash || '').slice(0, 12),
+  }));
+}
+
+function seedCurrentConfusingWordsBackupVersionIfNeeded() {
+  const current = readConfusingWordsBackupPayload();
+  if (!current) return;
+  const versionCount = Number(sqliteScalar('SELECT COUNT(*) FROM confusing_words_backup_versions;') || 0);
+  if (versionCount > 0) return;
+  insertConfusingWordsBackupVersion(current, 'current-seed');
 }
 
 function sendJson(res, data, status = 200) {
@@ -4054,727 +4813,6 @@ function sendJson(res, data, status = 200) {
   }
   res.writeHead(status, headers);
   res.end(JSON.stringify(data));
-}
-
-function normalizeFinanceVaultPayload(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    const error = new Error('Invalid finance vault payload');
-    error.statusCode = 400;
-    throw error;
-  }
-  if ('financeData' in input || 'assets' in input || 'transactions' in input) {
-    const error = new Error('Finance vault must be encrypted before upload');
-    error.statusCode = 400;
-    throw error;
-  }
-  const vault = {
-    version: Number(input.version || 1),
-    kdf: String(input.kdf || ''),
-    iterations: Number(input.iterations || 0),
-    salt: String(input.salt || ''),
-    iv: String(input.iv || ''),
-    ciphertext: String(input.ciphertext || ''),
-    updatedAt: String(input.updatedAt || ''),
-  };
-  if (vault.version !== 1 || vault.kdf !== 'PBKDF2-SHA256' || !vault.salt || !vault.iv || !vault.ciphertext || !vault.updatedAt) {
-    const error = new Error('Invalid encrypted finance vault fields');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!Number.isFinite(vault.iterations) || vault.iterations < 100_000) {
-    const error = new Error('Finance vault KDF iterations are too low');
-    error.statusCode = 400;
-    throw error;
-  }
-  const byteSize = Buffer.byteLength(JSON.stringify(vault), 'utf8');
-  if (byteSize > 10 * 1024 * 1024) {
-    const error = new Error('Finance vault is too large');
-    error.statusCode = 413;
-    throw error;
-  }
-  return { vault, byteSize };
-}
-
-function financeVaultRowToPayload(row) {
-  if (!row) return { vault: null, meta: null };
-  const vault = JSON.parse(row.vaultJson);
-  return {
-    vault,
-    meta: {
-      updatedAt: row.updatedAt,
-      clientUpdatedAt: row.clientUpdatedAt,
-      deviceId: row.deviceId || '',
-      byteSize: Number(row.byteSize || 0),
-    },
-  };
-}
-
-function getFinanceVaultPayload() {
-  ensureSqliteStore();
-  const row = sqliteJson(`SELECT vault_json AS vaultJson, client_updated_at AS clientUpdatedAt, device_id AS deviceId, byte_size AS byteSize, updated_at AS updatedAt
-FROM finance_vaults
-WHERE id = 1
-LIMIT 1;`)[0];
-  return financeVaultRowToPayload(row);
-}
-
-function saveFinanceVaultPayload(input, deviceId = '') {
-  ensureSqliteStore();
-  const { vault, byteSize } = normalizeFinanceVaultPayload(input);
-  const timestamp = nowISO();
-  runSqlite(`INSERT INTO finance_vaults (id, vault_json, client_updated_at, device_id, byte_size, created_at, updated_at)
-VALUES (1, ${sqlString(JSON.stringify(vault))}, ${sqlString(vault.updatedAt)}, ${sqlString(String(deviceId || '').slice(0, 120))}, ${sqlValue(byteSize)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
-ON CONFLICT(id) DO UPDATE SET
-  vault_json = excluded.vault_json,
-  client_updated_at = excluded.client_updated_at,
-  device_id = excluded.device_id,
-  byte_size = excluded.byte_size,
-  updated_at = excluded.updated_at;`);
-  tableChanged();
-  return getFinanceVaultPayload();
-}
-
-function deleteFinanceVaultPayload() {
-  ensureSqliteStore();
-  runSqlite('DELETE FROM finance_vaults WHERE id = 1;');
-  tableChanged();
-  return { ok: true, vault: null, meta: null };
-}
-
-function financeServerPassphrase() {
-  return String(process.env.FINANCE_VAULT_PASSPHRASE || '').trim();
-}
-
-function decryptFinanceVaultOnServer(vault, passphrase) {
-  const salt = Buffer.from(String(vault.salt || ''), 'base64');
-  const iv = Buffer.from(String(vault.iv || ''), 'base64');
-  const encrypted = Buffer.from(String(vault.ciphertext || ''), 'base64');
-  if (encrypted.length <= 16) throw new Error('理财密文长度异常');
-  const key = pbkdf2Sync(Buffer.from(passphrase, 'utf8'), salt, Number(vault.iterations || 0), 32, 'sha256');
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(encrypted.subarray(encrypted.length - 16));
-  const plaintext = Buffer.concat([decipher.update(encrypted.subarray(0, encrypted.length - 16)), decipher.final()]);
-  return JSON.parse(plaintext.toString('utf8'));
-}
-
-function encryptFinanceVaultOnServer(data, passphrase) {
-  const salt = randomBytes(16);
-  const iv = randomBytes(12);
-  const iterations = 180_000;
-  const key = pbkdf2Sync(Buffer.from(passphrase, 'utf8'), salt, iterations, 32, 'sha256');
-  const updatedAt = nowISO();
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify({ ...data, updatedAt }), 'utf8'),
-    cipher.final(),
-    cipher.getAuthTag(),
-  ]);
-  return {
-    version: 1,
-    kdf: 'PBKDF2-SHA256',
-    iterations,
-    salt: salt.toString('base64'),
-    iv: iv.toString('base64'),
-    ciphertext: ciphertext.toString('base64'),
-    updatedAt,
-  };
-}
-
-function normalizeServerFinanceData(input = {}) {
-  return {
-    schemaVersion: 1,
-    createdAt: input.createdAt || nowISO(),
-    updatedAt: input.updatedAt || nowISO(),
-    settings: {
-      baseCurrency: 'CNY',
-      displayCurrency: input.settings?.displayCurrency || 'CNY',
-      amountHidden: Boolean(input.settings?.amountHidden),
-      useChinaFundColors: input.settings?.useChinaFundColors !== false,
-      dailyAutoUpdate: input.settings?.dailyAutoUpdate !== false,
-      performanceStartDate: input.settings?.performanceStartDate || todayISO(),
-      lastAutoQuoteUpdateDate: input.settings?.lastAutoQuoteUpdateDate,
-    },
-    assets: Array.isArray(input.assets) ? input.assets : [],
-    transactions: Array.isArray(input.transactions) ? input.transactions : [],
-    plans: Array.isArray(input.plans) ? input.plans : [],
-    targets: Array.isArray(input.targets) ? input.targets : [],
-    quotes: input.quotes && typeof input.quotes === 'object' ? input.quotes : {},
-    exchangeRates: input.exchangeRates && typeof input.exchangeRates === 'object' ? input.exchangeRates : {},
-    quoteLogs: Array.isArray(input.quoteLogs) ? input.quoteLogs : [],
-  };
-}
-
-function financeId(prefix) {
-  return `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
-}
-
-function financeRound(value, digits = 2) {
-  if (!Number.isFinite(Number(value))) return 0;
-  const factor = 10 ** digits;
-  return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
-}
-
-function financeFormatMoney(value, currency = 'CNY') {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '待补充';
-  return `${financeRound(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
-}
-
-function financeFormatPercent(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '暂无法计算';
-  return `${financeRound(value, 2).toFixed(2)}%`;
-}
-
-function financeIsCash(asset) {
-  return asset?.assetType === 'CASH_CNY' || asset?.assetType === 'CASH_USD';
-}
-
-function financeRateToCny(currency, data) {
-  if (currency === 'CNY') return { rate: 1, warning: '' };
-  const quote = data.exchangeRates?.[`${currency}/CNY`];
-  if (quote?.rate && Number.isFinite(Number(quote.rate)) && Number(quote.rate) > 0) return { rate: Number(quote.rate), warning: '' };
-  return { rate: null, warning: `${currency}/CNY 汇率缺失` };
-}
-
-function financeConvertToCny(value, currency, data) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return { value: null, warning: '' };
-  const rate = financeRateToCny(currency, data);
-  return { value: rate.rate === null ? null : financeRound(value * rate.rate), warning: rate.warning };
-}
-
-function financeComparisonDate(previousDate, currentDate) {
-  const previous = String(previousDate || '').slice(0, 10);
-  const current = String(currentDate || '').slice(0, 10);
-  return previous && current && previous < current ? previous : '';
-}
-
-function financeComparisonQuotePrice(asset, quote) {
-  const currentPrice = financeQuotePriceForAsset(asset, quote);
-  if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice)) return { currentPrice: null, previousPrice: null };
-  const previousPrice = typeof quote?.previousPrice === 'number' && Number.isFinite(quote.previousPrice) ? quote.previousPrice : null;
-  if (previousPrice === null) return { currentPrice, previousPrice: null };
-  if (!quote?.previousPriceDate) return { currentPrice, previousPrice };
-  const previousHistorical = financeComparisonDate(quote.previousPriceDate, quote.priceDate);
-  return { currentPrice, previousPrice: previousHistorical ? previousPrice : null };
-}
-
-function financeComparisonRateToCny(currency, data) {
-  if (currency === 'CNY') return { currentRate: 1, previousRate: 1 };
-  const quote = data.exchangeRates?.[`${currency}/CNY`];
-  const currentRate = typeof quote?.rate === 'number' && Number.isFinite(quote.rate) ? quote.rate : null;
-  const previousRate = typeof quote?.previousRate === 'number' && Number.isFinite(quote.previousRate) ? quote.previousRate : null;
-  if (previousRate === null) return { currentRate, previousRate: null };
-  if (!quote?.previousAsOfDate) return { currentRate, previousRate };
-  return { currentRate, previousRate: financeComparisonDate(quote.previousAsOfDate, quote.asOfDate) ? previousRate : null };
-}
-
-function financeQuotePriceForAsset(asset, quote) {
-  if (typeof quote?.price === 'number' && Number.isFinite(quote.price) && quote.price > 0) return quote.price;
-  if (typeof asset.latestPrice === 'number' && Number.isFinite(asset.latestPrice) && asset.latestPrice > 0) return asset.latestPrice;
-  if (asset.assetType === 'CRYPTO_STABLECOIN' || asset.assetType === 'CRYPTO_STABLECOIN_EARN') return 1;
-  if (asset.quoteProvider === 'manual' && typeof asset.currentAmount === 'number') return 1;
-  return null;
-}
-
-function financeEmptyLedger() {
-  return { units: null, cashBalance: 0, cost: 0, hasCost: false, realizedPnl: 0, issues: [] };
-}
-
-function financeLedger(ledgers, assetId) {
-  if (!ledgers.has(assetId)) ledgers.set(assetId, financeEmptyLedger());
-  return ledgers.get(assetId);
-}
-
-function financeAddUnits(row, units) {
-  if (typeof units !== 'number' || !Number.isFinite(units)) return;
-  row.units = (row.units ?? 0) + units;
-}
-
-function financeAddCost(row, amount, fee = 0) {
-  if (typeof amount !== 'number' || !Number.isFinite(amount)) return;
-  row.cost += amount + fee;
-  row.hasCost = true;
-}
-
-function financeApplyOpeningPosition(transaction, asset, row, quote) {
-  if (!asset) return;
-  if (financeIsCash(asset)) {
-    row.cashBalance += transaction.amount ?? 0;
-    financeAddCost(row, transaction.amount ?? 0, 0);
-    return;
-  }
-  const openingAmount = transaction.amount ?? asset.trackingBaselineAmount ?? asset.currentAmount ?? null;
-  const openingPrice = transaction.price ?? financeQuotePriceForAsset(asset, quote);
-  const estimatedUnits =
-    transaction.units ??
-    asset.trackingBaselineUnits ??
-    asset.units ??
-    (typeof openingAmount === 'number' && typeof openingPrice === 'number' && openingPrice > 0 ? financeRound(openingAmount / openingPrice, 6) : null);
-  financeAddUnits(row, estimatedUnits);
-  financeAddCost(row, transaction.costAmount ?? asset.trackingBaselineAmount ?? asset.totalCost ?? openingAmount, 0);
-}
-
-function financeSeedTrackingBaseline(asset, row, quote) {
-  const baselineAmount = asset.trackingBaselineAmount ?? asset.currentAmount ?? null;
-  if (financeIsCash(asset)) {
-    if (typeof baselineAmount === 'number' && Number.isFinite(baselineAmount)) {
-      row.cashBalance += baselineAmount;
-      financeAddCost(row, baselineAmount, 0);
-    }
-    return;
-  }
-  const price = financeQuotePriceForAsset(asset, quote);
-  const units =
-    asset.trackingBaselineUnits ??
-    asset.units ??
-    (typeof baselineAmount === 'number' && typeof price === 'number' && price > 0 ? financeRound(baselineAmount / price, 6) : null);
-  financeAddUnits(row, units);
-  financeAddCost(row, asset.totalCost ?? baselineAmount, 0);
-}
-
-function financePendingRelatedFx(transaction, transactionsById) {
-  return Array.isArray(transaction.relatedTransactionIds) && transaction.relatedTransactionIds.some((id) => {
-    const related = transactionsById.get(id);
-    return related?.type === 'FX_CONVERSION' && related.status === 'pending';
-  });
-}
-
-function financeApplySell(transaction, row) {
-  const amount = transaction.amount ?? 0;
-  const fee = transaction.fee ?? 0;
-  const units = transaction.units ?? null;
-  if (typeof units === 'number' && Number.isFinite(units) && row.units && row.units > 0 && row.hasCost) {
-    const costRemoved = row.cost * Math.min(1, Math.max(0, units / row.units));
-    row.units -= units;
-    row.cost -= costRemoved;
-    row.realizedPnl += amount - fee - costRemoved;
-  } else {
-    row.realizedPnl += amount - fee;
-    row.issues.push('卖出记录缺少份额或成本，已实现盈亏只能近似记录。');
-  }
-}
-
-function financeApplyConfirmedTransaction(transaction, assetMap, ledgers, transactionsById, data) {
-  if (transaction.status !== 'confirmed') return;
-  if (transaction.type === 'FX_CONVERSION') {
-    if (!transaction.fromAssetId || !transaction.toAssetId || !transaction.toAmount) return;
-    const fromRow = financeLedger(ledgers, transaction.fromAssetId);
-    const toRow = financeLedger(ledgers, transaction.toAssetId);
-    const fee = transaction.fee ?? 0;
-    const fromAmount = transaction.amount ?? (transaction.fxRate ? transaction.toAmount * transaction.fxRate + fee : null);
-    if (typeof fromAmount !== 'number' || !Number.isFinite(fromAmount)) {
-      fromRow.issues.push('换汇交易缺少成交汇率或扣款金额。');
-      return;
-    }
-    fromRow.cashBalance -= fromAmount;
-    toRow.cashBalance += transaction.toAmount;
-    return;
-  }
-
-  if (!transaction.assetId) return;
-  const asset = assetMap.get(transaction.assetId);
-  const row = financeLedger(ledgers, transaction.assetId);
-  const fee = transaction.fee ?? 0;
-  if (transaction.type === 'OPENING_POSITION') {
-    financeApplyOpeningPosition(transaction, asset, row, asset ? data.quotes?.[asset.id] ?? null : null);
-  } else if (transaction.type === 'CASH_DEPOSIT' || transaction.type === 'TRANSFER_IN') {
-    row.cashBalance += transaction.amount ?? 0;
-  } else if (transaction.type === 'CASH_WITHDRAWAL' || transaction.type === 'TRANSFER_OUT') {
-    row.cashBalance -= transaction.amount ?? 0;
-  } else if (transaction.type === 'BUY') {
-    financeAddUnits(row, transaction.units);
-    financeAddCost(row, transaction.amount, fee);
-    if (transaction.sourceCashAssetId && !financePendingRelatedFx(transaction, transactionsById)) {
-      financeLedger(ledgers, transaction.sourceCashAssetId).cashBalance -= transaction.amount ?? 0;
-    }
-  } else if (transaction.type === 'SELL') {
-    financeApplySell(transaction, row);
-    if (transaction.sourceCashAssetId) financeLedger(ledgers, transaction.sourceCashAssetId).cashBalance += (transaction.amount ?? 0) - fee;
-  } else if (transaction.type === 'INTEREST' || transaction.type === 'REWARD' || transaction.type === 'DIVIDEND') {
-    financeAddUnits(row, transaction.units);
-    if (typeof transaction.units !== 'number' || !Number.isFinite(transaction.units) || transaction.units === 0) {
-      row.realizedPnl += transaction.amount ?? 0;
-    }
-  } else if (transaction.type === 'FEE') {
-    financeAddUnits(row, transaction.units);
-    if (typeof transaction.units !== 'number' || !Number.isFinite(transaction.units) || transaction.units === 0) {
-      row.realizedPnl -= transaction.amount ?? fee;
-    }
-  }
-}
-
-function financeMarketValueFromAsset(asset, row, quote) {
-  if (financeIsCash(asset)) return row.cashBalance || asset.currentAmount || 0;
-  const units = row.units ?? asset.units ?? asset.trackingBaselineUnits ?? null;
-  const price = financeQuotePriceForAsset(asset, quote);
-  if (typeof units === 'number' && Number.isFinite(units) && typeof price === 'number' && Number.isFinite(price)) return financeRound(units * price, 4);
-  if (typeof asset.currentAmount === 'number' && Number.isFinite(asset.currentAmount)) return asset.currentAmount;
-  return null;
-}
-
-function financeBuildPortfolioSnapshot(data) {
-  const activeAssets = data.assets.filter((asset) => asset.status !== 'archived');
-  const assetMap = new Map(activeAssets.map((asset) => [asset.id, asset]));
-  const transactionsById = new Map(data.transactions.map((transaction) => [transaction.id, transaction]));
-  const ledgers = new Map();
-  const hasOpening = new Set(data.transactions.filter((item) => item.status === 'confirmed' && item.type === 'OPENING_POSITION' && item.assetId).map((item) => item.assetId));
-  activeAssets.forEach((asset) => {
-    const row = financeLedger(ledgers, asset.id);
-    if (!hasOpening.has(asset.id)) financeSeedTrackingBaseline(asset, row, data.quotes?.[asset.id] ?? null);
-  });
-  data.transactions.forEach((transaction) => financeApplyConfirmedTransaction(transaction, assetMap, ledgers, transactionsById, data));
-
-  const holdings = activeAssets.map((asset) => {
-    const row = financeLedger(ledgers, asset.id);
-    const quote = data.quotes?.[asset.id] ?? null;
-    const quoteComparison = financeComparisonQuotePrice(asset, quote);
-    const nativeMarketValue = financeMarketValueFromAsset(asset, row, quote);
-    const cny = financeConvertToCny(nativeMarketValue, asset.currency, data);
-    const costNative = row.hasCost ? row.cost : asset.trackingBaselineAmount ?? asset.totalCost ?? asset.currentAmount ?? null;
-    const unrealizedPnlNative = costNative === null || nativeMarketValue === null ? null : financeRound(nativeMarketValue - costNative);
-    const cumulativePnlNative = unrealizedPnlNative === null ? null : financeRound(unrealizedPnlNative + row.realizedPnl);
-    const todayPnlNative =
-      quoteComparison.previousPrice !== null
-      && quoteComparison.currentPrice !== null
-      && row.units !== null
-      && !financeIsCash(asset)
-        ? financeRound((quoteComparison.currentPrice - quoteComparison.previousPrice) * row.units)
-        : null;
-    const rateComparison = financeComparisonRateToCny(asset.currency, data);
-    const previousNativeMarketValue =
-      financeIsCash(asset)
-        ? nativeMarketValue
-        : row.units !== null && quoteComparison.previousPrice !== null
-          ? financeRound(row.units * quoteComparison.previousPrice, 4)
-          : typeof nativeMarketValue === 'number' && Number.isFinite(nativeMarketValue) && rateComparison.previousRate !== null
-            ? nativeMarketValue
-            : null;
-    const previousCnyMarketValue =
-      typeof previousNativeMarketValue === 'number'
-      && Number.isFinite(previousNativeMarketValue)
-      && rateComparison.previousRate !== null
-        ? financeRound(previousNativeMarketValue * rateComparison.previousRate)
-        : null;
-    const issues = [...row.issues];
-    if (cny.warning) issues.push(cny.warning);
-    if (quote?.failed) issues.push(`行情更新失败：${quote.error ?? '未知错误'}`);
-    return {
-      asset,
-      units: row.units ?? asset.units ?? asset.trackingBaselineUnits ?? null,
-      nativeMarketValue,
-      cnyMarketValue: cny.value,
-      costNative,
-      cumulativePnlNative,
-      cumulativePnlCny: financeConvertToCny(cumulativePnlNative, asset.currency, data).value,
-      todayPnlNative,
-      todayPnlCny:
-        typeof cny.value === 'number'
-        && Number.isFinite(cny.value)
-        && typeof previousCnyMarketValue === 'number'
-        && Number.isFinite(previousCnyMarketValue)
-          ? financeRound(cny.value - previousCnyMarketValue)
-          : financeConvertToCny(todayPnlNative, asset.currency, data).value,
-      returnRate: costNative && cumulativePnlNative !== null ? financeRound((cumulativePnlNative / costNative) * 100, 4) : null,
-      quote,
-      issues: Array.from(new Set(issues)),
-    };
-  });
-  const totalAssetsCny = financeRound(holdings.reduce((sum, holding) => sum + (holding.cnyMarketValue ?? 0), 0));
-  const cumulativeValues = holdings.map((holding) => holding.cumulativePnlCny).filter((value) => typeof value === 'number' && Number.isFinite(value));
-  const todayValues = holdings.map((holding) => holding.todayPnlCny).filter((value) => typeof value === 'number' && Number.isFinite(value));
-  const latestQuoteFetchedAt = [
-    ...Object.values(data.quotes || {}).map((quote) => quote?.fetchedAt || ''),
-    ...Object.values(data.exchangeRates || {}).map((rate) => rate?.fetchedAt || ''),
-  ].filter(Boolean).sort().at(-1) || '尚未更新';
-  return {
-    generatedAt: nowISO(),
-    holdings,
-    totalAssetsCny,
-    todayPnlCny: todayValues.length ? financeRound(todayValues.reduce((sum, value) => sum + value, 0)) : null,
-    cumulativePnlCny: cumulativeValues.length ? financeRound(cumulativeValues.reduce((sum, value) => sum + value, 0)) : null,
-    latestQuoteFetchedAt,
-    alerts: holdings.flatMap((holding) => holding.issues.map((issue) => `${holding.asset.name}: ${issue}`)).slice(0, 8),
-  };
-}
-
-function serverFailedFinanceQuote(asset, previous, error) {
-  return {
-    id: financeId('quote'),
-    targetId: asset.id,
-    targetType: 'asset',
-    price: previous?.price ?? asset.latestPrice ?? null,
-    currency: asset.currency,
-    priceDate: previous?.priceDate ?? asset.priceDate ?? todayISO(),
-    fetchedAt: nowISO(),
-    source: previous?.source ?? asset.dataSource ?? asset.quoteProvider,
-    provider: asset.quoteProvider,
-    isManual: asset.quoteProvider === 'manual',
-    failed: true,
-    error: error instanceof Error ? error.message : String(error),
-    previousPrice: previous?.previousPrice ?? null,
-    previousPriceDate: previous?.previousPriceDate,
-  };
-}
-
-function serverFailedFinanceRate(pair, previous, error) {
-  return {
-    pair,
-    rate: previous?.rate ?? null,
-    source: previous?.source ?? '公开行情',
-    provider: previous?.provider ?? 'manual',
-    asOfDate: previous?.asOfDate ?? todayISO(),
-    fetchedAt: nowISO(),
-    isManual: false,
-    failed: true,
-    error: error instanceof Error ? error.message : String(error),
-    previousRate: previous?.previousRate ?? null,
-    previousAsOfDate: previous?.previousAsOfDate,
-  };
-}
-
-function serverQuoteBaseline(previous, nextPriceDate, fallbackPrice = null, fallbackDate = '') {
-  const currentDate = String(nextPriceDate || '').slice(0, 10);
-  const directPrice = typeof previous?.price === 'number' && Number.isFinite(previous.price) ? previous.price : fallbackPrice;
-  const directDate = financeComparisonDate(previous?.priceDate || fallbackDate, currentDate);
-  if (directDate) return { previousPrice: directPrice, previousPriceDate: directDate };
-  const preservedPrice = typeof previous?.previousPrice === 'number' && Number.isFinite(previous.previousPrice) ? previous.previousPrice : null;
-  const preservedDate = financeComparisonDate(previous?.previousPriceDate, currentDate);
-  if (preservedDate) return { previousPrice: preservedPrice, previousPriceDate: preservedDate };
-  return { previousPrice: null, previousPriceDate: '' };
-}
-
-function serverRateBaseline(previous, nextAsOfDate) {
-  const currentDate = String(nextAsOfDate || '').slice(0, 10);
-  const directDate = financeComparisonDate(previous?.asOfDate, currentDate);
-  if (directDate) {
-    return {
-      previousRate: typeof previous?.rate === 'number' && Number.isFinite(previous.rate) ? previous.rate : null,
-      previousAsOfDate: directDate,
-    };
-  }
-  const preservedDate = financeComparisonDate(previous?.previousAsOfDate, currentDate);
-  if (preservedDate) {
-    return {
-      previousRate: typeof previous?.previousRate === 'number' && Number.isFinite(previous.previousRate) ? previous.previousRate : null,
-      previousAsOfDate: preservedDate,
-    };
-  }
-  return { previousRate: null, previousAsOfDate: '' };
-}
-
-async function mapWithLimit(items, limit, mapper) {
-  const results = [];
-  let cursor = 0;
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-async function updateFinanceQuotesOnServer(data) {
-  const startedAt = nowISO();
-  const next = {
-    ...data,
-    quotes: { ...(data.quotes || {}) },
-    exchangeRates: { ...(data.exchangeRates || {}) },
-    quoteLogs: Array.isArray(data.quoteLogs) ? [...data.quoteLogs] : [],
-    settings: { ...data.settings, lastAutoQuoteUpdateDate: todayISO() },
-    updatedAt: nowISO(),
-  };
-  const messages = [];
-  let ok = true;
-
-  try {
-    const usdCny = await getPublicUsdCnyQuote();
-    const usdBaseline = serverRateBaseline(data.exchangeRates?.['USD/CNY'], usdCny.asOfDate);
-    next.exchangeRates['USD/CNY'] = {
-      pair: 'USD/CNY',
-      rate: usdCny.rate,
-      source: usdCny.source,
-      provider: usdCny.provider,
-      asOfDate: usdCny.asOfDate,
-      fetchedAt: nowISO(),
-      isManual: false,
-      failed: false,
-      previousRate: usdBaseline.previousRate,
-      previousAsOfDate: usdBaseline.previousAsOfDate,
-    };
-    messages.push('USD/CNY 已更新');
-  } catch (error) {
-    ok = false;
-    next.exchangeRates['USD/CNY'] = serverFailedFinanceRate('USD/CNY', data.exchangeRates?.['USD/CNY'], error);
-    messages.push(`USD/CNY 更新失败：${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  try {
-    const stable = await getPublicStablecoinRates();
-    const usdtBaseline = serverRateBaseline(data.exchangeRates?.['USDT/CNY'], stable.asOfDate);
-    const usdcBaseline = serverRateBaseline(data.exchangeRates?.['USDC/CNY'], stable.asOfDate);
-    next.exchangeRates['USDT/CNY'] = {
-      pair: 'USDT/CNY',
-      rate: stable.rates['USDT/CNY'],
-      source: stable.source,
-      provider: stable.provider,
-      asOfDate: stable.asOfDate,
-      fetchedAt: nowISO(),
-      isManual: false,
-      failed: false,
-      previousRate: usdtBaseline.previousRate,
-      previousAsOfDate: usdtBaseline.previousAsOfDate,
-    };
-    next.exchangeRates['USDC/CNY'] = {
-      pair: 'USDC/CNY',
-      rate: stable.rates['USDC/CNY'],
-      source: stable.source,
-      provider: stable.provider,
-      asOfDate: stable.asOfDate,
-      fetchedAt: nowISO(),
-      isManual: false,
-      failed: false,
-      previousRate: usdcBaseline.previousRate,
-      previousAsOfDate: usdcBaseline.previousAsOfDate,
-    };
-    messages.push('USDT/USDC 已更新');
-  } catch (error) {
-    ok = false;
-    next.exchangeRates['USDT/CNY'] = serverFailedFinanceRate('USDT/CNY', data.exchangeRates?.['USDT/CNY'], error);
-    next.exchangeRates['USDC/CNY'] = serverFailedFinanceRate('USDC/CNY', data.exchangeRates?.['USDC/CNY'], error);
-    messages.push(`稳定币价格更新失败：${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  const quoteAssets = next.assets.filter((asset) => asset.quoteProvider && asset.quoteProvider !== 'manual');
-  await mapWithLimit(quoteAssets, 4, async (asset) => {
-    const previous = data.quotes?.[asset.id];
-    try {
-      if (asset.quoteProvider === 'eastmoney-fund') {
-        const code = asset.quoteSymbol || asset.symbol;
-        if (!code) throw new Error('缺少基金代码');
-        const payload = await getPublicFundQuote(code, '', true);
-        const price = Number(payload.price || 0);
-        if (!Number.isFinite(price) || price <= 0) throw new Error('基金净值为空');
-        const baseline = serverQuoteBaseline(previous, payload.priceDate || todayISO(), asset.latestPrice ?? null, asset.priceDate);
-        next.quotes[asset.id] = {
-          id: financeId('quote'),
-          targetId: asset.id,
-          targetType: 'asset',
-          price,
-          currency: asset.currency,
-          priceDate: payload.priceDate || todayISO(),
-          fetchedAt: nowISO(),
-          source: [payload.source, payload.fundType, payload.fundCompany].filter(Boolean).join('；') || payload.source,
-          provider: 'eastmoney-fund',
-          isManual: false,
-          failed: false,
-          previousPrice: baseline.previousPrice,
-          previousPriceDate: baseline.previousPriceDate,
-          raw: payload.raw ?? payload,
-        };
-      } else if (asset.quoteProvider === 'coingecko-stablecoin') {
-        const pair = asset.currency === 'USDT' ? 'USDT/CNY' : asset.currency === 'USDC' ? 'USDC/CNY' : null;
-        const rate = pair ? next.exchangeRates[pair] : null;
-        if (!rate?.rate || rate.failed) throw new Error(`${asset.currency} 价格缺失`);
-        const baseline = serverQuoteBaseline(previous, rate.asOfDate, asset.latestPrice ?? 1, asset.priceDate);
-        next.quotes[asset.id] = {
-          id: financeId('quote'),
-          targetId: asset.id,
-          targetType: 'asset',
-          price: 1,
-          currency: asset.currency,
-          priceDate: rate.asOfDate,
-          fetchedAt: nowISO(),
-          source: `${rate.source}；${pair} ${rate.rate}`,
-          provider: 'coingecko-stablecoin',
-          isManual: false,
-          failed: false,
-          previousPrice: baseline.previousPrice,
-          previousPriceDate: baseline.previousPriceDate,
-        };
-      }
-      messages.push(`${asset.name} 已更新`);
-    } catch (error) {
-      ok = false;
-      next.quotes[asset.id] = serverFailedFinanceQuote(asset, previous, error);
-      messages.push(`${asset.name} 更新失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-  });
-
-  next.quoteLogs.unshift({
-    id: financeId('quote-log'),
-    startedAt,
-    finishedAt: nowISO(),
-    ok,
-    source: '服务端每日公开行情',
-    message: messages.join(' '),
-  });
-  next.quoteLogs = next.quoteLogs.slice(0, 40);
-  return next;
-}
-
-function financeSnapshotSummary(data, quoteLog = null) {
-  const snapshot = financeBuildPortfolioSnapshot(data);
-  const topHoldings = snapshot.holdings
-    .filter((holding) => typeof holding.cnyMarketValue === 'number' && Number.isFinite(holding.cnyMarketValue))
-    .sort((a, b) => (b.cnyMarketValue ?? 0) - (a.cnyMarketValue ?? 0))
-    .slice(0, 8)
-    .map((holding) => ({
-      name: holding.asset.name,
-      currency: holding.asset.currency,
-      nativeMarketValue: holding.nativeMarketValue,
-      cnyMarketValue: holding.cnyMarketValue,
-      cumulativePnlNative: holding.cumulativePnlNative,
-      cumulativePnlCny: holding.cumulativePnlCny,
-      todayPnlNative: holding.todayPnlNative,
-      todayPnlCny: holding.todayPnlCny,
-      returnRate: holding.returnRate,
-      priceDate: holding.quote?.priceDate ?? holding.asset.priceDate ?? '',
-      source: holding.quote?.source ?? holding.asset.dataSource ?? '手动/待补充',
-      issues: holding.issues,
-    }));
-  return {
-    ok: true,
-    skipped: false,
-    updatedAt: nowISO(),
-    totalAssetsCny: snapshot.totalAssetsCny,
-    todayPnlCny: snapshot.todayPnlCny,
-    cumulativePnlCny: snapshot.cumulativePnlCny,
-    latestQuoteFetchedAt: snapshot.latestQuoteFetchedAt,
-    alerts: snapshot.alerts,
-    topHoldings,
-    quoteLog,
-  };
-}
-
-function readFinanceSnapshotSummaryFromVault() {
-  const passphrase = financeServerPassphrase();
-  if (!passphrase) return null;
-  const cloud = getFinanceVaultPayload();
-  if (!cloud.vault) return null;
-  try {
-    const data = normalizeServerFinanceData(decryptFinanceVaultOnServer(cloud.vault, passphrase));
-    return financeSnapshotSummary(data, data.quoteLogs?.[0] || null);
-  } catch (error) {
-    return {
-      ok: false,
-      skipped: true,
-      message: redactSecretText(error.message || String(error)),
-    };
-  }
-}
-
-async function updateFinanceForDailyBrief() {
-  const passphrase = financeServerPassphrase();
-  if (!passphrase) return { ok: false, skipped: true, message: '服务端未配置理财解密口令，未自动更新理财行情。' };
-  const cloud = getFinanceVaultPayload();
-  if (!cloud.vault) return { ok: false, skipped: true, message: '云端没有理财密文，未自动更新理财行情。' };
-  const data = normalizeServerFinanceData(decryptFinanceVaultOnServer(cloud.vault, passphrase));
-  const updated = await updateFinanceQuotesOnServer(data);
-  const encrypted = encryptFinanceVaultOnServer(updated, passphrase);
-  saveFinanceVaultPayload(encrypted, 'server-daily-finance');
-  return financeSnapshotSummary(updated, updated.quoteLogs[0] || null);
 }
 
 function cleanChineseDefinition(value = '') {
@@ -6092,13 +6130,20 @@ function redactLogLine(line = '') {
 
 function summarizeLogLines(name, lines, error = '') {
   const cleanLines = lines.filter(Boolean).slice(-80).map(redactLogLine);
+  const errorCount = cleanLines.filter((line) => /error|failed|exception|fatal/i.test(line)).length;
+  const warningCount = cleanLines.filter((line) => /warn|warning|deprecated/i.test(line)).length;
   return {
     name,
     available: !error,
     error: error || undefined,
-    lines: cleanLines,
-    errorCount: cleanLines.filter((line) => /error|failed|exception|fatal/i.test(line)).length,
-    warningCount: cleanLines.filter((line) => /warn|warning|deprecated/i.test(line)).length,
+    errorCount,
+    warningCount,
+    action: error
+      ? '检查日志读取权限或对应服务状态'
+      : errorCount
+        ? '检查近期错误并确认核心功能是否受影响'
+        : '',
+    observation: !error && !errorCount && warningCount ? '发现少量 warning，暂列观察，不触发处理项' : '',
   };
 }
 
@@ -6129,16 +6174,6 @@ function getOpsLogSummaryPayload(sessionRole = 'write') {
   const slowApi = opsRepository.listSlowApi(12);
   const apiMetrics = opsRepository.getApiMetrics();
   return { generatedAt: nowISO(), sources, auditEvents, slowApi, apiMetrics, readOnly: sessionRole === 'read' };
-}
-
-function queryLimit(searchParams, defaultLimit = 20, maxLimit = 100) {
-  const value = searchParams.get('limit');
-  if (!value) return null;
-  return Math.max(1, Math.min(maxLimit, Number(value) || defaultLimit));
-}
-
-function queryOffset(searchParams) {
-  return Math.max(0, Number(searchParams.get('offset') || 0) || 0);
 }
 
 function getGoalsList(sessionRole) {
@@ -6683,6 +6718,26 @@ function validateClawbotAccess(req, requestUrl, body = {}) {
   return { ok: true };
 }
 
+function bearerToken(req) {
+  const auth = headerString(req, 'authorization');
+  return auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || '';
+}
+
+function validateStudyPetAccess(req) {
+  if (!studyPetApiToken) {
+    return { ok: false, status: 503, error: 'Study pet API is disabled. Set STUDY_PET_API_TOKEN first.' };
+  }
+  if (!safeSecretEqual(bearerToken(req), studyPetApiToken)) {
+    return { ok: false, status: 401, error: 'Unauthorized' };
+  }
+  return { ok: true };
+}
+
+function normalizeStudyPetDate(value, fallback = shanghaiTodayISO()) {
+  const date = String(value || fallback).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : fallback;
+}
+
 function extractClawbotMessage(body, requestUrl) {
   const queryMessage = requestUrl.searchParams.get('text') || requestUrl.searchParams.get('message') || '';
   if (queryMessage) return queryMessage;
@@ -6816,14 +6871,6 @@ function buildClawbotTaskListReply(range, tasks) {
   return `${title}：\n${tasks.map((task, index) => formatClawbotTask(task, index)).join('\n')}`;
 }
 
-function clawbotSignedMoney(value, currency = 'CNY') {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '待补充';
-  const formatted = financeFormatMoney(Math.abs(value), currency);
-  if (value > 0) return `+${formatted}`;
-  if (value < 0) return `-${formatted}`;
-  return financeFormatMoney(0, currency);
-}
-
 function clawbotSection(title, lines = []) {
   const items = lines.filter(Boolean);
   return items.length ? [`【${title}】`, ...items] : [];
@@ -6835,7 +6882,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const weather = payload.weather || {};
   const learning = payload.learning || {};
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
-  const finance = payload.finance || null;
+  const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
   const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
   const weatherLine = weather.ok
     ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
@@ -6849,22 +6896,16 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const taskLines = tasks.length
     ? tasks.map((task, index) => `${taskLetterLabel(index)}. ${task.title}｜${task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}`)
     : ['今天没有到期待办。'];
-  const financeLines = !finance
-    ? ['暂无理财摘要。']
-    : finance.ok
-      ? [
-          `总资产：${financeFormatMoney(finance.totalAssetsCny, 'CNY')}`,
-          `今日盈亏：${clawbotSignedMoney(finance.todayPnlCny, 'CNY')}`,
-          `起算后盈亏：${clawbotSignedMoney(finance.cumulativePnlCny, 'CNY')}`,
-          `行情时间：${finance.latestQuoteFetchedAt ? new Date(finance.latestQuoteFetchedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '待补充'}`,
-          ...(Array.isArray(finance.alerts) && finance.alerts.length ? ['数据提示：', ...finance.alerts.slice(0, 5).map((item) => `- ${compactText(item, 120)}`)] : []),
-        ]
-      : [finance.message || '理财行情未更新。'];
   const marketLines = markets.length
     ? markets.map((item) => item.ok
       ? `- ${item.name}：${item.price}（${item.changePercent ?? 0}%）`
       : `- ${item.name}：更新失败 ${item.error || ''}`)
     : ['暂无指数配置。'];
+  const assessmentLines = Array.isArray(indexPurchaseAssessment.items) && indexPurchaseAssessment.items.length
+    ? indexPurchaseAssessment.items.map((item) => item.ok
+      ? `- ${item.name}：${item.signal}｜PE ${item.pe}（5 年百分位 ${item.pePercentile5}% / 10 年 ${item.pePercentile10}%）｜距 50/200 日均线 ${item.sma50Margin}%/${item.sma200Margin}%｜${item.intensity}`
+      : `- ${item.name}：评估失败 ${item.error || ''}`)
+    : ['暂无定投评估数据。'];
   const notificationLines = notificationMetrics.open
     ? [`待处理 ${notificationMetrics.open} 条，其中 warning ${notificationMetrics.warnings}，critical ${notificationMetrics.critical}`]
     : ['暂无待处理通知。'];
@@ -6878,9 +6919,12 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     '',
     ...clawbotSection('今日待办', taskLines),
     '',
-    ...clawbotSection('理财', financeLines),
-    '',
     ...clawbotSection('指数', marketLines),
+    '',
+    ...clawbotSection('美股指数定投评估', [
+      ...assessmentLines,
+      indexPurchaseAssessment.disclaimer || '',
+    ]),
     '',
     ...clawbotSection('通知', notificationLines),
     '',
@@ -6896,12 +6940,10 @@ function buildClawbotDailyDigest(date = todayISO()) {
   const notificationMetrics = notificationRepository.metrics();
   let brief = latestBrief;
   if (brief?.payload && date === todayISO()) {
-    const liveFinance = readFinanceSnapshotSummaryFromVault();
     brief = {
       ...brief,
       payload: {
         ...brief.payload,
-        finance: liveFinance?.ok ? liveFinance : brief.payload.finance,
         learning: {
           ...(brief.payload.learning || {}),
           todayTasks: taskList.map((task) => ({
@@ -7027,8 +7069,8 @@ function resolveOpenClawWechatConfig({ includeSecret = false } = {}) {
   const contextTokens = readJsonFileSafe(contextPath, {});
   const contextKeys = contextTokens && typeof contextTokens === 'object' && !Array.isArray(contextTokens) ? Object.keys(contextTokens) : [];
   const target = openClawTarget
-    || findNestedStringByKey(account, ['userId', 'wxid', 'openId', 'openid', 'target', 'fromUserName', 'userName', 'username'])
-    || contextKeys.find((key) => key && !key.startsWith('_')) || '';
+    || contextKeys.find((key) => key && !key.startsWith('_'))
+    || findNestedStringByKey(account, ['userId', 'wxid', 'openId', 'openid', 'target', 'fromUserName', 'userName', 'username']) || '';
   const contextEntry = target && isObjectPayload(contextTokens) ? contextTokens[target] : null;
   const contextToken = (typeof contextEntry === 'string' ? contextEntry : '')
     || findNestedStringByKey(contextEntry, ['contextToken', 'token'])
@@ -7046,7 +7088,86 @@ function resolveOpenClawWechatConfig({ includeSecret = false } = {}) {
     nextPushAt: nextDailyBriefAt,
     scheduleTime: getDailyBriefSettings({ includeSecret: true }).generateTime,
   };
-  return includeSecret ? { ...status, target, contextToken } : status;
+  return includeSecret ? {
+    ...status,
+    target,
+    contextToken,
+    accountToken: account.token || '',
+    baseUrl: account.baseUrl || 'https://ilinkai.weixin.qq.com',
+  } : status;
+}
+
+let openClawWeixinSendModulePath = '';
+
+function detectOpenClawWeixinSendModulePath() {
+  if (openClawWeixinSendModulePath && existsSync(openClawWeixinSendModulePath)) return openClawWeixinSendModulePath;
+  if (!existsSync(openClawNpmProjectsDir)) return '';
+  for (const project of readdirSync(openClawNpmProjectsDir)) {
+    const candidate = join(openClawNpmProjectsDir, project, 'node_modules', '@tencent-weixin', 'openclaw-weixin', 'dist', 'src', 'messaging', 'send.js');
+    if (existsSync(candidate)) {
+      openClawWeixinSendModulePath = candidate;
+      return candidate;
+    }
+  }
+  return '';
+}
+
+async function sendOpenClawWechatDirect(config, text) {
+  const modulePath = detectOpenClawWeixinSendModulePath();
+  if (!modulePath || !config.accountToken) throw new Error('OpenClaw Weixin direct sender is unavailable');
+  return new Promise((resolveSend, rejectSend) => {
+    const child = spawn('/opt/node22/bin/node', [openClawWeixinSenderFile], {
+      detached: process.platform !== 'win32',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (error, result = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) rejectSend(error);
+      else resolveSend(result);
+    };
+    const timer = setTimeout(() => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+      finish(new Error('OpenClaw Weixin direct sender timed out'));
+    }, 25_000);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+      if (stdout.length > 64 * 1024) stdout = stdout.slice(-64 * 1024);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+      if (stderr.length > 64 * 1024) stderr = stderr.slice(-64 * 1024);
+    });
+    child.on('error', (error) => finish(error));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(new Error(redactSecretText(stderr || stdout || `direct sender exited with code ${code}`)));
+        return;
+      }
+      try {
+        finish(null, JSON.parse(stdout || '{}'));
+      } catch {
+        finish(new Error('OpenClaw Weixin direct sender returned invalid JSON'));
+      }
+    });
+    child.stdin.end(JSON.stringify({
+      modulePath,
+      to: config.target,
+      text: String(text || '').slice(0, 3500),
+      baseUrl: config.baseUrl,
+      token: config.accountToken,
+      contextToken: config.contextToken,
+    }));
+  });
 }
 
 function runOpenClawCli(args, { timeoutMs = 15000 } = {}) {
@@ -7056,6 +7177,7 @@ function runOpenClawCli(args, { timeoutMs = 15000 } = {}) {
         ...process.env,
         PATH: `/opt/node22/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}`,
       },
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -7072,7 +7194,12 @@ function runOpenClawCli(args, { timeoutMs = 15000 } = {}) {
       });
     };
     const timer = setTimeout(() => {
-      child.kill('SIGKILL');
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
       finish({ ok: false, code: -1, error: 'openclaw message send timed out' });
     }, timeoutMs);
     child.stdout.on('data', (chunk) => {
@@ -7104,50 +7231,191 @@ async function sendOpenClawWechatMessage(text) {
       },
     };
   }
-  const delivery = { contextToken: config.contextToken };
-  const result = await runOpenClawCli([
-    'message',
-    'send',
-    '--channel',
-    config.channel,
-    '--account',
-    config.accountId,
-    '--target',
-    config.target,
-    '--message',
-    String(text || '').slice(0, 3500),
-    '--delivery',
-    JSON.stringify(delivery),
-    '--json',
-  ]);
-  let parsed = null;
   try {
-    parsed = result.stdout ? JSON.parse(result.stdout) : null;
-  } catch {
-    parsed = null;
+    const result = await sendOpenClawWechatDirect(config, text);
+    return {
+      ok: true,
+      method: 'openclaw-weixin-direct',
+      channel: config.channel,
+      accountId: config.accountId,
+      messageId: result?.messageId || null,
+      response: {
+        action: 'send',
+        channel: config.channel,
+        dryRun: false,
+        handledBy: 'openclaw-weixin-plugin',
+        messageId: result?.messageId || null,
+      },
+      error: '',
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      method: 'openclaw-weixin-direct',
+      channel: config.channel,
+      accountId: config.accountId,
+      messageId: null,
+      response: null,
+      error: redactSecretText(error.message || String(error)),
+    };
   }
-  return {
-    ok: result.ok,
-    method: 'openclaw-weixin',
-    channel: config.channel,
-    accountId: config.accountId,
-    messageId: parsed?.messageId || parsed?.id || parsed?.data?.messageId || null,
-    response: parsed ? {
-      action: parsed.action || null,
-      channel: parsed.channel || config.channel,
-      dryRun: Boolean(parsed.dryRun),
-      handledBy: parsed.handledBy || null,
-      messageId: parsed.messageId || parsed.id || parsed.data?.messageId || null,
-    } : null,
-    error: result.ok ? '' : result.error,
-  };
 }
 
-async function sendClawbotPushText(text) {
+async function sendProactiveClawbotText(text) {
   const openClawStatus = resolveOpenClawWechatConfig({ includeSecret: true });
   if (openClawStatus.configured) return sendOpenClawWechatMessage(text);
   if (clawbotWebhookUrl) return postClawbotWebhook(text);
   return { ok: false, method: 'none', error: 'No ClawBot push channel is configured', status: resolveOpenClawWechatConfig() };
+}
+
+function resolveBarkConfig({ includeSecret = false } = {}) {
+  const rawServerUrl = String(process.env.BARK_SERVER_URL || 'https://api.day.app').trim().replace(/\/+$/, '');
+  const serverUrl = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(rawServerUrl) ? rawServerUrl : 'https://api.day.app';
+  const deviceKey = String(process.env.BARK_DEVICE_KEY || '').trim();
+  return {
+    enabled: Boolean(deviceKey),
+    configured: Boolean(deviceKey),
+    serverUrl,
+    deviceKeyMasked: deviceKey ? `${deviceKey.slice(0, 4)}...${deviceKey.slice(-4)}` : '',
+    ...(includeSecret ? { deviceKey } : {}),
+  };
+}
+
+function barkLevel({ source = '', severity = 'info' } = {}) {
+  if (severity === 'critical') return 'critical';
+  if (source === 'task' || source === 'ops' || severity === 'warning') return 'timeSensitive';
+  if (source === 'brief' || source === 'report') return 'passive';
+  return 'active';
+}
+
+async function sendBarkNotification(text, delivery) {
+  const config = resolveBarkConfig({ includeSecret: true });
+  if (!config.configured) return { ok: false, method: 'bark', error: 'Bark is not configured' };
+  const payload = delivery?.payload || {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(`${config.serverUrl}/push`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({
+        device_key: config.deviceKey,
+        title: String(payload.title || 'Exam Planner').slice(0, 120),
+        body: String(text || payload.content || '').slice(0, 4000),
+        group: `exam-planner-${String(payload.source || 'system').slice(0, 40)}`,
+        level: barkLevel(payload),
+        isArchive: '1',
+      }),
+      signal: controller.signal,
+    });
+    const responseText = await response.text();
+    let responseJson = {};
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      responseJson = {};
+    }
+    if (!response.ok || (responseJson.code && Number(responseJson.code) !== 200)) {
+      throw new Error(`Bark HTTP ${response.status}: ${String(responseJson.message || responseText).slice(0, 200)}`);
+    }
+    return { ok: true, method: 'bark', channel: 'bark_default', response: { code: responseJson.code || response.status } };
+  } catch (error) {
+    return { ok: false, method: 'bark', channel: 'bark_default', error: redactSecretText(error.message || String(error)) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function applyTelegramProcessEnv(config) {
+  Object.entries(config).forEach(([key, value]) => {
+    if (value) process.env[key] = value;
+    else delete process.env[key];
+  });
+}
+
+async function telegramApi(method, body = {}, { config = readTelegramConfig(telegramEnvFile), timeoutMs = 15_000 } = {}) {
+  if (!config.TELEGRAM_BOT_TOKEN) throw new Error('Telegram Bot Token is not configured');
+  const { ProxyAgent } = require('undici');
+  const dispatcher = new ProxyAgent(mihomoProxyUrl);
+  const response = await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: 'POST',
+    dispatcher,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) throw new Error(`Telegram ${method} failed: ${payload.description || response.status}`);
+  return payload.result;
+}
+
+async function sendTelegramMessage(text, { chatId, replyMarkup, disableNotification = false } = {}) {
+  const config = readTelegramConfig(telegramEnvFile);
+  const targetChatId = String(chatId || config.TELEGRAM_CHAT_ID || '');
+  if (!targetChatId) throw new Error('Telegram Chat ID is not configured');
+  return telegramApi('sendMessage', {
+    chat_id: targetChatId,
+    text: String(text || '').slice(0, 4096),
+    disable_notification: disableNotification,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  }, { config });
+}
+
+async function sendTelegramNotification(text, delivery) {
+  try {
+    await sendTelegramMessage(text, { disableNotification: delivery?.payload?.severity === 'info' });
+    return { ok: true, method: 'telegram', channel: 'telegram_default' };
+  } catch (error) {
+    return { ok: false, method: 'telegram', channel: 'telegram_default', error: redactSecretText(error.message || String(error)) };
+  }
+}
+
+async function sendProactiveNotification(text, delivery) {
+  const plan = resolveProactiveDispatch(delivery, notificationRepository.listChannels(), process.env);
+  if (plan.kind === 'bark') return sendBarkNotification(text, delivery);
+  if (plan.kind === 'telegram') return sendTelegramNotification(text, delivery);
+  if (plan.kind === 'clawbot_weixin') return sendProactiveClawbotText(text);
+  return { ok: false, method: plan.kind, channel: plan.channelKey, error: `Unsupported notification channel: ${plan.type || plan.channelKey}` };
+}
+
+function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
+  const telegramReady = telegramConfigStatus(readTelegramConfig(telegramEnvFile)).configured;
+  const channels = channelKeys || [
+    'clawbot_weixin',
+    ...(resolveBarkConfig().configured ? ['bark_default'] : []),
+    ...(telegramReady ? ['telegram_default'] : []),
+  ];
+  const deliveries = channels.map((channelKey) => notificationQueue.enqueueProactive({
+    eventKey,
+    source,
+    severity,
+    title,
+    content,
+    text,
+    payload,
+    channelKey,
+  }));
+  setImmediate(() => notificationQueue.processDue().catch((error) => {
+    logStructured('warn', 'notification_queue_kick_failed', { error: redactSecretText(error.message || String(error)) });
+  }));
+  return {
+    ok: true,
+    queued: true,
+    mode: 'proactive',
+    deliveryId: deliveries[0]?.id || null,
+    deliveries: deliveries.map((delivery) => ({ id: delivery.id, channelKey: delivery.channelKey, status: delivery.status })),
+    status: deliveries[0]?.status || 'queued',
+  };
+}
+
+function scheduleNotificationQueue() {
+  if (notificationQueueTimer) clearInterval(notificationQueueTimer);
+  const scan = () => notificationQueue.processDue().catch((error) => {
+    logStructured('warn', 'notification_queue_scan_failed', { error: redactSecretText(error.message || String(error)) });
+  });
+  scan();
+  notificationQueueTimer = setInterval(scan, 30 * 1000);
+  notificationQueueTimer.unref?.();
 }
 
 async function postClawbotWebhook(text) {
@@ -7256,11 +7524,14 @@ async function processTaskReminders() {
       .sort((a, b) => a - b);
     const offset = dueOffsets[0];
     if (typeof offset !== 'number') continue;
-    const delivery = await sendClawbotPushText(buildTaskReminderText(task, offset, dueAtMs));
-    if (!delivery.ok) {
-      logStructured('warn', 'task_reminder_push_failed', { taskId: task.id, offset, error: redactSecretText(delivery.error || '') });
-      continue;
-    }
+    const delivery = queueProactiveNotification({
+      eventKey: `task-reminder:${task.id}:${offset}:${task.dueDate}`,
+      source: 'task',
+      title: `待办提醒：${task.title}`,
+      content: `待办提醒已进入微信主动推送队列，提前 ${offset} 分钟提醒。`,
+      text: buildTaskReminderText(task, offset, dueAtMs),
+      payload: { taskId: task.id, offset, dueDate: task.dueDate, dueTime: task.dueTime },
+    });
     const timestamp = nowISO();
     const nextOffsets = normalizeReminderSentOffsets([...sentOffsets, offset]);
     runSqlite(`UPDATE short_term_tasks
@@ -7270,7 +7541,7 @@ SET reminder_sent_offsets = ${sqlString(JSON.stringify(nextOffsets))},
 WHERE id = ${sqlValue(task.id)};`);
     tableChanged();
     sent += 1;
-    logStructured('info', 'task_reminder_pushed', { taskId: task.id, offset, method: delivery.method, messageId: delivery.messageId || null });
+    logStructured('info', 'task_reminder_queued', { taskId: task.id, offset, deliveryId: delivery.deliveryId });
   }
   return { ok: true, sent };
 }
@@ -7327,7 +7598,14 @@ async function handleClawbotApi(req, res) {
   if (requestUrl.pathname === '/api/clawbot/push-daily' && req.method === 'POST') {
     const date = normalizeClawbotDate(isObjectPayload(body) ? body.date : '');
     const digest = buildClawbotDailyDigest(date);
-    const delivery = await sendClawbotPushText(digest.text);
+    const delivery = queueProactiveNotification({
+      eventKey: `brief-manual-push:${date}:${Date.now()}`,
+      source: 'brief',
+      title: `${date} 每日简报主动推送`,
+      content: '每日简报已进入微信主动推送队列。',
+      text: digest.text,
+      payload: { date, trigger: 'clawbot_api' },
+    });
     writeAuditEvent({ action: 'clawbot_daily_push', req, actorRole: 'clawbot', detail: { date, ok: delivery.ok } });
     sendJson(res, { ok: delivery.ok, reply: digest.text, digest, delivery }, delivery.ok ? 200 : 502);
     return;
@@ -7342,6 +7620,224 @@ async function handleClawbotApi(req, res) {
   }
 
   sendJson(res, { ok: false, error: 'Not found' }, 404);
+}
+
+async function handleStudyPetApi(req, res) {
+  const requestUrl = new URL(req.url || '/', 'http://localhost');
+  const pathname = requestUrl.pathname;
+
+  if (pathname === '/api/study-pet/report' && req.method === 'POST') {
+    const access = validateStudyPetAccess(req);
+    if (!access.ok) {
+      sendJson(res, { ok: false, error: access.error }, access.status);
+      return;
+    }
+    ensureSqliteStore();
+    const report = studyPetRepository.saveDailyReport(await readJsonBody(req));
+    tableChanged();
+    sendJson(res, { ok: true, date: report.date, deviceId: report.deviceId });
+    return;
+  }
+
+  const sessionRole = getSessionRole(req.headers.cookie);
+  if (!sessionRole) {
+    sendJson(res, { error: 'Unauthorized' }, 401);
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    sendJson(res, { error: 'Not found' }, 404);
+    return;
+  }
+
+  ensureSqliteStore();
+
+  if (pathname === '/api/study-pet/today') {
+    const date = normalizeStudyPetDate(requestUrl.searchParams.get('date'), shanghaiTodayISO());
+    sendJson(res, {
+      generatedAt: nowISO(),
+      date,
+      timezone: 'Asia/Shanghai',
+      ...studyPetRepository.getTodayReport(date),
+      readOnly: sessionRole === 'read',
+    });
+    return;
+  }
+
+  if (pathname === '/api/study-pet/stats') {
+    const endDate = normalizeStudyPetDate(requestUrl.searchParams.get('endDate'), shanghaiTodayISO());
+    const startDate = normalizeStudyPetDate(requestUrl.searchParams.get('startDate'), addDaysISO(endDate, -6));
+    const limit = Number(requestUrl.searchParams.get('limit') || 30);
+    sendJson(res, {
+      generatedAt: nowISO(),
+      timezone: 'Asia/Shanghai',
+      startDate,
+      endDate,
+      daily: studyPetRepository.getStats(startDate, endDate),
+      siteUsage: studyPetRepository.getSiteUsage(startDate, endDate, { limit }),
+      readOnly: sessionRole === 'read',
+    });
+    return;
+  }
+
+  sendJson(res, { error: 'Not found' }, 404);
+}
+
+function telegramHelpText() {
+  return [
+    'Telegram 助手命令：',
+    '/today - 今日待办',
+    '/week - 本周待办',
+    '/todo 明天 15:30 高 背单词 - 创建待办',
+    '/brief - 最新简报',
+    '/health - 系统健康结论',
+    '/backup - 创建备份（二次确认）',
+    '/maintenance - SQLite 维护（二次确认）',
+    '/resendbrief - 重发最新简报（二次确认）',
+  ].join('\n');
+}
+
+function telegramCommandText(text = '') {
+  const value = String(text).trim();
+  if (/^\/(?:start|help)(?:@\w+)?$/i.test(value)) return '帮助';
+  if (/^\/today(?:@\w+)?$/i.test(value)) return '今日待办';
+  if (/^\/week(?:@\w+)?$/i.test(value)) return '本周待办';
+  if (/^\/brief(?:@\w+)?$/i.test(value)) return '每日简报';
+  const todo = value.match(/^\/todo(?:@\w+)?\s+(.+)$/is);
+  return todo ? `待办 ${todo[1]}` : value;
+}
+
+function telegramHealthText() {
+  const health = getHealthPayload();
+  const status = health.unified.status === 'normal' ? '正常' : health.unified.status === 'degraded' ? '降级' : '故障';
+  const actions = health.unified.actions.length ? health.unified.actions.map((item) => `- ${item.action}`).join('\n') : '无需处理';
+  return `系统健康：${status}\n${health.unified.summary}\n\n处理建议：\n${actions}`;
+}
+
+async function executeTelegramOps(action, req) {
+  if (action === 'backup') {
+    const backup = createBackupFile('telegram-manual', 'manual backup from Telegram');
+    writeAuditEvent({ action: 'telegram_backup', req, actorRole: 'telegram', detail: { createdAt: backup.createdAt } });
+    return `备份完成：${backup.createdAt}`;
+  }
+  if (action === 'maintenance') {
+    const result = await runSqliteMaintenance('telegram');
+    writeAuditEvent({ action: 'telegram_sqlite_maintenance', req, actorRole: 'telegram', detail: { ok: result.ok } });
+    return result.ok ? `SQLite 维护完成：${result.ranAt}` : `SQLite 维护失败：${result.error || '未知错误'}`;
+  }
+  if (action === 'resendbrief') {
+    const digest = buildClawbotDailyDigest(todayISO());
+    await sendTelegramMessage(digest.text);
+    writeAuditEvent({ action: 'telegram_brief_resend', req, actorRole: 'telegram', detail: { date: digest.date } });
+    return '最新简报已重发。';
+  }
+  return '未知运维操作。';
+}
+
+async function handleTelegramUpdate(update, req) {
+  const config = readTelegramConfig(telegramEnvFile);
+  const context = telegramUpdateContext(update);
+  if (!isTelegramAuthorized(context, config)) {
+    logStructured('warn', 'telegram_unauthorized_update', { userId: context.userId, chatId: context.chatId });
+    return;
+  }
+  if (context.callbackId) {
+    await telegramApi('answerCallbackQuery', { callback_query_id: context.callbackId }).catch(() => {});
+    const complete = context.callbackData.match(/^task:complete:(\d+)$/);
+    const delay = context.callbackData.match(/^task:delay:(\d+)$/);
+    const confirm = context.callbackData.match(/^ops:confirm:(backup|maintenance|resendbrief):([A-Za-z0-9_-]+)$/);
+    if (complete) {
+      const command = parseClawbotCommand(`完成 #${complete[1]}`, { today: todayISO() });
+      const result = await executeClawbotCommand(command, req);
+      await sendTelegramMessage(result.reply, { chatId: context.chatId });
+      return;
+    }
+    if (delay) {
+      const task = findClawbotTasks(`#${delay[1]}`)[0];
+      if (!task) return sendTelegramMessage('待办不存在或已完成。', { chatId: context.chatId });
+      const nextDate = addDaysISO(task.dueDate, 1);
+      runSqlite(`UPDATE short_term_tasks SET due_date = ${sqlString(nextDate)}, updated_at = ${sqlString(nowISO())} WHERE id = ${sqlValue(task.id)};`);
+      tableChanged();
+      writeAuditEvent({ action: 'telegram_task_delay', req, actorRole: 'telegram', detail: { id: task.id, dueDate: nextDate } });
+      await sendTelegramMessage(`已延期一天：#${task.id} ${task.title}｜${nextDate}`, { chatId: context.chatId });
+      return;
+    }
+    if (confirm) {
+      const pending = telegramOpsConfirmations.get(confirm[2]);
+      telegramOpsConfirmations.delete(confirm[2]);
+      if (!pending || pending.action !== confirm[1] || pending.userId !== context.userId || pending.expiresAt < Date.now()) {
+        await sendTelegramMessage('确认已失效，请重新发送运维命令。', { chatId: context.chatId });
+        return;
+      }
+      await sendTelegramMessage(await executeTelegramOps(confirm[1], req), { chatId: context.chatId });
+      return;
+    }
+    if (context.callbackData === 'ops:cancel') await sendTelegramMessage('已取消。', { chatId: context.chatId });
+    return;
+  }
+
+  const raw = String(context.text || '').trim();
+  if (!raw) return;
+  if (/^\/health(?:@\w+)?$/i.test(raw)) return sendTelegramMessage(telegramHealthText(), { chatId: context.chatId });
+  const ops = raw.match(/^\/(backup|maintenance|resendbrief)(?:@\w+)?$/i);
+  if (ops) {
+    const action = ops[1].toLowerCase();
+    const token = randomBytes(9).toString('base64url');
+    telegramOpsConfirmations.set(token, { action, userId: context.userId, expiresAt: Date.now() + 5 * 60_000 });
+    return sendTelegramMessage(`即将执行：${action}。确认按钮 5 分钟内有效且只能使用一次。`, { chatId: context.chatId, replyMarkup: telegramConfirmKeyboard(action, token) });
+  }
+  if (/^\/(?:start|help)(?:@\w+)?$/i.test(raw)) return sendTelegramMessage(telegramHelpText(), { chatId: context.chatId });
+
+  const command = parseClawbotCommand(telegramCommandText(raw), { today: todayISO() });
+  const result = await executeClawbotCommand(command, req);
+  const tasks = result.tasks || (result.task && !result.task.isCompleted ? [result.task] : []);
+  await sendTelegramMessage(result.reply, { chatId: context.chatId, replyMarkup: tasks.length ? telegramTaskKeyboard(tasks) : undefined });
+}
+
+async function handleTelegramWebhook(req, res) {
+  const config = readTelegramConfig(telegramEnvFile);
+  if (!config.TELEGRAM_WEBHOOK_SECRET || req.headers['x-telegram-bot-api-secret-token'] !== config.TELEGRAM_WEBHOOK_SECRET) {
+    sendJson(res, { ok: false }, 403);
+    return;
+  }
+  const update = await readJsonBody(req);
+  await handleTelegramUpdate(update, req);
+  sendJson(res, { ok: true });
+}
+
+function saveTelegramSettings(input = {}) {
+  const current = readTelegramConfig(telegramEnvFile);
+  const webhookUrl = String(input.webhookUrl || '').trim();
+  if (webhookUrl && !/^https:\/\//i.test(webhookUrl)) {
+    const error = new Error('Telegram Webhook 必须使用 HTTPS');
+    error.statusCode = 400;
+    throw error;
+  }
+  const config = saveTelegramConfig(telegramEnvFile, current, input);
+  applyTelegramProcessEnv(config);
+  return telegramConfigStatus(config);
+}
+
+async function registerTelegramWebhook() {
+  const config = readTelegramConfig(telegramEnvFile);
+  const status = telegramConfigStatus(config);
+  if (!status.configured || !config.TELEGRAM_WEBHOOK_URL || !config.TELEGRAM_WEBHOOK_SECRET) throw new Error('请先配置 Token、Chat ID、授权用户和 Webhook URL');
+  const url = `${config.TELEGRAM_WEBHOOK_URL.replace(/\/+$/, '')}/api/telegram/webhook`;
+  await telegramApi('setWebhook', {
+    url,
+    secret_token: config.TELEGRAM_WEBHOOK_SECRET,
+    allowed_updates: ['message', 'callback_query'],
+    drop_pending_updates: false,
+  }, { config });
+  await telegramApi('setMyCommands', { commands: [
+    { command: 'today', description: '查看今日待办' },
+    { command: 'week', description: '查看本周待办' },
+    { command: 'brief', description: '查看最新简报' },
+    { command: 'health', description: '查看系统健康' },
+    { command: 'backup', description: '创建服务器备份' },
+    { command: 'maintenance', description: '执行 SQLite 维护' },
+  ] }, { config });
+  return { ...status, registered: true, bot: await telegramApi('getMe', {}, { config }) };
 }
 
 function sendHtml(res, html, status = 200) {
@@ -7422,6 +7918,56 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url?.startsWith('/api/confusing-words/backup/versions')) {
+    const requestUrl = new URL(req.url, 'http://localhost');
+    const body = req.method === 'POST' ? await readJsonBody(req) : {};
+    const sessionRole = getSessionRole(req.headers.cookie);
+    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
+    if (!hasBackupAccess) {
+      sendJson(res, { error: 'Unauthorized' }, 401);
+      return;
+    }
+    const parts = requestUrl.pathname.split('/').filter(Boolean);
+    const versionId = Number(parts[4] || 0);
+    if (req.method === 'GET' && versionId) {
+      const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
+      if (!rows[0]?.payloadJson) {
+        sendJson(res, { error: 'Version not found' }, 404);
+        return;
+      }
+      sendJson(res, JSON.parse(rows[0].payloadJson));
+      return;
+    }
+    if (req.method === 'GET') {
+      sendJson(res, { items: listConfusingWordsBackupVersions(Number(requestUrl.searchParams.get('limit') || 24)) });
+      return;
+    }
+  }
+
+  if (req.url === '/api/confusing-words/backup/restore' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const sessionRole = getSessionRole(req.headers.cookie);
+    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
+    if (!hasBackupAccess) {
+      sendJson(res, { error: 'Unauthorized' }, 401);
+      return;
+    }
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read only mode' }, 403);
+      return;
+    }
+    const versionId = Number(body.versionId || 0);
+    const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
+    if (!rows[0]?.payloadJson) {
+      sendJson(res, { error: 'Version not found' }, 404);
+      return;
+    }
+    const restored = normalizeConfusingWordsPayload(JSON.parse(rows[0].payloadJson), nowISO());
+    const result = saveConfusingWordsBackupPayload({ ...restored, backedUpAt: nowISO() }, 'restore');
+    sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
+    return;
+  }
+
   if (req.url === '/api/confusing-words/backup') {
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
     const sessionRole = getSessionRole(req.headers.cookie);
@@ -7441,20 +7987,36 @@ async function handleApi(req, res) {
     }
     if (req.method === 'POST') {
       const timestamp = nowISO();
-      state.confusingWordsBackup = {
-        schemaVersion: Number(body.schemaVersion || 1),
-        exportedAt: body.exportedAt || timestamp,
-        backedUpAt: timestamp,
-        groups: Array.isArray(body.groups) ? body.groups : [],
-      };
-      writeState(state);
-      sendJson(res, { ok: true, backedUpAt: timestamp });
+      const currentSummary = summarizeConfusingWordsPayload(state.confusingWordsBackup || {});
+      const nextPayload = normalizeConfusingWordsPayload({ ...body, backedUpAt: timestamp }, timestamp);
+      const nextSummary = summarizeConfusingWordsPayload(nextPayload);
+      if (!body.force && currentSummary.wordCount > nextSummary.wordCount && currentSummary.wordCount - nextSummary.wordCount >= 3) {
+        sendJson(res, {
+          error: 'Refusing to overwrite larger server backup without force',
+          conflict: true,
+          server: currentSummary,
+          incoming: nextSummary,
+        }, 409);
+        return;
+      }
+      const result = saveConfusingWordsBackupPayload(nextPayload, body.source || 'sync');
+      sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
       return;
     }
   }
 
+  if (req.url?.startsWith('/api/study-pet/')) {
+    await handleStudyPetApi(req, res);
+    return;
+  }
+
   if (req.url?.startsWith('/api/clawbot/')) {
     await handleClawbotApi(req, res);
+    return;
+  }
+
+  if (req.url === '/api/telegram/webhook' && req.method === 'POST') {
+    await handleTelegramWebhook(req, res);
     return;
   }
 
@@ -7468,56 +8030,74 @@ async function handleApi(req, res) {
     return;
   }
 
-  if (req.url?.startsWith('/api/finance-public/') && req.method === 'GET') {
-    const requestUrl = new URL(req.url, 'http://localhost');
-    if (requestUrl.pathname === '/api/finance-public/fund') {
-      sendJson(res, await getPublicFundQuote(requestUrl.searchParams.get('code') || '', requestUrl.searchParams.get('date') || '', requestUrl.searchParams.get('profile') === '1'));
-      return;
-    }
-    if (requestUrl.pathname === '/api/finance-public/usd-cny') {
-      sendJson(res, await getPublicUsdCnyQuote());
-      return;
-    }
-    if (requestUrl.pathname === '/api/finance-public/stablecoin-rates') {
-      sendJson(res, await getPublicStablecoinRates());
-      return;
-    }
-  }
-
-  if (req.url === '/api/finance-vault' && req.method === 'GET') {
+  if (req.url === '/api/settings/mihomo' && req.method === 'GET') {
     if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
       return;
     }
-    sendJson(res, getFinanceVaultPayload());
+    sendJson(res, await getMihomoSettings());
     return;
   }
 
-  if (req.url === '/api/finance-vault' && req.method === 'POST') {
+  if (req.url === '/api/settings/mihomo/subscription' && req.method === 'POST') {
     if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
       return;
     }
     const body = await readJsonBody(req);
-    const saved = saveFinanceVaultPayload(body.vault, body.deviceId);
-    writeAuditEvent({ action: 'finance_vault_save', req, actorRole: sessionRole, detail: { byteSize: saved.meta?.byteSize ?? 0 } });
-    sendJson(res, saved);
+    const result = await saveMihomoSubscriptionSettings(body);
+    writeAuditEvent({
+      action: 'mihomo_subscription_save',
+      req,
+      actorRole: sessionRole,
+      detail: { subscriptionConfigured: result.subscriptionConfigured, nodeCount: result.nodes.length, restarted: result.restarted },
+    });
+    sendJson(res, result);
     return;
   }
 
-  if (req.url === '/api/finance-vault' && req.method === 'DELETE') {
+  if (req.url === '/api/settings/mihomo/import' && req.method === 'POST') {
     if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Finance vault sync requires write session' }, 403);
+      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
       return;
     }
-    const result = deleteFinanceVaultPayload();
-    writeAuditEvent({ action: 'finance_vault_delete', req, actorRole: sessionRole });
+    const body = await readJsonBody(req);
+    const result = await importMihomoProviderSettings(body);
+    writeAuditEvent({
+      action: 'mihomo_provider_import',
+      req,
+      actorRole: sessionRole,
+      detail: { nodeCount: result.nodes.length, restarted: result.restarted },
+    });
+    sendJson(res, result);
+    return;
+  }
+
+  if (req.url === '/api/settings/mihomo/select' && req.method === 'POST') {
+    if (sessionRole !== 'write') {
+      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const result = await selectMihomoProxy(body);
+    writeAuditEvent({ action: 'mihomo_proxy_select', req, actorRole: sessionRole, detail: { selected: result.selected } });
+    sendJson(res, result);
+    return;
+  }
+
+  if (req.url === '/api/settings/mihomo/test' && req.method === 'POST') {
+    if (sessionRole !== 'write') {
+      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
+      return;
+    }
+    const result = await testMihomoProxy();
+    writeAuditEvent({ action: 'mihomo_proxy_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
     sendJson(res, result);
     return;
   }
 
   if (req.url === '/api/backups/status' && req.method === 'GET') {
-    sendJson(res, getBackupStatus());
+    sendJson(res, getBackupStatus({ verifyLatest: true }));
     return;
   }
 
@@ -7578,6 +8158,17 @@ async function handleApi(req, res) {
     return;
   }
 
+  if (req.url === '/api/notifications/retry-delivery' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    notificationRepository.requeueDelivery(body.id);
+    setImmediate(() => notificationQueue.processDue().catch((error) => {
+      logStructured('warn', 'notification_retry_kick_failed', { error: redactSecretText(error.message || String(error)) });
+    }));
+    writeAuditEvent({ action: 'notification_delivery_retry', req, actorRole: sessionRole, detail: { id: Number(body.id || 0) } });
+    sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
   if (req.url === '/api/notifications/wechat/test' && req.method === 'POST') {
     if (sessionRole === 'read') {
       sendJson(res, { error: 'Read-only mode' }, 403);
@@ -7586,17 +8177,72 @@ async function handleApi(req, res) {
     const body = await readJsonBody(req);
     const digest = buildClawbotDailyDigest(todayISO());
     const message = String(body.message || digest.text);
-    const delivery = await sendClawbotPushText(message);
+    const delivery = queueProactiveNotification({
+      eventKey: `clawbot:test:${Date.now()}`,
+      source: 'clawbot',
+      title: '微信 ClawBot 测试推送',
+      content: '测试消息已进入主动推送队列。',
+      text: message,
+      payload: { requestedBy: sessionRole },
+      channelKeys: ['clawbot_weixin'],
+    });
     notifyEvent({
       eventKey: `clawbot:test:${todayISO()}`,
       source: 'clawbot',
-      severity: delivery.ok ? 'info' : 'warning',
+      severity: 'info',
       title: '微信 ClawBot 测试推送',
-      content: delivery.ok ? '通知中心已通过微信 ClawBot 发出测试消息。' : `微信 ClawBot 测试推送失败：${delivery.error || '未知错误'}`,
-      payload: { ok: delivery.ok, method: delivery.method, messageId: delivery.messageId || null },
+      content: '测试消息已进入主动推送队列；发送失败时将自动重试并在站内兜底。',
+      payload: { ok: true, queued: true, deliveryId: delivery.deliveryId, notificationMode: 'proactive' },
     });
-    writeAuditEvent({ action: 'notifications_wechat_test', req, actorRole: sessionRole, detail: { ok: delivery.ok, method: delivery.method } });
-    sendJson(res, { ok: delivery.ok, digest, delivery, center: getNotificationCenterPayload(sessionRole) }, delivery.ok ? 200 : 502);
+    writeAuditEvent({ action: 'notifications_wechat_test', req, actorRole: sessionRole, detail: { ok: true, queued: true, deliveryId: delivery.deliveryId } });
+    sendJson(res, { ok: true, digest, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
+    return;
+  }
+
+  if (req.url === '/api/notifications/bark/test' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    if (!resolveBarkConfig().configured) {
+      sendJson(res, { error: 'Bark is not configured' }, 409);
+      return;
+    }
+    const body = await readJsonBody(req);
+    const message = String(body.message || 'Bark 通知通道已接入 Exam Planner。');
+    const delivery = queueProactiveNotification({
+      eventKey: `bark:test:${Date.now()}`,
+      source: 'test',
+      title: 'Exam Planner Bark 测试',
+      content: 'Bark 测试消息已进入主动推送队列。',
+      text: message,
+      payload: { requestedBy: sessionRole },
+      channelKeys: ['bark_default'],
+    });
+    writeAuditEvent({ action: 'notifications_bark_test', req, actorRole: sessionRole, detail: { queued: true, deliveryId: delivery.deliveryId } });
+    sendJson(res, { ok: true, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/settings' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const telegram = saveTelegramSettings(body);
+    writeAuditEvent({ action: 'notifications_telegram_settings', req, actorRole: sessionRole, detail: { configured: telegram.configured, webhookConfigured: telegram.webhookConfigured } });
+    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/register' && req.method === 'POST') {
+    const telegram = await registerTelegramWebhook();
+    writeAuditEvent({ action: 'notifications_telegram_register', req, actorRole: sessionRole, detail: { registered: true } });
+    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
+    return;
+  }
+
+  if (req.url === '/api/notifications/telegram/test' && req.method === 'POST') {
+    const result = await sendTelegramNotification('Telegram 通知通道已接入 Exam Planner。', { payload: { severity: 'info' } });
+    writeAuditEvent({ action: 'notifications_telegram_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
+    sendJson(res, { ok: result.ok, result, center: getNotificationCenterPayload(sessionRole) }, result.ok ? 200 : 502);
     return;
   }
 
@@ -8193,6 +8839,7 @@ function shutdown(signal) {
   logStructured('info', 'server_shutdown_started', { signal });
   if (dailyBriefTimer) clearTimeout(dailyBriefTimer);
   if (taskReminderTimer) clearInterval(taskReminderTimer);
+  if (notificationQueueTimer) clearInterval(notificationQueueTimer);
   httpServer.close(() => {
     logStructured('info', 'server_shutdown_completed', { signal });
     process.exit(0);

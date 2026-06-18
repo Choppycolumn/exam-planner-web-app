@@ -5,24 +5,63 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 };
 
+type PwaInstallState = {
+  canInstall: boolean;
+  installed: boolean;
+  secureContext: boolean;
+};
+
+let installPrompt: BeforeInstallPromptEvent | null = null;
+let installed = false;
+let initialized = false;
+const listeners = new Set<() => void>();
+
+function getInstalledState() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)').matches ?? false;
+}
+
+function getSnapshot(): PwaInstallState {
+  return {
+    canInstall: Boolean(installPrompt),
+    installed: installed || getInstalledState(),
+    secureContext: typeof window !== 'undefined' ? window.isSecureContext : false,
+  };
+}
+
+function notifyListeners() {
+  listeners.forEach((listener) => listener());
+}
+
+export function initPwaInstallPrompt() {
+  if (typeof window === 'undefined' || initialized) return;
+  initialized = true;
+  installed = getInstalledState();
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    event.preventDefault();
+    installPrompt = event as BeforeInstallPromptEvent;
+    installed = false;
+    notifyListeners();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    installed = true;
+    installPrompt = null;
+    notifyListeners();
+  });
+}
+
 export function usePwaInstall() {
-  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [installed, setInstalled] = useState(() => window.matchMedia?.('(display-mode: standalone)').matches ?? false);
+  const [state, setState] = useState<PwaInstallState>(() => getSnapshot());
 
   useEffect(() => {
-    const handleBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault();
-      setInstallPrompt(event as BeforeInstallPromptEvent);
-    };
-    const handleInstalled = () => {
-      setInstalled(true);
-      setInstallPrompt(null);
-    };
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleInstalled);
+    initPwaInstallPrompt();
+    const listener = () => setState(getSnapshot());
+    listeners.add(listener);
+    listener();
     return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleInstalled);
+      listeners.delete(listener);
     };
   }, []);
 
@@ -31,17 +70,16 @@ export function usePwaInstall() {
     await installPrompt.prompt();
     const choice = await installPrompt.userChoice;
     if (choice.outcome === 'accepted') {
-      setInstalled(true);
-      setInstallPrompt(null);
+      installed = true;
+      installPrompt = null;
+      notifyListeners();
       return true;
     }
     return false;
   };
 
   return {
-    canInstall: Boolean(installPrompt),
-    installed,
+    ...state,
     install,
-    secureContext: window.isSecureContext,
   };
 }

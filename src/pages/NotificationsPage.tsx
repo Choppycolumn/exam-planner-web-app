@@ -18,6 +18,7 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
   const weather = brief.payload.weather;
   const learning = brief.payload.learning;
   const markets = brief.payload.markets ?? [];
+  const indexAssessment = brief.payload.indexPurchaseAssessment;
 
   return (
     <section className="card p-5">
@@ -89,6 +90,35 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
           </div>
         </div>
       </div>
+
+      {indexAssessment?.items?.length ? (
+        <div className="mt-5">
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900"><TrendingUp size={16} />美股指数定投评估</h3>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{indexAssessment.methodology}</p>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {indexAssessment.items.map((item) => (
+              <div key={item.symbol} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">{item.name}</p>
+                    <p className="mt-1 text-xs text-slate-500">{item.symbol} · {item.asOf || '数据日期未知'}</p>
+                  </div>
+                  <span className="rounded bg-white px-2 py-1 text-xs font-semibold text-blue-700">{item.ok ? item.signal : '评估失败'}</span>
+                </div>
+                {item.ok ? (
+                  <>
+                    <p className="mt-3 text-sm text-slate-700">PE {item.pe}，近 5 年百分位 {item.pePercentile5}%，近 10 年百分位 {item.pePercentile10}%</p>
+                    <p className="mt-1 text-sm text-slate-700">距 50/200 日均线 {item.sma50Margin}% / {item.sma200Margin}%</p>
+                    <p className="mt-2 text-xs font-semibold text-blue-700">定投强度参考：{item.intensity}</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">{item.reasons?.join('；') || '指标处于中性区间'}</p>
+                  </>
+                ) : <p className="mt-3 text-sm text-rose-600">{item.error}</p>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">{indexAssessment.disclaimer}</p>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -99,7 +129,7 @@ function severityClass(severity: string) {
   return 'border-blue-100 bg-blue-50 text-blue-700';
 }
 
-function NotificationEventRow({ event, readOnly, onAck }: { event: NotificationEvent; readOnly?: boolean; onAck: (id: number) => void }) {
+function NotificationEventRow({ event, onAck, readOnly }: { event: NotificationEvent; onAck: (id: number) => void; readOnly?: boolean }) {
   return (
     <div className={`rounded-lg border p-3 ${severityClass(event.severity)}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -108,11 +138,12 @@ function NotificationEventRow({ event, readOnly, onAck }: { event: NotificationE
           <p className="mt-1 line-clamp-2 text-xs opacity-80">{event.content}</p>
           <p className="mt-2 text-xs opacity-70">{event.source} · {new Date(event.createdAt).toLocaleString()}</p>
         </div>
-        {event.status !== 'acknowledged' ? (
-          <button className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-white" disabled={readOnly} onClick={() => onAck(event.id)}>
-            知道了
-          </button>
-        ) : <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">已确认</span>}
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold opacity-70">
+            {event.severity === 'critical' ? '严重' : event.severity === 'warning' ? '预警' : '通知'}
+          </span>
+          <button className="rounded bg-white/70 px-2 py-1 text-xs font-semibold" disabled={readOnly} onClick={() => onAck(event.id)}>已处理</button>
+        </div>
       </div>
     </div>
   );
@@ -133,8 +164,12 @@ export function NotificationsPage() {
   const [toast, setToast] = useState('');
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<'all' | 'sent' | 'unsent' | 'failed'>('all');
-  const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'acknowledged'>('open');
+  const [eventFilter, setEventFilter] = useState<'all' | 'warning' | 'critical'>('all');
   const [search, setSearch] = useState('');
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [telegramUserId, setTelegramUserId] = useState('');
+  const [telegramWebhookUrl, setTelegramWebhookUrl] = useState('');
   const { data: notificationData } = useQuery({
     queryKey: queryKeys.notifications(eventFilter),
     queryFn: () => serverApi.getNotificationCenter(eventFilter),
@@ -168,19 +203,6 @@ export function NotificationsPage() {
     setSelectedId(preferred?.id ?? result.briefs[0]?.id ?? null);
   };
 
-  const acknowledgeEvent = async (id: number) => {
-    if (readOnly) return;
-    try {
-      const result = await serverApi.acknowledgeNotification(id);
-      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
-      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
-      setToast('通知已确认');
-    } catch {
-      setToast('通知确认失败');
-    } finally {
-      window.setTimeout(() => setToast(''), 2200);
-    }
-  };
 
   const generate = async (sendEmail = false, sendWechat = false) => {
     if (readOnly) return;
@@ -210,6 +232,93 @@ export function NotificationsPage() {
     } finally {
       setLoading(false);
       window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const acknowledgeEvent = async (id: number) => {
+    if (readOnly) return;
+    const result = await serverApi.acknowledgeNotification(id);
+    queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+  };
+
+  const retryDelivery = async (id: number) => {
+    if (readOnly) return;
+    const result = await serverApi.retryNotificationDelivery(id);
+    queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+    queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+    setToast('失败通知已重新投递');
+    window.setTimeout(() => setToast(''), 2200);
+  };
+
+  const testBarkPush = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.testBarkNotification();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast('Bark 测试通知已进入发送队列');
+    } catch {
+      setToast('Bark 测试通知失败，请检查服务器配置');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const saveTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.saveTelegramSettings({
+        botToken: telegramToken,
+        chatId: telegramChatId,
+        allowedUserId: telegramUserId,
+        webhookUrl: telegramWebhookUrl || window.location.origin,
+      });
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setTelegramToken('');
+      setTelegramChatId('');
+      setTelegramUserId('');
+      setToast('Telegram 安全配置已保存');
+    } catch {
+      setToast('Telegram 配置保存失败');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2200);
+    }
+  };
+
+  const registerTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.registerTelegramWebhook();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(eventFilter) });
+      setToast('Telegram Webhook 与命令菜单已注册');
+    } catch {
+      setToast('Telegram 注册失败，请检查 Token、用户 ID 和代理');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2600);
+    }
+  };
+
+  const testTelegram = async () => {
+    if (readOnly) return;
+    setLoading(true);
+    try {
+      const result = await serverApi.testTelegramNotification();
+      queryClient.setQueryData(queryKeys.notifications('all'), result.center);
+      setToast('Telegram 测试消息已发送');
+    } catch {
+      setToast('Telegram 测试失败，请检查配置和代理');
+    } finally {
+      setLoading(false);
+      window.setTimeout(() => setToast(''), 2400);
     }
   };
 
@@ -246,6 +355,10 @@ export function NotificationsPage() {
   };
   const wechat = notificationData?.wechatClawbot;
   const wechatReady = Boolean(wechat?.enabled && wechat.configured);
+  const bark = notificationData?.bark;
+  const barkReady = Boolean(bark?.enabled && bark.configured);
+  const telegram = notificationData?.telegram;
+  const telegramReady = Boolean(telegram?.configured && telegram.webhookConfigured);
 
   return (
     <Page title="通知中心" subtitle="每天早上聚合天气、指数涨跌和学习提醒，支持邮件与微信 ClawBot 推送。">
@@ -273,7 +386,7 @@ export function NotificationsPage() {
           <p className="mt-1 text-2xl font-semibold text-slate-950">{notificationData?.metrics.total ?? 0}</p>
         </div>
         <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700">
-          <p className="text-xs font-semibold opacity-80">未确认</p>
+          <p className="text-xs font-semibold opacity-80">最近 7 天</p>
           <p className="mt-1 text-2xl font-semibold">{notificationData?.metrics.open ?? 0}</p>
         </div>
         <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700">
@@ -294,14 +407,14 @@ export function NotificationsPage() {
               <p className="mt-1 text-sm text-slate-500">日报、报告、任务失败、磁盘预警和慢接口会进入统一通知模型。</p>
             </div>
             <div className="flex gap-2">
-              {(['open', 'all', 'acknowledged'] as const).map((item) => (
+              {(['all', 'warning', 'critical'] as const).map((item) => (
                 <button
                   key={item}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${eventFilter === item ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600'}`}
                   type="button"
                   onClick={() => setEventFilter(item)}
                 >
-                  {item === 'open' ? '未确认' : item === 'acknowledged' ? '已确认' : '全部'}
+                  {item === 'warning' ? '预警' : item === 'critical' ? '严重' : '全部'}
                 </button>
               ))}
             </div>
@@ -311,6 +424,19 @@ export function NotificationsPage() {
               <NotificationEventRow key={event.id} event={event} readOnly={readOnly} onAck={(id) => void acknowledgeEvent(id)} />
             )) : <EmptyState title="暂无通知事件" description="日报、报告或系统预警生成后会出现在这里。" />}
           </div>
+          {notificationData?.deliveries?.some((delivery) => delivery.status === 'failed') ? (
+            <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50 p-3">
+              <p className="text-sm font-semibold text-amber-800">失败投递</p>
+              <div className="mt-2 space-y-2">
+                {notificationData.deliveries.filter((delivery) => delivery.status === 'failed').slice(0, 5).map((delivery) => (
+                  <div key={delivery.id} className="flex items-center justify-between gap-3 rounded bg-white/80 px-3 py-2 text-xs text-amber-800">
+                    <span>{delivery.channelKey} · {delivery.error || '发送失败'}</span>
+                    <button className="rounded border border-amber-200 bg-white px-2 py-1 font-semibold" disabled={readOnly} onClick={() => void retryDelivery(delivery.id)}>重新投递</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="card p-5">
@@ -337,11 +463,48 @@ export function NotificationsPage() {
               </button>
             </div>
           </div>
+          <div className={`mt-3 rounded-lg border p-3 ${barkReady ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold"><BellRing size={16} />Bark iOS</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {barkReady ? `已连接 ${bark?.serverUrl}，与微信并行推送` : '服务器尚未配置 Bark Device Key'}
+                </p>
+              </div>
+              <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{barkReady ? '运行中' : '未配置'}</span>
+            </div>
+            <div className="mt-3">
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold transition hover:bg-white" disabled={readOnly || loading || !barkReady} onClick={() => void testBarkPush()}>
+                <BellRing size={14} />立即测试
+              </button>
+            </div>
+          </div>
+          <div className={`mt-3 rounded-lg border p-3 ${telegramReady ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-blue-100 bg-blue-50 text-blue-800'}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold"><Send size={16} />Telegram Bot</p>
+                <p className="mt-1 text-xs opacity-80">
+                  {telegramReady ? '通知、待办助手与受限运维控制台已就绪' : '配置 Token、Chat ID 与授权用户后注册 Webhook'}
+                </p>
+              </div>
+              <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{telegramReady ? '运行中' : '待配置'}</span>
+            </div>
+            <div className="mt-3 grid gap-2">
+              <input className="input text-xs" type="password" value={telegramToken} onChange={(event) => setTelegramToken(event.target.value)} placeholder={telegram?.tokenConfigured ? `Bot Token 已配置，尾号 ${telegram.tokenLast4}` : 'Bot Token'} />
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input className="input text-xs" value={telegramChatId} onChange={(event) => setTelegramChatId(event.target.value)} placeholder={telegram?.chatIdConfigured ? `Chat ID 已配置，尾号 ${telegram.chatIdLast4}` : 'Chat ID'} />
+                <input className="input text-xs" value={telegramUserId} onChange={(event) => setTelegramUserId(event.target.value)} placeholder={telegram?.allowedUserIdConfigured ? `授权用户已配置，尾号 ${telegram.allowedUserIdLast4}` : '授权用户 ID'} />
+              </div>
+              <input className="input text-xs" value={telegramWebhookUrl} onChange={(event) => setTelegramWebhookUrl(event.target.value)} placeholder={telegram?.webhookUrl || window.location.origin} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading} onClick={() => void saveTelegram()}>保存配置</button>
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading || !telegram?.configured} onClick={() => void registerTelegram()}>注册 Webhook</button>
+              <button className="rounded-lg border border-white/70 bg-white/80 px-3 py-2 text-xs font-semibold" disabled={readOnly || loading || !telegram?.configured} onClick={() => void testTelegram()}>立即测试</button>
+            </div>
+          </div>
           <div className="mt-4 space-y-2">
             {(notificationData?.channels ?? []).map((channel) => <ChannelBadge key={channel.channelKey} channel={channel} />)}
-          </div>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-600">
-            Telegram 需要 `TELEGRAM_BOT_TOKEN` 和 `TELEGRAM_CHAT_ID`；企业微信/微信中转建议先走 `WECOM_WEBHOOK_URL` 或通用 `NOTIFICATION_WEBHOOK_URL`。
           </div>
         </section>
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Cpu, Flag, Home, Languages, LibraryBig, Moon, Settings, Sun, TrendingUp, WalletCards } from 'lucide-react';
+import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LibraryBig, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -7,8 +7,10 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 import { preloadSecondaryRoutes } from '../router/preload';
 import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme';
+import { usePwaInstall } from '../hooks/usePwaInstall';
 
 const navItems = [
+  { to: '/study-pet-stats', label: '桌宠统计', icon: Activity },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
@@ -16,19 +18,18 @@ const navItems = [
   { to: '/progress', label: '学习进度', icon: TrendingUp },
   { to: '/project-progress', label: '项目进展', icon: BriefcaseBusiness },
   { to: '/goal-review', label: '目标复盘', icon: Flag },
-  { to: '/finance', label: '理财', icon: WalletCards },
   { to: '/notifications', label: '通知中心', icon: Bell },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/library', label: '资料图书馆', icon: LibraryBig },
   { to: '/settings', label: '设置', icon: Settings },
-  { to: '/task-center', label: '任务中心', icon: Cpu },
-  { to: '/operations', label: '运维观察', icon: Activity },
+  { to: '/operations', label: '运维与健康', icon: ShieldCheck },
 ];
 
 export function Layout() {
   const { activeGoal, readOnly } = useDashboardData();
   const { online } = useNetworkStatus();
+  const { canInstall, installed, install } = usePwaInstall();
   const location = useLocation();
   const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
 
@@ -71,6 +72,11 @@ export function Layout() {
             </div>
             <div className="flex items-center gap-2">
               {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
+              {canInstall && !installed ? (
+                <button className="btn btn-soft h-10 w-10 px-0" type="button" onClick={() => void install()} aria-label="安装到桌面" title="安装到桌面">
+                  <Download size={17} />
+                </button>
+              ) : null}
               <button
                 className="btn btn-soft h-10 w-10 px-0"
                 type="button"
