@@ -10,6 +10,7 @@ import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme'
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
 const navItems = [
+  { to: '/study-pet-stats', label: '桌宠统计', icon: Activity },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },

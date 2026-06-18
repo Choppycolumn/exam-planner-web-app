@@ -15,6 +15,7 @@
 - Projects：`/api/projects*`
 - Subjects：`/api/subjects*`
 - Study records：`/api/study-records*`
+- Study pet：`/api/study-pet/report`、`/api/study-pet/today`、`/api/study-pet/stats`
 - Reviews：`/api/reviews*`
 - Mock exams：`/api/mock-exams*`、`/api/exams/save`
 - Tasks：`/api/tasks*`

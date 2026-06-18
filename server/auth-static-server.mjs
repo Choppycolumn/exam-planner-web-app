@@ -23,6 +23,7 @@ import { createCalendarRepository } from './modules/calendar-repository.mjs';
 import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
 import { runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
+import { createStudyPetRepository } from './modules/study-pet-repository.mjs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -38,6 +39,8 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
+const sqliteCommand = process.env.SQLITE3_BIN || 'sqlite3';
+const sqliteUseShell = process.env.SQLITE3_USE_SHELL === '1';
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
@@ -52,6 +55,7 @@ const corsOrigin = process.env.CORS_ORIGIN || '*';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const clawbotSecret = process.env.CLAWBOT_SECRET || '';
 const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
+const studyPetApiToken = process.env.STUDY_PET_API_TOKEN || '';
 const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
 const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
 const openClawNpmProjectsDir = process.env.OPENCLAW_NPM_PROJECTS_DIR || '/root/.openclaw/npm/projects';
@@ -69,7 +73,7 @@ const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
-const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
+const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir, sqliteCommand, sqliteUseShell });
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
 const externalApiClient = createExternalApiClient();
@@ -82,6 +86,7 @@ const notificationQueue = createNotificationQueue({
 });
 const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
+const studyPetRepository = createStudyPetRepository(sqliteRepository);
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -144,6 +149,21 @@ function localDateISO(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function dateISOInTimeZone(date = new Date(), timeZone = 'Asia/Shanghai') {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function shanghaiTodayISO() {
+  return dateISOInTimeZone(new Date(), 'Asia/Shanghai');
 }
 
 function todayISO() {
@@ -325,10 +345,11 @@ function sqlValue(value) {
 
 function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  const result = spawnSync('sqlite3', [databaseFile], {
+  const result = spawnSync(sqliteCommand, [databaseFile], {
     input: script,
     encoding: 'utf8',
     maxBuffer,
+    shell: sqliteUseShell,
   });
   if (result.error) {
     throw result.error;
@@ -4481,7 +4502,7 @@ function ensureSqliteStore() {
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
   mkdirSync(libraryFilesDir, { recursive: true });
-  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
+  const versionCheck = spawnSync(sqliteCommand, ['--version'], { encoding: 'utf8', shell: sqliteUseShell });
   if (versionCheck.error || versionCheck.status !== 0) {
     throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
   }
@@ -6697,6 +6718,26 @@ function validateClawbotAccess(req, requestUrl, body = {}) {
   return { ok: true };
 }
 
+function bearerToken(req) {
+  const auth = headerString(req, 'authorization');
+  return auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || '';
+}
+
+function validateStudyPetAccess(req) {
+  if (!studyPetApiToken) {
+    return { ok: false, status: 503, error: 'Study pet API is disabled. Set STUDY_PET_API_TOKEN first.' };
+  }
+  if (!safeSecretEqual(bearerToken(req), studyPetApiToken)) {
+    return { ok: false, status: 401, error: 'Unauthorized' };
+  }
+  return { ok: true };
+}
+
+function normalizeStudyPetDate(value, fallback = shanghaiTodayISO()) {
+  const date = String(value || fallback).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : fallback;
+}
+
 function extractClawbotMessage(body, requestUrl) {
   const queryMessage = requestUrl.searchParams.get('text') || requestUrl.searchParams.get('message') || '';
   if (queryMessage) return queryMessage;
@@ -7581,6 +7622,67 @@ async function handleClawbotApi(req, res) {
   sendJson(res, { ok: false, error: 'Not found' }, 404);
 }
 
+async function handleStudyPetApi(req, res) {
+  const requestUrl = new URL(req.url || '/', 'http://localhost');
+  const pathname = requestUrl.pathname;
+
+  if (pathname === '/api/study-pet/report' && req.method === 'POST') {
+    const access = validateStudyPetAccess(req);
+    if (!access.ok) {
+      sendJson(res, { ok: false, error: access.error }, access.status);
+      return;
+    }
+    ensureSqliteStore();
+    const report = studyPetRepository.saveDailyReport(await readJsonBody(req));
+    tableChanged();
+    sendJson(res, { ok: true, date: report.date, deviceId: report.deviceId });
+    return;
+  }
+
+  const sessionRole = getSessionRole(req.headers.cookie);
+  if (!sessionRole) {
+    sendJson(res, { error: 'Unauthorized' }, 401);
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    sendJson(res, { error: 'Not found' }, 404);
+    return;
+  }
+
+  ensureSqliteStore();
+
+  if (pathname === '/api/study-pet/today') {
+    const date = normalizeStudyPetDate(requestUrl.searchParams.get('date'), shanghaiTodayISO());
+    sendJson(res, {
+      generatedAt: nowISO(),
+      date,
+      timezone: 'Asia/Shanghai',
+      ...studyPetRepository.getTodayReport(date),
+      readOnly: sessionRole === 'read',
+    });
+    return;
+  }
+
+  if (pathname === '/api/study-pet/stats') {
+    const endDate = normalizeStudyPetDate(requestUrl.searchParams.get('endDate'), shanghaiTodayISO());
+    const startDate = normalizeStudyPetDate(requestUrl.searchParams.get('startDate'), addDaysISO(endDate, -6));
+    const limit = Number(requestUrl.searchParams.get('limit') || 30);
+    sendJson(res, {
+      generatedAt: nowISO(),
+      timezone: 'Asia/Shanghai',
+      startDate,
+      endDate,
+      daily: studyPetRepository.getStats(startDate, endDate),
+      siteUsage: studyPetRepository.getSiteUsage(startDate, endDate, { limit }),
+      readOnly: sessionRole === 'read',
+    });
+    return;
+  }
+
+  sendJson(res, { error: 'Not found' }, 404);
+}
+
 function telegramHelpText() {
   return [
     'Telegram 助手命令：',
@@ -7901,6 +8003,11 @@ async function handleApi(req, res) {
       sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
       return;
     }
+  }
+
+  if (req.url?.startsWith('/api/study-pet/')) {
+    await handleStudyPetApi(req, res);
+    return;
   }
 
   if (req.url?.startsWith('/api/clawbot/')) {

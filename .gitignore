@@ -15,6 +15,8 @@ dist
 dist-ssr
 data-local
 data/analysis
+desktop-pet/.local-data
+desktop-pet/config.json
 screenshots
 test-results
 playwright-report

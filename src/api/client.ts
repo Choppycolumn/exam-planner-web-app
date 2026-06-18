@@ -209,6 +209,62 @@ export interface StatisticsSummary {
   last30: Array<{ name: string; minutes: number }>;
 }
 
+export type StudyPetCategory = 'study' | 'entertainment' | 'tool' | 'social' | 'unknown';
+
+export interface StudyPetSiteUsage {
+  date?: string;
+  deviceId?: string;
+  domain: string;
+  category: StudyPetCategory;
+  seconds: number;
+  visits: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudyPetDailyReport {
+  date: string;
+  timezone: string;
+  deviceId: string;
+  totalComputerSeconds: number;
+  studySeconds: number;
+  entertainmentSeconds: number;
+  toolSeconds: number;
+  socialSeconds: number;
+  unknownSeconds: number;
+  entertainmentOvertimeCount: number;
+  strongReminderCount: number;
+  studyGoal: {
+    targetStudySeconds: number;
+    completed: boolean;
+  };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StudyPetReportPayload extends Omit<StudyPetDailyReport, 'createdAt' | 'updatedAt'> {
+  sites: StudyPetSiteUsage[];
+}
+
+export interface StudyPetTodayResponse {
+  generatedAt: string;
+  date: string;
+  timezone: string;
+  report: StudyPetDailyReport | null;
+  sites: StudyPetSiteUsage[];
+  readOnly?: boolean;
+}
+
+export interface StudyPetStatsResponse {
+  generatedAt: string;
+  timezone: string;
+  startDate: string;
+  endDate: string;
+  daily: StudyPetDailyReport[];
+  siteUsage: StudyPetSiteUsage[];
+  readOnly?: boolean;
+}
+
 export interface ReferenceList<T> {
   items: T[];
   readOnly?: boolean;
@@ -900,6 +956,35 @@ function cachedDashboard() {
   return dashboardPromise;
 }
 
+async function postStudyPetReport(report: StudyPetReportPayload, apiToken: string) {
+  const response = await fetch('/api/study-pet/report', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${apiToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(report),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = text || `Request failed with ${response.status}`;
+    try {
+      const payload = JSON.parse(text) as { error?: string; message?: string };
+      message = payload.error || payload.message || message;
+    } catch {
+      // Keep the plain response text when the server returns non-JSON.
+    }
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json() as Promise<{ ok: true; date: string; deviceId: string }>;
+}
+
 function uploadLibraryBook(formData: FormData, onProgress?: (percent: number) => void) {
   return new Promise<{ ok: true; detail: LibraryBookDetail }>((resolveUpload, rejectUpload) => {
     const request = new XMLHttpRequest();
@@ -960,6 +1045,16 @@ export const serverApi = {
   resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
   getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
   getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
+  postStudyPetReport,
+  getStudyPetToday: (date?: string) =>
+    cachedApiRequest<StudyPetTodayResponse>(`/study-pet/today${date ? `?date=${encodeURIComponent(date)}` : ''}`, 30_000),
+  getStudyPetStats: (params: { startDate?: string; endDate?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (params.startDate) query.set('startDate', params.startDate);
+    if (params.endDate) query.set('endDate', params.endDate);
+    const suffix = query.toString();
+    return cachedApiRequest<StudyPetStatsResponse>(`/study-pet/stats${suffix ? `?${suffix}` : ''}`, 30_000);
+  },
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
     apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
