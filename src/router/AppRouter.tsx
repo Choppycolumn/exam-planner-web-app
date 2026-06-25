@@ -11,10 +11,10 @@ const StudyTimePage = lazy(() => routeLoaders.studyTime().then((module) => ({ de
 const ReviewsPage = lazy(() => routeLoaders.reviews().then((module) => ({ default: module.ReviewsPage })));
 const ReviewInsightsPage = lazy(() => routeLoaders.reviewInsights().then((module) => ({ default: module.ReviewInsightsPage })));
 const LearningProgressPage = lazy(() => routeLoaders.progress().then((module) => ({ default: module.LearningProgressPage })));
-const StudyPetStatsPage = lazy(() => routeLoaders.studyPetStats().then((module) => ({ default: module.StudyPetStatsPage })));
 const ProjectProgressPage = lazy(() => routeLoaders.projectProgress().then((module) => ({ default: module.ProjectProgressPage })));
 const GoalReviewPage = lazy(() => routeLoaders.goalReview().then((module) => ({ default: module.GoalReviewPage })));
 const NotificationsPage = lazy(() => routeLoaders.notifications().then((module) => ({ default: module.NotificationsPage })));
+const MarketCopilotPage = lazy(() => routeLoaders.marketCopilot().then((module) => ({ default: module.MarketCopilotPage })));
 const OperationsPage = lazy(() => routeLoaders.operations().then((module) => ({ default: module.OperationsPage })));
 const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ default: module.MockExamsPage })));
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
@@ -46,10 +46,10 @@ export const router = createBrowserRouter([
       { path: 'reviews', element: lazyElement(<ReviewsPage />) },
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'progress', element: lazyElement(<LearningProgressPage />) },
-      { path: 'study-pet-stats', element: lazyElement(<StudyPetStatsPage />) },
       { path: 'project-progress', element: lazyElement(<ProjectProgressPage />) },
       { path: 'goal-review', element: lazyElement(<GoalReviewPage />) },
       { path: 'notifications', element: lazyElement(<NotificationsPage />) },
+      { path: 'market-copilot', element: lazyElement(<MarketCopilotPage />) },
       { path: 'task-center', element: <Navigate to="/operations" replace /> },
       { path: 'operations', element: lazyElement(<OperationsPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },

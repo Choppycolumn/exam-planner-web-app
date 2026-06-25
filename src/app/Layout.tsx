@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LibraryBig, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
+import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LibraryBig, Moon, Settings, ShieldCheck, Sun, TrendingUp, WalletCards } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
@@ -10,7 +10,6 @@ import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme'
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
 const navItems = [
-  { to: '/study-pet-stats', label: '桌宠统计', icon: Activity },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
@@ -19,6 +18,7 @@ const navItems = [
   { to: '/project-progress', label: '项目进展', icon: BriefcaseBusiness },
   { to: '/goal-review', label: '目标复盘', icon: Flag },
   { to: '/notifications', label: '通知中心', icon: Bell },
+  { to: '/market-copilot', label: '理财情报台', icon: WalletCards },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/library', label: '资料图书馆', icon: LibraryBig },

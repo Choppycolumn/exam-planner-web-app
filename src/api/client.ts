@@ -209,62 +209,6 @@ export interface StatisticsSummary {
   last30: Array<{ name: string; minutes: number }>;
 }
 
-export type StudyPetCategory = 'study' | 'entertainment' | 'tool' | 'social' | 'unknown';
-
-export interface StudyPetSiteUsage {
-  date?: string;
-  deviceId?: string;
-  domain: string;
-  category: StudyPetCategory;
-  seconds: number;
-  visits: number;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface StudyPetDailyReport {
-  date: string;
-  timezone: string;
-  deviceId: string;
-  totalComputerSeconds: number;
-  studySeconds: number;
-  entertainmentSeconds: number;
-  toolSeconds: number;
-  socialSeconds: number;
-  unknownSeconds: number;
-  entertainmentOvertimeCount: number;
-  strongReminderCount: number;
-  studyGoal: {
-    targetStudySeconds: number;
-    completed: boolean;
-  };
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface StudyPetReportPayload extends Omit<StudyPetDailyReport, 'createdAt' | 'updatedAt'> {
-  sites: StudyPetSiteUsage[];
-}
-
-export interface StudyPetTodayResponse {
-  generatedAt: string;
-  date: string;
-  timezone: string;
-  report: StudyPetDailyReport | null;
-  sites: StudyPetSiteUsage[];
-  readOnly?: boolean;
-}
-
-export interface StudyPetStatsResponse {
-  generatedAt: string;
-  timezone: string;
-  startDate: string;
-  endDate: string;
-  daily: StudyPetDailyReport[];
-  siteUsage: StudyPetSiteUsage[];
-  readOnly?: boolean;
-}
-
 export interface ReferenceList<T> {
   items: T[];
   readOnly?: boolean;
@@ -311,6 +255,49 @@ export interface BackupStatus {
   lastWeeklyBackupAt: string | null;
   dictionaryCount: number;
   dictionaryIndexedAt: string | null;
+}
+
+export interface MarketCopilotDashboard {
+  generatedAt: string;
+  timezones: { shanghai: string; tokyo: string; newYork: string };
+  instruments: Array<{ symbol: string; name: string; assetClass: string; quoteCurrency: string; manualPrice?: number | null; manualPriceTime?: string | null; notes?: string }>;
+  accounts: Array<{ id: number; name: string; platform: string; baseCurrency: string; isActive: number; note: string }>;
+  transactions: Array<{
+    id: number;
+    tradedAt: string;
+    instrumentSymbol: string;
+    accountId: number | null;
+    action: string;
+    price: number;
+    quantity: number;
+    grossAmount: number;
+    feeAmount: number;
+    feeCurrency: string;
+    orderType: string;
+    note: string;
+    confirmed: number;
+  }>;
+  portfolio: {
+    positions: Array<{ symbol: string; quantity: number; averageCost: number; realizedPnl: number; unrealizedPnl: number; marketValue: number; referencePrice: number | null; cumulativeFees: Record<string, number> }>;
+    lockedPositions: Array<{ id: number; symbol: string; quantity: number; referencePrice: number; valueUsdt: number; category: string; riskLevel: string; includeInAmmo: boolean; note: string }>;
+    freeUsdt: number;
+    lockedValueUsdt: number;
+    qqqAmmoUsdt: number;
+    assetAllocation: Array<{ symbol: string; value: number; weight: number }>;
+    totals: { marketValue: number; realizedPnl: number; unrealizedPnl: number };
+  };
+  snapshots: Array<{ symbol: string; value: number | null; changePercent: number | null; observedAt: string; sourceName: string; sourceKey: string; delayStatus: string; verificationStatus: string; payload?: Record<string, unknown> }>;
+  sourceStatus: Array<{ sourceKey: string; sourceName: string; status: string; lastSuccessAt: string | null; lastErrorAt: string | null; lastError: string }>;
+  macroEvents: Array<{ id: number; name: string; eventTime: string; timezone: string; importance: string; sourceUrl: string; note: string }>;
+  newsItems: Array<{ id: number; title: string; sourceName: string; sourceUrl: string; publishedAt: string; summary: string; tags: string[]; credibility: string }>;
+  orderPlans: Array<{ id: number; planDate: string; instrumentSymbol: string; availableUsdt: number; estimatedFeeRate: number; validUntil: string; status: string; note: string; legs: Array<{ levelIndex: number; limitPrice: number; amountUsdt: number; expectedQuantity: number; expectedFee: number }> }>;
+  latestReport: { id: number; reportKey: string; reportType: string; marketStatus: string; generatedAt: string; markdown: string } | null;
+  reports: Array<{ id: number; reportKey: string; reportType: string; marketStatus: string; generatedAt: string; markdown: string }>;
+  verification: Array<{ symbol: string; status: string; diffPct: number | null; sources: string[] }>;
+  marketSession: { date: string; timezone: string; isTradingDay: boolean; sessionType: string; openTime: string | null; closeTime: string | null };
+  schedule: Array<{ label: string; time: string }>;
+  warnings: string[];
+  readOnly?: boolean;
 }
 
 export interface MihomoNode {
@@ -956,35 +943,6 @@ function cachedDashboard() {
   return dashboardPromise;
 }
 
-async function postStudyPetReport(report: StudyPetReportPayload, apiToken: string) {
-  const response = await fetch('/api/study-pet/report', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${apiToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(report),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const payload = JSON.parse(text) as { error?: string; message?: string };
-      message = payload.error || payload.message || message;
-    } catch {
-      // Keep the plain response text when the server returns non-JSON.
-    }
-    const error = new Error(message) as Error & { status?: number };
-    error.status = response.status;
-    throw error;
-  }
-
-  return response.json() as Promise<{ ok: true; date: string; deviceId: string }>;
-}
-
 function uploadLibraryBook(formData: FormData, onProgress?: (percent: number) => void) {
   return new Promise<{ ok: true; detail: LibraryBookDetail }>((resolveUpload, rejectUpload) => {
     const request = new XMLHttpRequest();
@@ -1045,16 +1003,6 @@ export const serverApi = {
   resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
   getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
   getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
-  postStudyPetReport,
-  getStudyPetToday: (date?: string) =>
-    cachedApiRequest<StudyPetTodayResponse>(`/study-pet/today${date ? `?date=${encodeURIComponent(date)}` : ''}`, 30_000),
-  getStudyPetStats: (params: { startDate?: string; endDate?: string } = {}) => {
-    const query = new URLSearchParams();
-    if (params.startDate) query.set('startDate', params.startDate);
-    if (params.endDate) query.set('endDate', params.endDate);
-    const suffix = query.toString();
-    return cachedApiRequest<StudyPetStatsResponse>(`/study-pet/stats${suffix ? `?${suffix}` : ''}`, 30_000);
-  },
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
     apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
@@ -1111,6 +1059,18 @@ export const serverApi = {
     cachedApiRequest<CalendarResponse>(`/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 30_000),
   runSqliteMaintenance: () => apiRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('/maintenance/sqlite', { method: 'POST' }),
   runPrecompute: () => apiRequest<{ ok: boolean; ranAt: string; error?: string }>('/maintenance/precompute', { method: 'POST' }),
+  getMarketCopilot: () => apiRequest<MarketCopilotDashboard>('/market-copilot'),
+  refreshMarketCopilot: () => apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/refresh', { method: 'POST' }),
+  generateMarketReport: (body: { reportType?: string; marketStatus?: string } = {}) =>
+    apiRequest<{ ok: true; report: NonNullable<MarketCopilotDashboard['latestReport']>; dashboard: MarketCopilotDashboard }>('/market-copilot/report/generate', { method: 'POST', body }),
+  saveMarketTransaction: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions', { method: 'POST', body }),
+  saveMarketManualPrice: (body: { symbol: string; price: number }) =>
+    apiRequest<{ ok: true; price: { symbol: string; price: number; observedAt: string }; dashboard: MarketCopilotDashboard }>('/market-copilot/manual-price', { method: 'POST', body }),
+  saveMarketDayOrderPlan: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; plan: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans', { method: 'POST', body }),
+  saveMarketMacroEvent: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/macro-events', { method: 'POST', body }),
   getReports: () => cachedApiRequest<{ reports: LearningReport[] }>('/reports', 120_000),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
     apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),

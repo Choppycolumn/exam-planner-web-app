@@ -23,7 +23,7 @@ import { createCalendarRepository } from './modules/calendar-repository.mjs';
 import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
 import { runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
-import { createStudyPetRepository } from './modules/study-pet-repository.mjs';
+import { createMarketCopilotRepository } from './modules/market-copilot-repository.mjs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -39,8 +39,6 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
-const sqliteCommand = process.env.SQLITE3_BIN || 'sqlite3';
-const sqliteUseShell = process.env.SQLITE3_USE_SHELL === '1';
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
@@ -55,7 +53,6 @@ const corsOrigin = process.env.CORS_ORIGIN || '*';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const clawbotSecret = process.env.CLAWBOT_SECRET || '';
 const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
-const studyPetApiToken = process.env.STUDY_PET_API_TOKEN || '';
 const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
 const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
 const openClawNpmProjectsDir = process.env.OPENCLAW_NPM_PROJECTS_DIR || '/root/.openclaw/npm/projects';
@@ -73,11 +70,16 @@ const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
-const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir, sqliteCommand, sqliteUseShell });
+const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
 const externalApiClient = createExternalApiClient();
 const notificationRepository = createNotificationRepository(sqliteRepository);
+const marketCopilotRepository = createMarketCopilotRepository(sqliteRepository, {
+  externalApiClient,
+  notifyEvent: (payload) => notifyEvent(payload),
+  log: (level, event, detail) => logStructured(level, event, detail),
+});
 const notificationQueue = createNotificationQueue({
   repository: notificationRepository,
   sendProactive: (text, delivery) => sendProactiveNotification(text, delivery),
@@ -86,7 +88,6 @@ const notificationQueue = createNotificationQueue({
 });
 const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
-const studyPetRepository = createStudyPetRepository(sqliteRepository);
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -128,6 +129,7 @@ let taskReminderTimerStarted = false;
 let taskReminderTimer = null;
 let notificationQueueTimerStarted = false;
 let notificationQueueTimer = null;
+let marketCopilotTimerStarted = false;
 let backupVerificationCache = null;
 let errorThemeBatchJob = null;
 let shuttingDown = false;
@@ -149,21 +151,6 @@ function localDateISO(date = new Date()) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-}
-
-function dateISOInTimeZone(date = new Date(), timeZone = 'Asia/Shanghai') {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function shanghaiTodayISO() {
-  return dateISOInTimeZone(new Date(), 'Asia/Shanghai');
 }
 
 function todayISO() {
@@ -345,11 +332,10 @@ function sqlValue(value) {
 
 function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   mkdirSync(dataDir, { recursive: true });
-  const result = spawnSync(sqliteCommand, [databaseFile], {
+  const result = spawnSync('sqlite3', [databaseFile], {
     input: script,
     encoding: 'utf8',
     maxBuffer,
-    shell: sqliteUseShell,
   });
   if (result.error) {
     throw result.error;
@@ -4497,12 +4483,62 @@ function collectOperationalNotifications() {
   }
 }
 
+function marketCopilotNewYorkParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const value = (type) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    date: `${value('year')}-${value('month')}-${value('day')}`,
+    time: `${value('hour')}:${value('minute')}`,
+  };
+}
+
+function marketCopilotSlotForTime(time) {
+  if (time === '09:05') return { reportType: 'preopen', marketStatus: '盘前' };
+  if (time === '09:35') return { reportType: 'open-5m', marketStatus: '开盘后 5 分钟' };
+  if (time === '09:45') return { reportType: 'open-15m', marketStatus: '开盘后 15 分钟' };
+  if (time === '10:00') return { reportType: 'open-30m', marketStatus: '开盘后 30 分钟' };
+  if (time === '16:15') return { reportType: 'postclose', marketStatus: '收盘后' };
+  return null;
+}
+
+async function runMarketCopilotScheduleTick() {
+  try {
+    ensureSqliteStore();
+    const ny = marketCopilotNewYorkParts();
+    const slot = marketCopilotSlotForTime(ny.time);
+    if (!slot) return;
+    const session = marketCopilotRepository.marketSessionForDate(ny.date);
+    if (!session.isTradingDay) return;
+    const reportKey = `${ny.date}-${slot.reportType}`;
+    if (marketCopilotRepository.getReportByKey(reportKey)) return;
+    await marketCopilotRepository.refreshMarketData();
+    marketCopilotRepository.generateReport({ ...slot, reportKey });
+  } catch (error) {
+    logStructured('warn', 'market_copilot_schedule_failed', { error: redactSecretText(error.message || String(error)) });
+  }
+}
+
+function startMarketCopilotScheduler() {
+  if (marketCopilotTimerStarted) return;
+  marketCopilotTimerStarted = true;
+  setInterval(() => void runMarketCopilotScheduleTick(), 60 * 1000);
+  setTimeout(() => void runMarketCopilotScheduleTick(), 15 * 1000);
+}
+
 function ensureSqliteStore() {
   if (sqliteReady) return;
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
   mkdirSync(libraryFilesDir, { recursive: true });
-  const versionCheck = spawnSync(sqliteCommand, ['--version'], { encoding: 'utf8', shell: sqliteUseShell });
+  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
   if (versionCheck.error || versionCheck.status !== 0) {
     throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
   }
@@ -4634,6 +4670,10 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   }
   runStructuredMigrations();
   ensureTaskReminderColumns();
+  if (!Number(sqliteScalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'instruments';") || 0)) {
+    runSqlite(readFileSync(join(migrationsDir, '019_market_copilot_v1.sql'), 'utf8'));
+  }
+  marketCopilotRepository.seedIfEmpty();
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
@@ -4673,6 +4713,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     scheduleNotificationQueue();
     notificationQueueTimerStarted = true;
   }
+  startMarketCopilotScheduler();
 }
 
 function readState() {
@@ -6718,26 +6759,6 @@ function validateClawbotAccess(req, requestUrl, body = {}) {
   return { ok: true };
 }
 
-function bearerToken(req) {
-  const auth = headerString(req, 'authorization');
-  return auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || '';
-}
-
-function validateStudyPetAccess(req) {
-  if (!studyPetApiToken) {
-    return { ok: false, status: 503, error: 'Study pet API is disabled. Set STUDY_PET_API_TOKEN first.' };
-  }
-  if (!safeSecretEqual(bearerToken(req), studyPetApiToken)) {
-    return { ok: false, status: 401, error: 'Unauthorized' };
-  }
-  return { ok: true };
-}
-
-function normalizeStudyPetDate(value, fallback = shanghaiTodayISO()) {
-  const date = String(value || fallback).trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : fallback;
-}
-
 function extractClawbotMessage(body, requestUrl) {
   const queryMessage = requestUrl.searchParams.get('text') || requestUrl.searchParams.get('message') || '';
   if (queryMessage) return queryMessage;
@@ -7622,67 +7643,6 @@ async function handleClawbotApi(req, res) {
   sendJson(res, { ok: false, error: 'Not found' }, 404);
 }
 
-async function handleStudyPetApi(req, res) {
-  const requestUrl = new URL(req.url || '/', 'http://localhost');
-  const pathname = requestUrl.pathname;
-
-  if (pathname === '/api/study-pet/report' && req.method === 'POST') {
-    const access = validateStudyPetAccess(req);
-    if (!access.ok) {
-      sendJson(res, { ok: false, error: access.error }, access.status);
-      return;
-    }
-    ensureSqliteStore();
-    const report = studyPetRepository.saveDailyReport(await readJsonBody(req));
-    tableChanged();
-    sendJson(res, { ok: true, date: report.date, deviceId: report.deviceId });
-    return;
-  }
-
-  const sessionRole = getSessionRole(req.headers.cookie);
-  if (!sessionRole) {
-    sendJson(res, { error: 'Unauthorized' }, 401);
-    return;
-  }
-
-  if (req.method !== 'GET') {
-    sendJson(res, { error: 'Not found' }, 404);
-    return;
-  }
-
-  ensureSqliteStore();
-
-  if (pathname === '/api/study-pet/today') {
-    const date = normalizeStudyPetDate(requestUrl.searchParams.get('date'), shanghaiTodayISO());
-    sendJson(res, {
-      generatedAt: nowISO(),
-      date,
-      timezone: 'Asia/Shanghai',
-      ...studyPetRepository.getTodayReport(date),
-      readOnly: sessionRole === 'read',
-    });
-    return;
-  }
-
-  if (pathname === '/api/study-pet/stats') {
-    const endDate = normalizeStudyPetDate(requestUrl.searchParams.get('endDate'), shanghaiTodayISO());
-    const startDate = normalizeStudyPetDate(requestUrl.searchParams.get('startDate'), addDaysISO(endDate, -6));
-    const limit = Number(requestUrl.searchParams.get('limit') || 30);
-    sendJson(res, {
-      generatedAt: nowISO(),
-      timezone: 'Asia/Shanghai',
-      startDate,
-      endDate,
-      daily: studyPetRepository.getStats(startDate, endDate),
-      siteUsage: studyPetRepository.getSiteUsage(startDate, endDate, { limit }),
-      readOnly: sessionRole === 'read',
-    });
-    return;
-  }
-
-  sendJson(res, { error: 'Not found' }, 404);
-}
-
 function telegramHelpText() {
   return [
     'Telegram 助手命令：',
@@ -8003,11 +7963,6 @@ async function handleApi(req, res) {
       sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
       return;
     }
-  }
-
-  if (req.url?.startsWith('/api/study-pet/')) {
-    await handleStudyPetApi(req, res);
-    return;
   }
 
   if (req.url?.startsWith('/api/clawbot/')) {
@@ -8607,6 +8562,76 @@ ORDER BY project_id;`);
 
   const body = req.method === 'POST' ? await readJsonBody(req) : {};
   const timestamp = nowISO();
+  const apiPathname = new URL(req.url || '/', 'http://localhost').pathname;
+
+  if (apiPathname === '/api/market-copilot' && req.method === 'GET') {
+    sendJson(res, { ...marketCopilotRepository.dashboard(), readOnly: sessionRole === 'read' });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/refresh' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const result = await marketCopilotRepository.refreshMarketData();
+    sendJson(res, { ok: true, result, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/report/generate' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const report = marketCopilotRepository.generateReport({
+      reportType: body.reportType || 'manual',
+      marketStatus: body.marketStatus || '手动生成',
+    });
+    sendJson(res, { ok: true, report, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.saveTransaction(body);
+    tableChanged();
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/manual-price' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const price = marketCopilotRepository.saveManualPrice(body.symbol || 'rQQQ', body.price);
+    sendJson(res, { ok: true, price, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/day-order-plans' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const plan = marketCopilotRepository.saveOrderPlan(body);
+    sendJson(res, { ok: true, plan, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/macro-events' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.saveMacroEvent(body);
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
 
   if (req.url === '/api/maintenance/sqlite' && req.method === 'POST') {
     const task = await runExclusiveTask('sqlite-maintenance', 'manual', () => runSqliteMaintenance('manual'), { timeoutMs: 10 * 60 * 1000 });
