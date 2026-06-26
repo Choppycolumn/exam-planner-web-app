@@ -143,14 +143,14 @@ export function calculateLedger({ transactions = [], manualPrices = {}, accounts
       const feeCurrency = rawLeg.feeCurrency || rawLeg.fee_currency || quote;
       const positionKey = `${accountId || 'manual'}:${symbol}`;
 
-      if (['buy', 'sell'].includes(type) && !['USDT', 'USDC', 'USD', 'CNY'].includes(symbol)) {
+      if (['buy', 'sell', 'opening_position'].includes(type) && !['USDT', 'USDC', 'USD', 'CNY'].includes(symbol)) {
         const position = ensureAsset(positions, positionKey, { accountId, accountName: account.name, symbol, locked, highRisk });
         addFee(position, feeCurrency, fee);
         if (fee > 0 && feeCurrency !== quote) {
           position.costReviewRequired = true;
           issues.push({ level: 'warning', code: 'FEE_CURRENCY_REVIEW', message: `${symbol} 手续费币种 ${feeCurrency} 与计价币种 ${quote} 不同，成本待核对。`, transactionId: tx.id });
         }
-        if (type === 'buy') {
+        if (type === 'buy' || type === 'opening_position') {
           const feeInQuote = feeCurrency === quote ? fee : 0;
           position.quantity += Math.abs(quantity);
           position.costBasis += nominal + feeInQuote;

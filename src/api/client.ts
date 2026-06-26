@@ -1132,6 +1132,10 @@ export const serverApi = {
     apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans/convert', { method: 'POST', body: { id, transaction } }),
   saveMarketReconciliation: (body: Record<string, unknown>) =>
     apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/reconciliation', { method: 'POST', body }),
+  deleteMarketReconciliation: (id: number) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/reconciliation/delete', { method: 'POST', body: { id } }),
+  setMarketFreeCash: (body: { currency?: string; amount: number; accountId?: number; note?: string }) =>
+    apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/free-cash/set', { method: 'POST', body }),
   dryRunMarketImport: (csvText: string) =>
     apiRequest<{ ok: true; result: Record<string, unknown> }>('/market-copilot/import/dry-run', { method: 'POST', body: { csvText } }),
   commitMarketImport: (csvText: string) =>

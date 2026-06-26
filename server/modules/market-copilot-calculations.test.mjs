@@ -106,6 +106,30 @@ describe('market copilot ledger calculations', () => {
     const pos = result.positions.find((item) => item.symbol === 'rQQQ');
     expect(pos.quantity).toBe(1);
   });
+
+  it('records opening positions without reducing free USDT', () => {
+    const result = calculateLedger({
+      accounts,
+      instruments,
+      transactions: [tx(1, 'opening_position', 2, 100)],
+    });
+    const pos = result.positions.find((item) => item.symbol === 'rQQQ');
+    expect(pos.quantity).toBe(2);
+    expect(pos.averageCost).toBe(100);
+    expect(result.freeUsdt).toBe(0);
+  });
+
+  it('allows signed cash adjustments for simple balance corrections', () => {
+    const result = calculateLedger({
+      accounts,
+      instruments,
+      transactions: [
+        tx(1, 'adjustment', 100, 1, { symbol: 'USDT' }),
+        tx(2, 'adjustment', -35, 1, { symbol: 'USDT' }),
+      ],
+    });
+    expect(result.freeUsdt).toBe(65);
+  });
 });
 
 describe('market copilot day order plan', () => {

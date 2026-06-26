@@ -10,7 +10,7 @@ const tabs = ['概览', '交易流水', '仓位与资金', 'Day 单计划', 'Cha
 const emptyTx = {
   id: '',
   occurredAt: new Date().toISOString().slice(0, 16),
-  transactionType: 'buy',
+  transactionType: 'opening_position',
   status: 'confirmed',
   accountId: '1',
   instrumentSymbol: 'rQQQ',
@@ -90,6 +90,7 @@ export function MarketCopilotPage() {
   const [tx, setTx] = useState(emptyTx);
   const [filter, setFilter] = useState('');
   const [price, setPrice] = useState({ symbol: 'rQQQ', value: '' });
+  const [freeUsdt, setFreeUsdt] = useState('');
   const [plan, setPlan] = useState({ price1: '', amount1: '25', price2: '', amount2: '25', feeRate: '0.001', note: '' });
   const [reconcile, setReconcile] = useState({ accountId: '1', actualJson: '{\n  "USDT": 0,\n  "rQQQ": 0\n}', note: '' });
   const [csvText, setCsvText] = useState('');
@@ -208,6 +209,16 @@ export function MarketCopilotPage() {
             <div className="card p-4"><p className="text-sm text-slate-500">锁定/高风险余额</p><p className="mt-1 text-2xl font-semibold">{formatNumber(data.portfolio.lockedValueUsdt, 4)}</p></div>
             <div className="card p-4"><p className="text-sm text-slate-500">待迁移核对</p><p className="mt-1 text-2xl font-semibold">{data.migrationAudit.summary.example_pending || 0}</p></div>
           </div>
+          <form className="card flex flex-wrap items-end gap-3 p-4" onSubmit={(event) => {
+            event.preventDefault();
+            void run('设置空闲 USDT', async () => (await serverApi.setMarketFreeCash({ currency: 'USDT', accountId: 1, amount: Number(freeUsdt), note: '页面手动设置空闲 USDT' })).dashboard);
+          }}>
+            <label className="label min-w-56 flex-1">我现在空闲 USDT 是
+              <input className="field" placeholder={`当前账面 ${formatNumber(data.portfolio.freeUsdt, 4)}`} value={freeUsdt} onChange={(event) => setFreeUsdt(event.target.value)} />
+            </label>
+            <button className="btn btn-primary" type="submit" disabled={!freeUsdt.trim() || Boolean(busy)}>直接设置</button>
+            <p className="text-sm text-slate-500">不用做财务报表。这里会自动补一条 adjustment，把账面空闲 USDT 调到你输入的数字。</p>
+          </form>
           <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
             <section className="card overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-100 p-4">
@@ -240,7 +251,7 @@ export function MarketCopilotPage() {
           <form className="card space-y-3 p-4" onSubmit={(event) => { event.preventDefault(); void run(tx.id ? '编辑交易' : '新增交易', saveTx).then(() => setTx(emptyTx)); }}>
             <h2 className="font-semibold text-slate-900"><Plus size={16} className="mr-1 inline" />{tx.id ? `编辑交易 #${tx.id}` : '新增手动交易'}</h2>
             <label className="label">时间<input className="field" type="datetime-local" value={tx.occurredAt} onChange={(event) => setTx({ ...tx, occurredAt: event.target.value })} /></label>
-            <label className="label">类型<select className="field" value={tx.transactionType} onChange={(event) => setTx({ ...tx, transactionType: event.target.value })}>{['buy', 'sell', 'deposit', 'withdrawal', 'transfer', 'exchange', 'lock', 'unlock', 'dividend', 'interest', 'reward', 'fee', 'adjustment', 'other'].map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label className="label">类型<select className="field" value={tx.transactionType} onChange={(event) => setTx({ ...tx, transactionType: event.target.value })}>{['opening_position', 'buy', 'sell', 'deposit', 'withdrawal', 'transfer', 'exchange', 'lock', 'unlock', 'dividend', 'interest', 'reward', 'fee', 'adjustment', 'other'].map((item) => <option key={item} value={item}>{item === 'opening_position' ? '初始化持仓（不扣 USDT）' : item}</option>)}</select></label>
             <label className="label">状态<select className="field" value={tx.status} onChange={(event) => setTx({ ...tx, status: event.target.value })}>{['draft', 'pending', 'confirmed', 'cleared', 'reconciled'].map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className="label">账户<select className="field" value={tx.accountId} onChange={(event) => setTx({ ...tx, accountId: event.target.value })}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
             <label className="label">标的<input className="field" value={tx.instrumentSymbol} onChange={(event) => setTx({ ...tx, instrumentSymbol: event.target.value })} /></label>
@@ -339,7 +350,7 @@ export function MarketCopilotPage() {
             <label className="label">备注<textarea className="field" value={reconcile.note} onChange={(event) => setReconcile({ ...reconcile, note: event.target.value })} /></label>
             <button className="btn btn-primary w-full"><Save size={16} />保存核对</button>
           </form>
-          <section className="card overflow-hidden"><h2 className="border-b border-slate-100 p-4 font-semibold">核对历史</h2><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3">时间</th><th>账户</th><th>状态</th><th>差异</th><th>备注</th></tr></thead><tbody>{data.reconciliations.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-3">{item.reconciledAt}</td><td>{item.accountId}</td><td><StatusBadge value={item.status} /></td><td><code>{JSON.stringify(item.diff)}</code></td><td>{item.note}</td></tr>)}</tbody></table></section>
+          <section className="card overflow-hidden"><h2 className="border-b border-slate-100 p-4 font-semibold">核对历史</h2><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3">时间</th><th>账户</th><th>状态</th><th>差异</th><th>备注</th><th>操作</th></tr></thead><tbody>{data.reconciliations.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-3">{item.reconciledAt}</td><td>{item.accountId}</td><td><StatusBadge value={item.status} /></td><td><code>{JSON.stringify(item.diff)}</code></td><td>{item.note}</td><td><button className="btn btn-soft" type="button" onClick={() => { if (confirm('删除这条账户核对记录？这不会修改交易流水。')) void run('删除账户核对', async () => (await serverApi.deleteMarketReconciliation(item.id)).dashboard); }}><Trash2 size={14} />删除</button></td></tr>)}</tbody></table></section>
         </div>
       ) : null}
 

@@ -8744,6 +8744,27 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (apiPathname === '/api/market-copilot/reconciliation/delete' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.deleteReconciliation(body.id);
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/free-cash/set' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const result = marketCopilotRepository.setFreeCashBalance(body);
+    tableChanged();
+    sendJson(res, { ok: true, result, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
   if (apiPathname === '/api/market-copilot/import/dry-run' && req.method === 'POST') {
     const result = marketCopilotRepository.dryRunImport(body.csvText || body.text || '');
     sendJson(res, { ok: true, result });

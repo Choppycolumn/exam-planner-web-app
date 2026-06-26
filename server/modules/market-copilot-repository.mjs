@@ -10,7 +10,7 @@ import {
   safeFence,
 } from './market-copilot-calculations.mjs';
 
-const VALID_TYPES = new Set(['buy', 'sell', 'transfer', 'deposit', 'withdrawal', 'exchange', 'dividend', 'interest', 'reward', 'fee', 'lock', 'unlock', 'adjustment', 'corporate_action', 'other']);
+const VALID_TYPES = new Set(['opening_position', 'buy', 'sell', 'transfer', 'deposit', 'withdrawal', 'exchange', 'dividend', 'interest', 'reward', 'fee', 'lock', 'unlock', 'adjustment', 'corporate_action', 'other']);
 const VALID_STATUS = new Set(['draft', 'pending', 'confirmed', 'cleared', 'reconciled', 'voided', 'deleted']);
 const VALID_DAY_STATUS = new Set(['planned', 'placed_manually', 'filled_manually', 'cancelled_manually', 'expired_unconfirmed']);
 
@@ -98,10 +98,11 @@ function buildDefaultLegs(input) {
   }
   const type = normalizeType(input.transactionType || input.transaction_type || input.action);
   const symbol = String(input.instrumentSymbol || input.instrument_symbol || 'rQQQ').trim();
-  const quantity = Math.abs(numberOrZero(input.quantity));
+  const rawQuantity = numberOrZero(input.quantity);
+  const quantity = Math.abs(rawQuantity);
   const price = numberOrZero(input.price ?? input.unitPrice ?? input.unit_price);
   const gross = numberOrZero(input.grossAmount ?? input.gross_amount) || quantity * price;
-  const signedQuantity = ['sell', 'withdrawal'].includes(type) ? -quantity : quantity;
+  const signedQuantity = type === 'adjustment' ? rawQuantity : (['sell', 'withdrawal'].includes(type) ? -quantity : quantity);
   return [{
     legIndex: 1,
     instrumentSymbol: symbol,
@@ -423,6 +424,45 @@ ${sqlString(JSON.stringify(actual))}, ${sqlString(JSON.stringify(computed))}, ${
     return Number(sqlite.scalar('SELECT id FROM investment_reconciliation_records ORDER BY id DESC LIMIT 1;'));
   };
 
+  const setFreeCashBalance = (input = {}) => {
+    const currency = String(input.currency || 'USDT').trim().toUpperCase();
+    const accountId = Number(input.accountId ?? input.account_id ?? 1);
+    const targetAmount = numberOrZero(input.amount);
+    const ledger = portfolio();
+    const currentAmount = currency === 'USDT'
+      ? Number(ledger.freeUsdt || 0)
+      : ledger.freeCash.filter((row) => row.symbol === currency).reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const delta = roundNumber(targetAmount - currentAmount, 8);
+    if (Math.abs(delta) < 1e-8) {
+      return { changed: false, currency, accountId, targetAmount, currentAmount, delta, transactionId: null };
+    }
+    const transactionId = insertTransaction({
+      transactionType: 'adjustment',
+      status: 'confirmed',
+      accountId,
+      instrumentSymbol: currency,
+      quantity: delta,
+      price: 1,
+      grossAmount: Math.abs(delta),
+      feeAmount: 0,
+      feeCurrency: currency,
+      quoteCurrency: currency,
+      orderType: 'balance_adjustment',
+      externalReference: `set-free-${currency}-${Date.now()}`,
+      tags: ['balance-adjustment'],
+      note: input.note || `手动设置空闲 ${currency} 为 ${targetAmount}，系统自动补差额 ${delta}。`,
+    });
+    return { changed: true, currency, accountId, targetAmount, currentAmount, delta, transactionId };
+  };
+
+  const deleteReconciliation = (id) => {
+    const row = sqlite.json(`SELECT id, account_id AS accountId, reconciled_at AS reconciledAt, status, note FROM investment_reconciliation_records WHERE id = ${sqlValue(Number(id))} LIMIT 1;`)[0];
+    if (!row) throw new Error('账户核对记录不存在');
+    recordAudit({ entityType: 'reconciliation', entityId: String(id), action: 'delete', detail: row });
+    sqlite.run(`DELETE FROM investment_reconciliation_records WHERE id = ${sqlValue(Number(id))};`);
+    return Number(id);
+  };
+
   const buildResearchPrompt = () => {
     seedIfEmpty();
     expireDayOrders();
@@ -718,6 +758,8 @@ VALUES ('csv', 'committed', ${sqlString(JSON.stringify(preview))}, ${sqlValue(im
     convertOrderPlanToTransaction,
     expireDayOrders,
     saveReconciliation,
+    setFreeCashBalance,
+    deleteReconciliation,
     dryRunImport,
     commitImport,
     markMigration,
