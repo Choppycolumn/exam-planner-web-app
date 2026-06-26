@@ -2,8 +2,13 @@ const EPSILON = 1e-9;
 
 export const DEFAULT_INSTRUMENTS = [
   { symbol: 'rQQQ', name: 'rQQQ 代币化代理', assetClass: 'tokenized_equity', quoteCurrency: 'USDT' },
+  { symbol: 'rSPY', name: 'rSPY tokenized SPY proxy', assetClass: 'tokenized_equity', quoteCurrency: 'USDT' },
   { symbol: 'QQQ', name: 'Invesco QQQ Trust', assetClass: 'etf', quoteCurrency: 'USD' },
+  { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust', assetClass: 'etf', quoteCurrency: 'USD' },
+  { symbol: 'VOO', name: 'Vanguard S&P 500 ETF', assetClass: 'etf', quoteCurrency: 'USD' },
+  { symbol: 'IVV', name: 'iShares Core S&P 500 ETF', assetClass: 'etf', quoteCurrency: 'USD' },
   { symbol: 'MSTR', name: 'MicroStrategy', assetClass: 'equity', quoteCurrency: 'USD' },
+  { symbol: 'STRC', name: 'STRC', assetClass: 'equity', quoteCurrency: 'USD', highRisk: true },
   { symbol: 'BTC', name: 'Bitcoin', assetClass: 'crypto', quoteCurrency: 'USD' },
   { symbol: 'USDGO', name: 'USDGO', assetClass: 'stable_asset', quoteCurrency: 'USDT', locked: true, highRisk: true },
   { symbol: 'rSPCX', name: 'rSPCX', assetClass: 'tokenized_equity', quoteCurrency: 'USDT', locked: true, highRisk: true },
@@ -259,6 +264,90 @@ export function calculateDayOrderPlan({ availableUsdt = 0, feeRate = 0, legs = [
     totalFee: roundNumber(totalFee, 6),
     remainingUsdt: roundNumber(Number(availableUsdt || 0) - totalAmount, 6),
     exceedsAvailable: totalAmount - Number(availableUsdt || 0) > EPSILON,
+  };
+}
+
+export function summarizeIndexProxyPortfolio({ ledger = {}, orderPlans = [] } = {}) {
+  const proxySymbols = ['rQQQ', 'rSPY'];
+  const activeStatuses = new Set(['planned', 'placed_manually']);
+  const positions = Array.isArray(ledger.positions) ? ledger.positions : [];
+  const symbols = Object.fromEntries(proxySymbols.map((symbol) => [symbol, {
+    symbol,
+    quantity: 0,
+    costBasis: 0,
+    averageCost: 0,
+    realizedPnl: 0,
+    unrealizedPnl: null,
+    referencePrice: null,
+    marketValue: 0,
+    valueUsdt: 0,
+    weightPct: 0,
+    accountText: '--',
+    accounts: [],
+  }]));
+
+  for (const position of positions) {
+    if (!proxySymbols.includes(position.symbol)) continue;
+    const row = symbols[position.symbol];
+    row.quantity += Number(position.quantity || 0);
+    row.costBasis += Number(position.costBasis || 0);
+    row.realizedPnl += Number(position.realizedPnl || 0);
+    row.marketValue += Number(position.marketValue || 0);
+    if (position.unrealizedPnl !== null && position.unrealizedPnl !== undefined) {
+      row.unrealizedPnl = Number(row.unrealizedPnl || 0) + Number(position.unrealizedPnl || 0);
+    }
+    if (Number(position.referencePrice || 0) > 0) row.referencePrice = Number(position.referencePrice);
+    row.accounts.push(position.accountName || position.accountId || 'manual');
+  }
+
+  for (const symbol of proxySymbols) {
+    const row = symbols[symbol];
+    row.quantity = roundNumber(row.quantity, 8);
+    row.costBasis = roundNumber(row.costBasis, 6);
+    row.averageCost = row.quantity > EPSILON ? roundNumber(row.costBasis / row.quantity, 6) : 0;
+    row.realizedPnl = roundNumber(row.realizedPnl, 6);
+    row.unrealizedPnl = row.unrealizedPnl === null ? null : roundNumber(row.unrealizedPnl, 6);
+    row.marketValue = roundNumber(row.marketValue, 6);
+    row.referencePrice = row.referencePrice || null;
+    row.valueUsdt = roundNumber(row.marketValue > 0 ? row.marketValue : row.costBasis, 6);
+    row.accountText = [...new Set(row.accounts)].filter(Boolean).join(', ') || '--';
+    delete row.accounts;
+  }
+
+  const plannedBySymbol = Object.fromEntries(proxySymbols.map((symbol) => [symbol, 0]));
+  const activePlans = (Array.isArray(orderPlans) ? orderPlans : []).filter((plan) => activeStatuses.has(plan.status));
+  for (const plan of activePlans) {
+    const symbol = String(plan.instrumentSymbol || '').trim();
+    if (proxySymbols.includes(symbol)) plannedBySymbol[symbol] += Number(plan.totalAmount || 0);
+  }
+  for (const symbol of proxySymbols) plannedBySymbol[symbol] = roundNumber(plannedBySymbol[symbol], 6);
+
+  const proxyTotalValue = roundNumber(proxySymbols.reduce((sum, symbol) => sum + symbols[symbol].valueUsdt, 0), 6);
+  for (const symbol of proxySymbols) {
+    symbols[symbol].weightPct = proxyTotalValue > EPSILON ? roundNumber((symbols[symbol].valueUsdt / proxyTotalValue) * 100, 2) : 0;
+  }
+
+  const totalPlannedUsdt = roundNumber(proxySymbols.reduce((sum, symbol) => sum + plannedBySymbol[symbol], 0), 6);
+  const availableAmmoUsdt = roundNumber(Number(ledger.qqqAmmoUsdt ?? ledger.freeUsdt ?? 0), 6);
+  const satelliteSymbols = ['BTC', 'MSTR', 'STRC', 'rSPCX'];
+  return {
+    symbols,
+    proxyTotalValue,
+    plannedBySymbol,
+    totalPlannedUsdt,
+    availableAmmoUsdt,
+    unallocatedCash: roundNumber(Math.max(0, availableAmmoUsdt - totalPlannedUsdt), 6),
+    exceedsAvailable: totalPlannedUsdt - availableAmmoUsdt > EPSILON,
+    lockedExcludedUsdt: roundNumber(Number(ledger.lockedValueUsdt || 0), 6),
+    satellites: positions
+      .filter((position) => satelliteSymbols.includes(position.symbol))
+      .map((position) => ({
+        symbol: position.symbol,
+        quantity: position.quantity,
+        valueUsdt: roundNumber(Number(position.marketValue || 0) > 0 ? Number(position.marketValue) : Number(position.costBasis || 0), 6),
+        locked: Boolean(position.locked),
+        highRisk: Boolean(position.highRisk || satelliteSymbols.includes(position.symbol)),
+      })),
   };
 }
 

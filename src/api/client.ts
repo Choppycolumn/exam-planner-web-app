@@ -308,6 +308,29 @@ export interface MarketCopilotDashboard {
     totals: { costBasis: number; realizedPnl: number; unrealizedPnl: number };
     issues: Array<{ level: string; code: string; message: string; transactionId?: number }>;
   };
+  indexProxy?: {
+    symbols: Record<string, {
+      symbol: string;
+      quantity: number;
+      costBasis: number;
+      averageCost: number;
+      realizedPnl: number;
+      unrealizedPnl: number | null;
+      referencePrice: number | null;
+      marketValue: number;
+      valueUsdt: number;
+      weightPct: number;
+      accountText: string;
+    }>;
+    proxyTotalValue: number;
+    plannedBySymbol: Record<string, number>;
+    totalPlannedUsdt: number;
+    availableAmmoUsdt: number;
+    unallocatedCash: number;
+    exceedsAvailable: boolean;
+    lockedExcludedUsdt: number;
+    satellites: Array<{ symbol: string; quantity: number; valueUsdt: number; locked: boolean; highRisk: boolean }>;
+  };
   orderPlans: Array<{ id: number; planDate: string; instrumentSymbol: string; direction: string; accountId: number | null; availableAmmoSnapshot: number; totalAmount: number; estimatedFeeRate: number; validUntil: string; status: string; note: string; isDeleted: boolean; legs: Array<{ id?: number; levelIndex: number; limitPrice: number; amountUsdt: number; expectedQuantity: number; expectedFee: number }> }>;
   latestReport: { id: number; reportKey: string; reportType: string; marketStatus?: string; generatedAt: string; markdown: string; payload?: Record<string, unknown> } | null;
   reports: Array<{ id: number; reportKey: string; reportType: string; marketStatus?: string; generatedAt: string; markdown: string; payload?: Record<string, unknown> }>;

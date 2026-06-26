@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateDayOrderPlan, calculateLedger, marketSessionForDate, parseCsv, safeFence } from './market-copilot-calculations.mjs';
+import { calculateDayOrderPlan, calculateLedger, marketSessionForDate, parseCsv, safeFence, summarizeIndexProxyPortfolio } from './market-copilot-calculations.mjs';
 
 const accounts = [
   { id: 1, name: 'Bitget 可用', isLockedDefault: 0 },
@@ -8,6 +8,7 @@ const accounts = [
 
 const instruments = [
   { symbol: 'rQQQ', quoteCurrency: 'USDT' },
+  { symbol: 'rSPY', quoteCurrency: 'USDT' },
   { symbol: 'USDGO', quoteCurrency: 'USDT', isHighRiskDefault: 1 },
   { symbol: 'USDT', quoteCurrency: 'USDT' },
 ];
@@ -130,6 +131,44 @@ describe('market copilot ledger calculations', () => {
     });
     expect(result.freeUsdt).toBe(65);
   });
+
+  it('calculates rSPY buy, sell, fees, average cost, and realized pnl', () => {
+    const result = calculateLedger({
+      accounts,
+      instruments,
+      manualPrices: { rSPY: 55 },
+      transactions: [
+        tx(1, 'buy', 2, 50, { symbol: 'rSPY', feeAmount: 0.2 }),
+        tx(2, 'buy', 1, 60, { symbol: 'rSPY', feeAmount: 0.1 }),
+        tx(3, 'sell', -1, 70, { symbol: 'rSPY', feeAmount: 0.07 }),
+      ],
+    });
+    const pos = result.positions.find((item) => item.symbol === 'rSPY');
+    expect(pos.quantity).toBe(2);
+    expect(pos.averageCost).toBeCloseTo(53.433333, 6);
+    expect(pos.realizedPnl).toBeCloseTo(16.496667, 6);
+    expect(pos.unrealizedPnl).toBeCloseTo(3.133333, 6);
+  });
+
+  it('keeps rSPY and rQQQ costs and pnl separate', () => {
+    const result = calculateLedger({
+      accounts,
+      instruments,
+      manualPrices: { rQQQ: 120, rSPY: 55 },
+      transactions: [
+        tx(1, 'buy', 1, 100, { symbol: 'rQQQ' }),
+        tx(2, 'buy', 2, 50, { symbol: 'rSPY' }),
+        tx(3, 'sell', -0.5, 120, { symbol: 'rQQQ' }),
+      ],
+    });
+    const qqq = result.positions.find((item) => item.symbol === 'rQQQ');
+    const spy = result.positions.find((item) => item.symbol === 'rSPY');
+    expect(qqq.quantity).toBe(0.5);
+    expect(qqq.realizedPnl).toBe(10);
+    expect(spy.quantity).toBe(2);
+    expect(spy.realizedPnl).toBe(0);
+    expect(spy.averageCost).toBe(50);
+  });
 });
 
 describe('market copilot day order plan', () => {
@@ -147,6 +186,35 @@ describe('market copilot day order plan', () => {
     expect(plan.totalAmount).toBe(110);
     expect(plan.exceedsAvailable).toBe(true);
   });
+
+  it('summarizes simultaneous rQQQ and rSPY day plans without using locked funds', () => {
+    const ledger = calculateLedger({
+      accounts,
+      instruments,
+      transactions: [
+        tx(1, 'adjustment', 100, 1, { symbol: 'USDT' }),
+        tx(2, 'lock', 110, 1, { symbol: 'USDGO', accountId: 2, lockState: 'locked' }),
+        tx(3, 'opening_position', 1, 100, { symbol: 'rQQQ' }),
+        tx(4, 'opening_position', 2, 50, { symbol: 'rSPY' }),
+      ],
+    });
+    const summary = summarizeIndexProxyPortfolio({
+      ledger,
+      orderPlans: [
+        { instrumentSymbol: 'rQQQ', status: 'planned', totalAmount: 30 },
+        { instrumentSymbol: 'rSPY', status: 'placed_manually', totalAmount: 40 },
+        { instrumentSymbol: 'rSPY', status: 'expired_unconfirmed', totalAmount: 999 },
+      ],
+    });
+    expect(summary.plannedBySymbol.rQQQ).toBe(30);
+    expect(summary.plannedBySymbol.rSPY).toBe(40);
+    expect(summary.totalPlannedUsdt).toBe(70);
+    expect(summary.availableAmmoUsdt).toBe(100);
+    expect(summary.unallocatedCash).toBe(30);
+    expect(summary.lockedExcludedUsdt).toBe(110);
+    expect(summary.symbols.rQQQ.weightPct).toBe(50);
+    expect(summary.symbols.rSPY.weightPct).toBe(50);
+  });
 });
 
 describe('market copilot safety utilities', () => {
@@ -162,7 +230,8 @@ describe('market copilot safety utilities', () => {
   });
 
   it('parses csv dry-run fixtures with quoted cells', () => {
-    const rows = parseCsv('时间,标的,备注\n2026-06-01,rQQQ,"a,b"\n');
+    const rows = parseCsv('时间,标的,备注\n2026-06-01,rSPY,"a,b"\n');
+    expect(rows[1][1]).toBe('rSPY');
     expect(rows[1][2]).toBe('a,b');
   });
 });

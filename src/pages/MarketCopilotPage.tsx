@@ -91,11 +91,12 @@ export function MarketCopilotPage() {
   const [filter, setFilter] = useState('');
   const [price, setPrice] = useState({ symbol: 'rQQQ', value: '' });
   const [freeUsdt, setFreeUsdt] = useState('');
-  const [plan, setPlan] = useState({ price1: '', amount1: '25', price2: '', amount2: '25', feeRate: '0.001', note: '' });
+  const [plan, setPlan] = useState({ instrumentSymbol: 'rQQQ', price1: '', amount1: '25', price2: '', amount2: '25', feeRate: '0.001', note: '' });
   const [reconcile, setReconcile] = useState({ accountId: '1', actualJson: '{\n  "USDT": 0,\n  "rQQQ": 0\n}', note: '' });
   const [csvText, setCsvText] = useState('');
   const [importPreview, setImportPreview] = useState<Record<string, unknown> | null>(null);
   const latestMarkdown = data?.latestReport?.markdown || '';
+  const indexProxy = data?.indexProxy;
 
   const load = async () => {
     const next = await serverApi.getMarketCopilot();
@@ -205,10 +206,51 @@ export function MarketCopilotPage() {
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-4">
             <div className="card p-4"><p className="text-sm text-slate-500">可自由 USDT</p><p className="mt-1 text-2xl font-semibold">{formatNumber(data.portfolio.freeUsdt, 4)}</p></div>
-            <div className="card p-4"><p className="text-sm text-slate-500">QQQ/rQQQ 弹药</p><p className="mt-1 text-2xl font-semibold">{formatNumber(data.portfolio.qqqAmmoUsdt, 4)}</p></div>
+            <div className="card p-4"><p className="text-sm text-slate-500">指数代理资产弹药</p><p className="mt-1 text-2xl font-semibold">{formatNumber(indexProxy?.availableAmmoUsdt ?? data.portfolio.qqqAmmoUsdt, 4)}</p></div>
             <div className="card p-4"><p className="text-sm text-slate-500">锁定/高风险余额</p><p className="mt-1 text-2xl font-semibold">{formatNumber(data.portfolio.lockedValueUsdt, 4)}</p></div>
-            <div className="card p-4"><p className="text-sm text-slate-500">待迁移核对</p><p className="mt-1 text-2xl font-semibold">{data.migrationAudit.summary.example_pending || 0}</p></div>
+            <div className="card p-4"><p className="text-sm text-slate-500">未分配现金</p><p className="mt-1 text-2xl font-semibold">{formatNumber(indexProxy?.unallocatedCash ?? data.portfolio.qqqAmmoUsdt, 4)}</p></div>
           </div>
+          <section className="card overflow-hidden">
+            <div className="border-b border-slate-100 p-4">
+              <h2 className="font-semibold text-slate-900">美股指数核心仓</h2>
+              <p className="mt-1 text-sm text-slate-500">只展示账本计算结果，不自动推荐 rQQQ 或 rSPY 的配置比例。</p>
+            </div>
+            <div className="grid gap-3 p-4 lg:grid-cols-3">
+              {[
+                { title: '成长增强仓', symbol: 'rQQQ', desc: '偏科技、AI、半导体、高波动' },
+                { title: '核心分散仓', symbol: 'rSPY', desc: '标普500，更分散、波动通常低于 rQQQ' },
+              ].map((item) => {
+                const row = indexProxy?.symbols?.[item.symbol];
+                return (
+                  <div key={item.symbol} className="rounded-lg border border-slate-200 p-3">
+                    <p className="text-xs font-semibold text-slate-500">{item.title}</p>
+                    <h3 className="mt-1 text-lg font-semibold text-slate-950">{item.symbol}</h3>
+                    <p className="text-xs text-slate-500">{item.desc}</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <span>数量</span><strong>{formatNumber(row?.quantity, 8)}</strong>
+                      <span>均价</span><strong>{formatNumber(row?.averageCost, 6)}</strong>
+                      <span>参考价</span><strong>{row?.referencePrice ? formatNumber(row.referencePrice, 6) : '未录入'}</strong>
+                      <span>未实现盈亏</span><strong>{row?.unrealizedPnl === null || row?.unrealizedPnl === undefined ? '需参考价' : formatNumber(row.unrealizedPnl, 4)}</strong>
+                      <span>指数仓占比</span><strong>{formatNumber(row?.weightPct, 2)}%</strong>
+                      <span>Day 计划</span><strong>{formatNumber(indexProxy?.plannedBySymbol?.[item.symbol], 4)} USDT</strong>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="rounded-lg border border-slate-200 p-3">
+                <p className="text-xs font-semibold text-slate-500">高风险卫星仓</p>
+                <h3 className="mt-1 text-lg font-semibold text-slate-950">BTC / MSTR / STRC / rSPCX</h3>
+                <p className="text-xs text-slate-500">不得与核心指数仓混算。</p>
+                <div className="mt-3 space-y-2 text-sm">
+                  {(indexProxy?.satellites?.length ? indexProxy.satellites : []).map((item) => (
+                    <p key={item.symbol} className="flex justify-between gap-2"><span>{item.symbol} {formatNumber(item.quantity, 8)}</span><strong>{formatNumber(item.valueUsdt, 4)}</strong></p>
+                  ))}
+                  {!indexProxy?.satellites?.length ? <p className="text-slate-500">暂无卫星仓持仓。</p> : null}
+                  <p className="border-t border-slate-100 pt-2 text-amber-700">锁定仓与高风险仓不计入指数代理资产弹药。</p>
+                </div>
+              </div>
+            </div>
+          </section>
           <form className="card flex flex-wrap items-end gap-3 p-4" onSubmit={(event) => {
             event.preventDefault();
             void run('设置空闲 USDT', async () => (await serverApi.setMarketFreeCash({ currency: 'USDT', accountId: 1, amount: Number(freeUsdt), note: '页面手动设置空闲 USDT' })).dashboard);
@@ -304,8 +346,20 @@ export function MarketCopilotPage() {
               <label className="label flex-1">价格<input className="field" value={price.value} onChange={(event) => setPrice({ ...price, value: event.target.value })} /></label>
               <button className="btn btn-primary" disabled={Boolean(busy)}><Save size={16} /></button>
             </form>
-            <div className="card p-4 md:col-span-2"><p className="text-sm text-amber-700">参考价由用户手动录入，不是实时行情；未录入参考价时不计算未实现盈亏。锁定仓与高风险仓不计入 QQQ/rQQQ 弹药。</p></div>
+            <div className="card p-4 md:col-span-2"><p className="text-sm text-amber-700">参考价由用户手动录入，不是实时行情；未录入参考价时不计算未实现盈亏。锁定仓与高风险仓不计入 rQQQ/rSPY 指数代理资产弹药。</p></div>
           </div>
+          <section className="card p-4">
+            <h2 className="font-semibold text-slate-900">指数仓资金分配</h2>
+            <div className="mt-3 grid gap-3 md:grid-cols-3 lg:grid-cols-6">
+              <div><p className="text-xs text-slate-500">rQQQ 名义金额</p><p className="font-semibold">{formatNumber(indexProxy?.symbols?.rQQQ?.valueUsdt, 4)}</p></div>
+              <div><p className="text-xs text-slate-500">rSPY 名义金额</p><p className="font-semibold">{formatNumber(indexProxy?.symbols?.rSPY?.valueUsdt, 4)}</p></div>
+              <div><p className="text-xs text-slate-500">rQQQ Day 计划</p><p className="font-semibold">{formatNumber(indexProxy?.plannedBySymbol?.rQQQ, 4)}</p></div>
+              <div><p className="text-xs text-slate-500">rSPY Day 计划</p><p className="font-semibold">{formatNumber(indexProxy?.plannedBySymbol?.rSPY, 4)}</p></div>
+              <div><p className="text-xs text-slate-500">合计计划</p><p className="font-semibold">{formatNumber(indexProxy?.totalPlannedUsdt, 4)}</p></div>
+              <div><p className="text-xs text-slate-500">未分配现金</p><p className="font-semibold">{formatNumber(indexProxy?.unallocatedCash, 4)}</p></div>
+            </div>
+            {indexProxy?.exceedsAvailable ? <p className="mt-3 text-sm text-rose-700">当前 Day 单计划已经超过可自由 USDT，请减少计划金额；系统不会把锁定资金纳入预算。</p> : null}
+          </section>
           <div className="grid gap-4 xl:grid-cols-2">
             <section className="card overflow-hidden"><h2 className="border-b border-slate-100 p-4 font-semibold">持仓</h2><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3">标的</th><th>账户</th><th>数量</th><th>均价</th><th>成本待核对</th></tr></thead><tbody>{data.portfolio.positions.map((item) => <tr key={item.key} className="border-t border-slate-100"><td className="p-3 font-semibold">{item.symbol}</td><td>{item.accountName}</td><td>{formatNumber(item.quantity, 8)}</td><td>{formatNumber(item.averageCost, 6)}</td><td>{item.costReviewRequired ? '是' : '否'}</td></tr>)}</tbody></table></section>
             <section className="card overflow-hidden"><h2 className="border-b border-slate-100 p-4 font-semibold">余额</h2><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-slate-500"><tr><th className="p-3">币种</th><th>账户</th><th>数量</th><th>锁定</th><th>高风险</th></tr></thead><tbody>{data.portfolio.balances.map((item) => <tr key={item.key} className="border-t border-slate-100"><td className="p-3 font-semibold">{item.symbol}</td><td>{item.accountName}</td><td>{formatNumber(item.quantity, 8)}</td><td>{item.locked ? '是' : '否'}</td><td>{item.highRisk ? '是' : '否'}</td></tr>)}</tbody></table></section>
@@ -315,9 +369,10 @@ export function MarketCopilotPage() {
 
       {data && activeTab === 'Day 单计划' ? (
         <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
-          <form className="card space-y-3 p-4" onSubmit={(event) => { event.preventDefault(); void run('保存 Day 单计划', async () => (await serverApi.saveMarketDayOrderPlan({ instrumentSymbol: 'rQQQ', direction: 'buy', availableAmmoSnapshot: data.portfolio.qqqAmmoUsdt, estimatedFeeRate: Number(plan.feeRate), validUntil: '美股当日收盘', note: plan.note, legs: [{ limitPrice: Number(plan.price1), amountUsdt: Number(plan.amount1) }, { limitPrice: Number(plan.price2), amountUsdt: Number(plan.amount2) }].filter((item) => item.limitPrice > 0 && item.amountUsdt > 0) })).dashboard); }}>
+          <form className="card space-y-3 p-4" onSubmit={(event) => { event.preventDefault(); void run('保存 Day 单计划', async () => (await serverApi.saveMarketDayOrderPlan({ instrumentSymbol: plan.instrumentSymbol, direction: 'buy', availableAmmoSnapshot: indexProxy?.availableAmmoUsdt ?? data.portfolio.qqqAmmoUsdt, estimatedFeeRate: Number(plan.feeRate), validUntil: '美股当日收盘', note: plan.note, legs: [{ limitPrice: Number(plan.price1), amountUsdt: Number(plan.amount1) }, { limitPrice: Number(plan.price2), amountUsdt: Number(plan.amount2) }].filter((item) => item.limitPrice > 0 && item.amountUsdt > 0) })).dashboard); }}>
             <h2 className="font-semibold text-slate-900"><WalletCards size={16} className="mr-1 inline" />Day 限价计划器</h2>
             <p className="text-sm text-slate-500">只生成计划和提醒，不连接交易所，不代表已挂单或已撤单。</p>
+            <label className="label">标的<select className="field" value={plan.instrumentSymbol} onChange={(event) => setPlan({ ...plan, instrumentSymbol: event.target.value })}>{['rQQQ', 'rSPY'].map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
             <div className="grid grid-cols-2 gap-2"><label className="label">第一档金额<input className="field" value={plan.amount1} onChange={(event) => setPlan({ ...plan, amount1: event.target.value })} /></label><label className="label">第一档限价<input className="field" value={plan.price1} onChange={(event) => setPlan({ ...plan, price1: event.target.value })} /></label></div>
             <div className="grid grid-cols-2 gap-2"><label className="label">第二档金额<input className="field" value={plan.amount2} onChange={(event) => setPlan({ ...plan, amount2: event.target.value })} /></label><label className="label">第二档限价<input className="field" value={plan.price2} onChange={(event) => setPlan({ ...plan, price2: event.target.value })} /></label></div>
             <label className="label">预计手续费率<input className="field" value={plan.feeRate} onChange={(event) => setPlan({ ...plan, feeRate: event.target.value })} /></label>
@@ -325,6 +380,18 @@ export function MarketCopilotPage() {
             <button className="btn btn-primary w-full" disabled={Boolean(busy)}><Save size={16} />保存计划</button>
           </form>
           <div className="space-y-3">
+            <section className="card p-4">
+              <h2 className="font-semibold text-slate-900">指数仓资金分配预览</h2>
+              <div className="mt-3 grid gap-2 text-sm md:grid-cols-2">
+                <p>rQQQ 已持仓名义金额：<strong>{formatNumber(indexProxy?.symbols?.rQQQ?.valueUsdt, 4)} USDT</strong></p>
+                <p>rSPY 已持仓名义金额：<strong>{formatNumber(indexProxy?.symbols?.rSPY?.valueUsdt, 4)} USDT</strong></p>
+                <p>rQQQ Day 单计划金额：<strong>{formatNumber(indexProxy?.plannedBySymbol?.rQQQ, 4)} USDT</strong></p>
+                <p>rSPY Day 单计划金额：<strong>{formatNumber(indexProxy?.plannedBySymbol?.rSPY, 4)} USDT</strong></p>
+                <p>两者合计：<strong>{formatNumber(indexProxy?.totalPlannedUsdt, 4)} USDT</strong></p>
+                <p>未分配现金：<strong>{formatNumber(indexProxy?.unallocatedCash, 4)} USDT</strong></p>
+              </div>
+              {indexProxy?.exceedsAvailable ? <p className="mt-3 text-sm text-rose-700">预算已超出实际可动用现金；锁定资金不会被系统计入预算。</p> : <p className="mt-3 text-sm text-slate-500">系统只提示预算是否超限，不自动建议买 rQQQ 还是 rSPY。</p>}
+            </section>
             {data.orderPlans.map((item) => <div key={item.id} className="card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">#{item.id} {item.planDate} {item.instrumentSymbol}</h3><StatusBadge value={item.status} /></div><p className="mt-1 text-sm text-slate-500">可用弹药快照 {formatNumber(item.availableAmmoSnapshot, 4)} USDT，总占用 {formatNumber(item.totalAmount, 4)} USDT，有效期 {item.validUntil}</p><div className="mt-3 grid gap-2 md:grid-cols-2">{item.legs.map((leg) => <div key={leg.levelIndex} className="rounded-lg border border-slate-200 p-3 text-sm">第 {leg.levelIndex} 档：限价 {formatNumber(leg.limitPrice, 6)}，金额 {formatNumber(leg.amountUsdt, 4)}，预计数量 {formatNumber(leg.expectedQuantity, 8)}，手续费 {formatNumber(leg.expectedFee, 6)}</div>)}</div><p className="mt-3 text-sm text-amber-700">请到 Bitget 手动确认 Day 单状态。</p><div className="mt-3 flex gap-2"><button className="btn btn-soft" type="button" onClick={() => void run('复制 Day 单计划', async () => (await serverApi.duplicateMarketDayOrderPlan(item.id)).dashboard)}>复制到今天</button><button className="btn btn-soft" type="button" onClick={() => void run('删除 Day 单计划', async () => (await serverApi.deleteMarketDayOrderPlan(item.id)).dashboard)}>删除</button></div></div>)}
           </div>
         </div>
