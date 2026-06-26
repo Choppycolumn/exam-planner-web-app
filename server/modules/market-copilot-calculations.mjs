@@ -12,19 +12,6 @@ export const DEFAULT_INSTRUMENTS = [
   { symbol: 'CNY', name: '人民币', assetClass: 'cash', quoteCurrency: 'CNY' },
 ];
 
-export const MARKET_WATCHLIST = [
-  { symbol: 'QQQ', name: 'QQQ' },
-  { symbol: 'NQ', name: 'Nasdaq 100 Futures / NQ' },
-  { symbol: 'SOXX', name: 'SOXX' },
-  { symbol: 'NVDA', name: 'NVDA' },
-  { symbol: 'VIX', name: 'VIX' },
-  { symbol: 'US10Y', name: '美国十年期国债收益率' },
-  { symbol: 'DXY', name: '美元指数 DXY' },
-  { symbol: 'BTC-USD', name: 'BTC-USD' },
-  { symbol: 'MSTR', name: 'MSTR' },
-  { symbol: 'USD-CNY', name: 'USD/CNY 参考汇率' },
-];
-
 export function roundNumber(value, digits = 6) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return 0;
@@ -32,39 +19,64 @@ export function roundNumber(value, digits = 6) {
   return Math.round((number + Number.EPSILON) * factor) / factor;
 }
 
-function transactionGross(tx) {
-  const gross = Number(tx.grossAmount ?? tx.gross_amount ?? 0);
-  if (gross > 0) return gross;
-  return Number(tx.price || 0) * Number(tx.quantity || 0);
+export function nowInTimezones(date = new Date()) {
+  const format = (timeZone) =>
+    new Intl.DateTimeFormat('zh-CN', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date);
+  return {
+    shanghai: format('Asia/Shanghai'),
+    tokyo: format('Asia/Tokyo'),
+    newYork: format('America/New_York'),
+  };
 }
 
-function normalizeAction(action = '') {
-  const value = String(action).trim();
-  if (['买入', 'buy'].includes(value)) return 'buy';
-  if (['卖出', 'sell'].includes(value)) return 'sell';
-  if (['转入', 'transfer_in'].includes(value)) return 'transfer_in';
-  if (['转出', 'transfer_out'].includes(value)) return 'transfer_out';
-  if (['换汇', 'exchange'].includes(value)) return 'exchange';
-  if (['锁定', 'lock'].includes(value)) return 'lock';
-  if (['解锁', 'unlock'].includes(value)) return 'unlock';
-  return value || 'other';
+export function marketSessionForDate(date, { timezone = 'America/New_York' } = {}) {
+  const iso = typeof date === 'string' ? date.slice(0, 10) : new Date(date).toISOString().slice(0, 10);
+  const day = new Date(`${iso}T12:00:00Z`).getUTCDay();
+  const holidays = new Set([
+    '2026-01-01',
+    '2026-01-19',
+    '2026-02-16',
+    '2026-04-03',
+    '2026-05-25',
+    '2026-06-19',
+    '2026-07-03',
+    '2026-09-07',
+    '2026-11-26',
+    '2026-12-25',
+  ]);
+  const halfDays = new Set(['2026-11-27', '2026-12-24']);
+  if (day === 0 || day === 6) return { date: iso, timezone, isTradingDay: false, sessionType: 'weekend', openTime: null, closeTime: null };
+  if (holidays.has(iso)) return { date: iso, timezone, isTradingDay: false, sessionType: 'holiday', openTime: null, closeTime: null };
+  return { date: iso, timezone, isTradingDay: true, sessionType: halfDays.has(iso) ? 'half_day' : 'regular', openTime: '09:30', closeTime: halfDays.has(iso) ? '13:00' : '16:00' };
 }
 
-function ensurePosition(map, symbol) {
-  if (!map.has(symbol)) {
-    map.set(symbol, {
-      symbol,
+function ensureAsset(map, key, seed = {}) {
+  if (!map.has(key)) {
+    map.set(key, {
+      key,
+      accountId: seed.accountId ?? null,
+      accountName: seed.accountName || '',
+      symbol: seed.symbol || key,
       quantity: 0,
       costBasis: 0,
       averageCost: 0,
       realizedPnl: 0,
-      unrealizedPnl: 0,
-      marketValue: 0,
       cumulativeFees: {},
-      confirmedTransactions: 0,
+      costReviewRequired: false,
+      locked: Boolean(seed.locked),
+      highRisk: Boolean(seed.highRisk),
     });
   }
-  return map.get(symbol);
+  return map.get(key);
 }
 
 function addFee(position, currency, amount) {
@@ -73,140 +85,153 @@ function addFee(position, currency, amount) {
   position.cumulativeFees[currency] = roundNumber((position.cumulativeFees[currency] || 0) + fee, 8);
 }
 
-function addCash(cash, currency, delta) {
-  if (!currency) return;
-  cash[currency] = roundNumber((cash[currency] || 0) + Number(delta || 0), 8);
+function addBalance(map, key, delta, meta = {}) {
+  if (!map.has(key)) {
+    map.set(key, {
+      key,
+      accountId: meta.accountId ?? null,
+      accountName: meta.accountName || '',
+      symbol: meta.symbol || key,
+      quantity: 0,
+      locked: Boolean(meta.locked),
+      highRisk: Boolean(meta.highRisk),
+    });
+  }
+  const row = map.get(key);
+  row.quantity = roundNumber(row.quantity + Number(delta || 0), 8);
+  row.locked = row.locked || Boolean(meta.locked);
+  row.highRisk = row.highRisk || Boolean(meta.highRisk);
 }
 
-export function calculateLedger({
-  transactions = [],
-  cashBalances = [],
-  lockedPositions = [],
-  prices = {},
-  quoteCurrencies = {},
-} = {}) {
-  const positions = new Map();
-  const cash = {};
-  const lockedCash = {};
+function quoteDeltaForTransaction(type, leg) {
+  const nominal = Number(leg.nominalAmount ?? leg.nominal_amount ?? 0);
+  const fee = Number(leg.feeAmount ?? leg.fee_amount ?? 0);
+  const quote = leg.quoteCurrency || leg.quote_currency || 'USDT';
+  const feeCurrency = leg.feeCurrency || leg.fee_currency || quote;
+  if (type === 'buy') return { currency: quote, amount: -(nominal + (feeCurrency === quote ? fee : 0)) };
+  if (type === 'sell') return { currency: quote, amount: nominal - (feeCurrency === quote ? fee : 0) };
+  return null;
+}
 
-  for (const balance of cashBalances) {
-    addCash(cash, balance.currency, Number(balance.amount || 0));
-    addCash(lockedCash, balance.currency, Number(balance.lockedAmount ?? balance.locked_amount ?? 0));
-  }
+export function calculateLedger({ transactions = [], manualPrices = {}, accounts = [], instruments = [] } = {}) {
+  const accountMap = new Map(accounts.map((account) => [Number(account.id), account]));
+  const instrumentMap = new Map(instruments.map((instrument) => [instrument.symbol, instrument]));
+  const positions = new Map();
+  const balances = new Map();
+  const issues = [];
 
   const sorted = [...transactions]
-    .filter((tx) => tx.confirmed !== false && Number(tx.confirmed ?? 1) !== 0)
-    .sort((a, b) => String(a.tradedAt || a.traded_at).localeCompare(String(b.tradedAt || b.traded_at)) || Number(a.id || 0) - Number(b.id || 0));
+    .filter((tx) => !tx.isDeleted && !tx.isVoid && !tx.isVoided && !['deleted', 'voided'].includes(tx.status))
+    .filter((tx) => tx.migrationState !== 'example_pending' && tx.migrationState !== 'archived')
+    .sort((a, b) => String(a.occurredAt || a.occurred_at).localeCompare(String(b.occurredAt || b.occurred_at)) || Number(a.id || 0) - Number(b.id || 0));
 
   for (const tx of sorted) {
-    const symbol = tx.instrumentSymbol || tx.instrument_symbol;
-    const action = normalizeAction(tx.action);
-    const quantity = Math.max(0, Number(tx.quantity || 0));
-    const gross = transactionGross(tx);
-    const quote = quoteCurrencies[symbol] || tx.quoteCurrency || tx.quote_currency || 'USDT';
-    const feeCurrency = tx.feeCurrency || tx.fee_currency || quote;
-    const fee = Number(tx.feeAmount ?? tx.fee_amount ?? 0);
-    const position = ensurePosition(positions, symbol);
-    position.confirmedTransactions += 1;
-    addFee(position, feeCurrency, fee);
+    const type = tx.transactionType || tx.transaction_type || 'other';
+    const txAccount = accountMap.get(Number(tx.accountId ?? tx.account_id));
+    for (const rawLeg of tx.legs || []) {
+      const symbol = rawLeg.instrumentSymbol || rawLeg.instrument_symbol;
+      if (!symbol) continue;
+      const accountId = Number(rawLeg.accountId ?? rawLeg.account_id ?? tx.accountId ?? tx.account_id ?? 0) || null;
+      const account = accountMap.get(Number(accountId)) || txAccount || {};
+      const instrument = instrumentMap.get(symbol) || {};
+      const locked = rawLeg.lockState === 'locked' || rawLeg.lock_state === 'locked' || account.isLockedDefault || account.is_locked_default || instrument.isLockedDefault || instrument.is_locked_default;
+      const highRisk = instrument.isHighRiskDefault || instrument.is_high_risk_default || ['USDGO', 'rSPCX'].includes(symbol);
+      const quantity = Number(rawLeg.quantity || 0);
+      const quote = rawLeg.quoteCurrency || rawLeg.quote_currency || instrument.quoteCurrency || instrument.quote_currency || 'USDT';
+      const nominal = Number(rawLeg.nominalAmount ?? rawLeg.nominal_amount ?? Math.abs(quantity) * Number(rawLeg.unitPrice ?? rawLeg.unit_price ?? 0));
+      const fee = Number(rawLeg.feeAmount ?? rawLeg.fee_amount ?? 0);
+      const feeCurrency = rawLeg.feeCurrency || rawLeg.fee_currency || quote;
+      const positionKey = `${accountId || 'manual'}:${symbol}`;
 
-    if (action === 'buy') {
-      const feeInQuote = feeCurrency === quote ? fee : 0;
-      position.quantity += quantity;
-      position.costBasis += gross + feeInQuote;
-      addCash(cash, quote, -(gross + feeInQuote));
-      if (fee > 0 && feeCurrency !== quote) addCash(cash, feeCurrency, -fee);
-    } else if (action === 'sell') {
-      const sellQuantity = Math.min(quantity, Math.max(0, position.quantity));
-      const averageCost = position.quantity > EPSILON ? position.costBasis / position.quantity : 0;
-      const feeInQuote = feeCurrency === quote ? fee : 0;
-      const proceeds = gross - feeInQuote;
-      position.realizedPnl += proceeds - averageCost * sellQuantity;
-      position.quantity -= sellQuantity;
-      position.costBasis -= averageCost * sellQuantity;
-      addCash(cash, quote, proceeds);
-      if (fee > 0 && feeCurrency !== quote) addCash(cash, feeCurrency, -fee);
-    } else if (action === 'transfer_in') {
-      position.quantity += quantity;
-      position.costBasis += gross;
-      if (symbol === quote) addCash(cash, symbol, quantity);
-    } else if (action === 'transfer_out') {
-      const outQuantity = Math.min(quantity, Math.max(0, position.quantity));
-      const averageCost = position.quantity > EPSILON ? position.costBasis / position.quantity : 0;
-      position.quantity -= outQuantity;
-      position.costBasis -= averageCost * outQuantity;
-      if (symbol === quote) addCash(cash, symbol, -quantity);
-    } else if (action === 'lock') {
-      addCash(lockedCash, symbol, quantity);
-      addCash(cash, symbol, -quantity);
-    } else if (action === 'unlock') {
-      addCash(lockedCash, symbol, -quantity);
-      addCash(cash, symbol, quantity);
-    }
+      if (['buy', 'sell'].includes(type) && !['USDT', 'USDC', 'USD', 'CNY'].includes(symbol)) {
+        const position = ensureAsset(positions, positionKey, { accountId, accountName: account.name, symbol, locked, highRisk });
+        addFee(position, feeCurrency, fee);
+        if (fee > 0 && feeCurrency !== quote) {
+          position.costReviewRequired = true;
+          issues.push({ level: 'warning', code: 'FEE_CURRENCY_REVIEW', message: `${symbol} 手续费币种 ${feeCurrency} 与计价币种 ${quote} 不同，成本待核对。`, transactionId: tx.id });
+        }
+        if (type === 'buy') {
+          const feeInQuote = feeCurrency === quote ? fee : 0;
+          position.quantity += Math.abs(quantity);
+          position.costBasis += nominal + feeInQuote;
+        } else {
+          const sellQuantity = Math.min(Math.abs(quantity), Math.max(0, position.quantity));
+          const avg = position.quantity > EPSILON ? position.costBasis / position.quantity : 0;
+          const feeInQuote = feeCurrency === quote ? fee : 0;
+          position.realizedPnl += (nominal - feeInQuote) - avg * sellQuantity;
+          position.quantity -= sellQuantity;
+          position.costBasis -= avg * sellQuantity;
+        }
+        if (position.quantity <= EPSILON) {
+          position.quantity = 0;
+          position.costBasis = 0;
+        }
+        position.averageCost = position.quantity > EPSILON ? position.costBasis / position.quantity : 0;
+      } else {
+        addBalance(balances, positionKey, quantity, { accountId, accountName: account.name, symbol, locked, highRisk });
+      }
 
-    if (position.quantity <= EPSILON) {
-      position.quantity = 0;
-      position.costBasis = 0;
+      const quoteDelta = quoteDeltaForTransaction(type, { ...rawLeg, quoteCurrency: quote, nominalAmount: nominal, feeAmount: fee, feeCurrency });
+      if (quoteDelta) {
+        addBalance(balances, `${accountId || 'manual'}:${quoteDelta.currency}`, quoteDelta.amount, {
+          accountId,
+          accountName: account.name,
+          symbol: quoteDelta.currency,
+          locked,
+          highRisk: false,
+        });
+      }
+      if (fee > 0 && feeCurrency !== quote) {
+        addBalance(balances, `${accountId || 'manual'}:${feeCurrency}`, -fee, { accountId, accountName: account.name, symbol: feeCurrency, locked, highRisk: false });
+      }
     }
-    position.averageCost = position.quantity > EPSILON ? position.costBasis / position.quantity : 0;
   }
 
-  const locked = lockedPositions.map((item) => {
-    const symbol = item.instrumentSymbol || item.instrument_symbol;
-    const quantity = Number(item.quantity || 0);
-    const referencePrice = Number(item.referencePrice ?? item.reference_price ?? prices[symbol] ?? 0);
-    return {
-      id: item.id,
-      symbol,
-      quantity: roundNumber(quantity, 8),
-      referencePrice: roundNumber(referencePrice, 8),
-      valueUsdt: roundNumber(quantity * referencePrice, 4),
-      category: item.category || '锁定仓',
-      riskLevel: item.riskLevel || item.risk_level || 'high',
-      includeInAmmo: Boolean(item.includeInAmmo ?? item.include_in_ammo ?? false),
-      note: item.note || '',
-    };
-  });
-
   const positionList = [...positions.values()].map((position) => {
-    const price = Number(prices[position.symbol] || 0);
-    const marketValue = price > 0 ? position.quantity * price : 0;
-    const unrealizedPnl = price > 0 ? marketValue - position.costBasis : 0;
+    const referencePrice = Number(manualPrices[position.symbol] || 0);
+    const marketValue = referencePrice > 0 ? position.quantity * referencePrice : 0;
     return {
       ...position,
       quantity: roundNumber(position.quantity, 8),
       costBasis: roundNumber(position.costBasis, 6),
       averageCost: roundNumber(position.averageCost, 6),
       realizedPnl: roundNumber(position.realizedPnl, 6),
-      unrealizedPnl: roundNumber(unrealizedPnl, 6),
+      referencePrice: referencePrice || null,
       marketValue: roundNumber(marketValue, 6),
-      referencePrice: price || null,
+      unrealizedPnl: referencePrice > 0 ? roundNumber(marketValue - position.costBasis, 6) : null,
     };
   });
 
-  const totalMarketValue = positionList.reduce((sum, item) => sum + Math.max(0, item.marketValue || 0), 0);
-  const assetAllocation = positionList.map((item) => ({
-    symbol: item.symbol,
-    value: item.marketValue,
-    weight: totalMarketValue > 0 ? roundNumber((item.marketValue / totalMarketValue) * 100, 2) : 0,
-  }));
-  const lockedValueUsdt = locked.filter((item) => !item.includeInAmmo).reduce((sum, item) => sum + item.valueUsdt, 0);
-  const freeUsdt = roundNumber((cash.USDT || 0) - (lockedCash.USDT || 0), 6);
+  const balancesList = [...balances.values()].map((balance) => ({ ...balance, quantity: roundNumber(balance.quantity, 8) }));
+  const freeCash = balancesList.filter((row) => !row.locked && ['USDT', 'USDC', 'USD', 'CNY'].includes(row.symbol));
+  const lockedBalances = balancesList.filter((row) => row.locked || row.highRisk);
+  const freeUsdt = freeCash.filter((row) => row.symbol === 'USDT').reduce((sum, row) => sum + row.quantity, 0);
+  const freeUsdc = freeCash.filter((row) => row.symbol === 'USDC').reduce((sum, row) => sum + row.quantity, 0);
+  const freeUsd = freeCash.filter((row) => row.symbol === 'USD').reduce((sum, row) => sum + row.quantity, 0);
+  const qqqAmmoUsdt = Math.max(0, freeUsdt);
+  const totalCostBasis = positionList.reduce((sum, row) => sum + Math.max(0, row.costBasis || 0), 0);
 
   return {
     positions: positionList,
-    cash,
-    lockedCash,
-    lockedPositions: locked,
-    freeUsdt,
-    lockedValueUsdt: roundNumber(lockedValueUsdt, 6),
-    qqqAmmoUsdt: roundNumber(Math.max(0, freeUsdt), 6),
-    assetAllocation,
+    balances: balancesList,
+    freeCash,
+    lockedBalances,
+    freeUsdt: roundNumber(freeUsdt, 6),
+    freeUsdc: roundNumber(freeUsdc, 6),
+    freeUsd: roundNumber(freeUsd, 6),
+    qqqAmmoUsdt: roundNumber(qqqAmmoUsdt, 6),
+    lockedValueUsdt: roundNumber(lockedBalances.filter((row) => row.symbol === 'USDT' || row.symbol === 'USDGO').reduce((sum, row) => sum + Math.max(0, row.quantity), 0), 6),
+    assetAllocation: positionList.map((row) => ({
+      symbol: row.symbol,
+      value: row.costBasis,
+      weight: totalCostBasis > 0 ? roundNumber((row.costBasis / totalCostBasis) * 100, 2) : 0,
+    })),
     totals: {
-      marketValue: roundNumber(totalMarketValue, 6),
-      realizedPnl: roundNumber(positionList.reduce((sum, item) => sum + item.realizedPnl, 0), 6),
-      unrealizedPnl: roundNumber(positionList.reduce((sum, item) => sum + item.unrealizedPnl, 0), 6),
+      costBasis: roundNumber(totalCostBasis, 6),
+      realizedPnl: roundNumber(positionList.reduce((sum, row) => sum + Number(row.realizedPnl || 0), 0), 6),
+      unrealizedPnl: roundNumber(positionList.reduce((sum, row) => sum + Number(row.unrealizedPnl || 0), 0), 6),
     },
+    issues,
   };
 }
 
@@ -237,36 +262,37 @@ export function calculateDayOrderPlan({ availableUsdt = 0, feeRate = 0, legs = [
   };
 }
 
-export function marketSessionForDate(date, { timezone = 'America/New_York' } = {}) {
-  const iso = typeof date === 'string' ? date.slice(0, 10) : new Date(date).toISOString().slice(0, 10);
-  const day = new Date(`${iso}T12:00:00Z`).getUTCDay();
-  const holidays = new Set([
-    '2026-01-01',
-    '2026-01-19',
-    '2026-02-16',
-    '2026-04-03',
-    '2026-05-25',
-    '2026-06-19',
-    '2026-07-03',
-    '2026-09-07',
-    '2026-11-26',
-    '2026-12-25',
-  ]);
-  const halfDays = new Set(['2026-11-27', '2026-12-24']);
-  if (day === 0 || day === 6) return { date: iso, timezone, isTradingDay: false, sessionType: 'weekend', openTime: null, closeTime: null };
-  if (holidays.has(iso)) return { date: iso, timezone, isTradingDay: false, sessionType: 'holiday', openTime: null, closeTime: null };
-  const close = halfDays.has(iso) ? '13:00' : '16:00';
-  return { date: iso, timezone, isTradingDay: true, sessionType: halfDays.has(iso) ? 'half_day' : 'regular', openTime: '09:30', closeTime: close };
+export function safeFence(value) {
+  return String(value ?? '').replace(/```/g, '` ` `');
 }
 
-export function riskTagsForReport({ snapshots = [], macroEvents = [], orderPlans = [], session } = {}) {
-  const tags = new Set();
-  const nowMs = Date.now();
-  if (snapshots.some((item) => item.delayStatus === 'stale' || (item.observedAt && nowMs - Date.parse(item.observedAt) > 60 * 60 * 1000))) tags.add('DATA_STALE');
-  if (snapshots.some((item) => item.verificationStatus === 'mismatch')) tags.add('DATA_MISMATCH');
-  if (macroEvents.length) tags.add('EVENT_RISK');
-  if (orderPlans.some((plan) => plan.status === 'active')) tags.add('DAY_ORDER_EXPIRY');
-  tags.add('LOCKED_FUNDS_EXCLUDED');
-  if (session?.sessionType === 'half_day') tags.add('HALF_DAY_SESSION');
-  return [...tags];
+export function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    if (quoted && char === '"' && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (!quoted && char === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (!quoted && char === '\n') {
+      row.push(cell);
+      if (row.some((item) => item.trim())) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += char;
+    }
+  }
+  row.push(cell);
+  if (row.some((item) => item.trim())) rows.push(row);
+  return rows;
 }

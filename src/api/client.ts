@@ -259,13 +259,76 @@ export interface BackupStatus {
 
 export interface MarketCopilotDashboard {
   generatedAt: string;
+  mode?: string;
   timezones: { shanghai: string; tokyo: string; newYork: string };
   instruments: Array<{ symbol: string; name: string; assetClass: string; quoteCurrency: string; manualPrice?: number | null; manualPriceTime?: string | null; notes?: string }>;
-  accounts: Array<{ id: number; name: string; platform: string; baseCurrency: string; isActive: number; note: string }>;
+  accounts: Array<{ id: number; name: string; platform: string; baseCurrency: string; accountType?: string; isLockedDefault?: number; isActive: number; note: string }>;
   transactions: Array<{
     id: number;
-    tradedAt: string;
-    instrumentSymbol: string;
+    transactionGroupId: string;
+    occurredAt: string;
+    createdAt?: string;
+    updatedAt?: string;
+    deletedAt?: string | null;
+    status: string;
+    transactionType: string;
+    source: string;
+    accountId: number | null;
+    accountName?: string;
+    externalReference: string;
+    note: string;
+    tags: string[];
+    orderType: string;
+    version: number;
+    isDeleted: boolean;
+    isVoided: boolean;
+    migrationState: string;
+    legs: Array<{ id: number; instrumentSymbol: string; quantity: number; quoteCurrency: string; unitPrice: number; nominalAmount: number; feeAmount: number; feeCurrency: string; accountId: number | null; lockState: string; note: string }>;
+    tradedAt?: string;
+    action?: string;
+    price?: number;
+    quantity?: number;
+    grossAmount?: number;
+    feeAmount?: number;
+    feeCurrency?: string;
+    confirmed?: number;
+  }>;
+  deletedTransactions: MarketCopilotDashboard['transactions'];
+  portfolio: {
+    positions: Array<{ key: string; symbol: string; accountId: number | null; accountName: string; quantity: number; averageCost: number; costBasis: number; realizedPnl: number; unrealizedPnl: number | null; marketValue: number; referencePrice: number | null; cumulativeFees: Record<string, number>; costReviewRequired?: boolean }>;
+    balances: Array<{ key: string; symbol: string; accountId: number | null; accountName: string; quantity: number; locked: boolean; highRisk: boolean }>;
+    freeCash: Array<{ symbol: string; accountId: number | null; accountName: string; quantity: number }>;
+    lockedBalances: Array<{ symbol: string; accountId: number | null; accountName: string; quantity: number; locked: boolean; highRisk: boolean }>;
+    freeUsdt: number;
+    freeUsdc: number;
+    freeUsd: number;
+    lockedValueUsdt: number;
+    qqqAmmoUsdt: number;
+    assetAllocation: Array<{ symbol: string; value: number; weight: number }>;
+    totals: { costBasis: number; realizedPnl: number; unrealizedPnl: number };
+    issues: Array<{ level: string; code: string; message: string; transactionId?: number }>;
+  };
+  orderPlans: Array<{ id: number; planDate: string; instrumentSymbol: string; direction: string; accountId: number | null; availableAmmoSnapshot: number; totalAmount: number; estimatedFeeRate: number; validUntil: string; status: string; note: string; isDeleted: boolean; legs: Array<{ id?: number; levelIndex: number; limitPrice: number; amountUsdt: number; expectedQuantity: number; expectedFee: number }> }>;
+  latestReport: { id: number; reportKey: string; reportType: string; marketStatus?: string; generatedAt: string; markdown: string; payload?: Record<string, unknown> } | null;
+  reports: Array<{ id: number; reportKey: string; reportType: string; marketStatus?: string; generatedAt: string; markdown: string; payload?: Record<string, unknown> }>;
+  reconciliations: Array<{ id: number; accountId: number | null; reconciledAt: string; status: string; actual: Record<string, number>; computed: Record<string, number>; diff: Record<string, number>; note: string }>;
+  migrationAudit: { summary: Record<string, number>; rows: MarketCopilotDashboard['transactions'] };
+  systemStatus: { externalMarketData: string; message: string };
+  snapshots: Array<{ symbol: string; value: number | null; changePercent: number | null; observedAt: string; sourceName: string; sourceKey: string; delayStatus: string; verificationStatus: string; payload?: Record<string, unknown> }>;
+  sourceStatus: Array<{ sourceKey: string; sourceName: string; status: string; lastSuccessAt: string | null; lastErrorAt: string | null; lastError: string }>;
+  macroEvents: Array<{ id: number; name: string; eventTime: string; timezone: string; importance: string; sourceUrl: string; note: string }>;
+  newsItems: Array<{ id: number; title: string; sourceName: string; sourceUrl: string; publishedAt: string; summary: string; tags: string[]; credibility: string }>;
+  verification: Array<{ symbol: string; status: string; diffPct: number | null; sources: string[] }>;
+  marketSession: { date: string; timezone: string; isTradingDay: boolean; sessionType: string; openTime: string | null; closeTime: string | null };
+  schedule: Array<{ label: string; time: string }>;
+  warnings: string[];
+  readOnly?: boolean;
+}
+
+export interface LegacyMarketCopilotTransaction {
+  id: number;
+  tradedAt: string;
+  instrumentSymbol: string;
     accountId: number | null;
     action: string;
     price: number;
@@ -276,28 +339,6 @@ export interface MarketCopilotDashboard {
     orderType: string;
     note: string;
     confirmed: number;
-  }>;
-  portfolio: {
-    positions: Array<{ symbol: string; quantity: number; averageCost: number; realizedPnl: number; unrealizedPnl: number; marketValue: number; referencePrice: number | null; cumulativeFees: Record<string, number> }>;
-    lockedPositions: Array<{ id: number; symbol: string; quantity: number; referencePrice: number; valueUsdt: number; category: string; riskLevel: string; includeInAmmo: boolean; note: string }>;
-    freeUsdt: number;
-    lockedValueUsdt: number;
-    qqqAmmoUsdt: number;
-    assetAllocation: Array<{ symbol: string; value: number; weight: number }>;
-    totals: { marketValue: number; realizedPnl: number; unrealizedPnl: number };
-  };
-  snapshots: Array<{ symbol: string; value: number | null; changePercent: number | null; observedAt: string; sourceName: string; sourceKey: string; delayStatus: string; verificationStatus: string; payload?: Record<string, unknown> }>;
-  sourceStatus: Array<{ sourceKey: string; sourceName: string; status: string; lastSuccessAt: string | null; lastErrorAt: string | null; lastError: string }>;
-  macroEvents: Array<{ id: number; name: string; eventTime: string; timezone: string; importance: string; sourceUrl: string; note: string }>;
-  newsItems: Array<{ id: number; title: string; sourceName: string; sourceUrl: string; publishedAt: string; summary: string; tags: string[]; credibility: string }>;
-  orderPlans: Array<{ id: number; planDate: string; instrumentSymbol: string; availableUsdt: number; estimatedFeeRate: number; validUntil: string; status: string; note: string; legs: Array<{ levelIndex: number; limitPrice: number; amountUsdt: number; expectedQuantity: number; expectedFee: number }> }>;
-  latestReport: { id: number; reportKey: string; reportType: string; marketStatus: string; generatedAt: string; markdown: string } | null;
-  reports: Array<{ id: number; reportKey: string; reportType: string; marketStatus: string; generatedAt: string; markdown: string }>;
-  verification: Array<{ symbol: string; status: string; diffPct: number | null; sources: string[] }>;
-  marketSession: { date: string; timezone: string; isTradingDay: boolean; sessionType: string; openTime: string | null; closeTime: string | null };
-  schedule: Array<{ label: string; time: string }>;
-  warnings: string[];
-  readOnly?: boolean;
 }
 
 export interface MihomoNode {
@@ -1063,12 +1104,40 @@ export const serverApi = {
   refreshMarketCopilot: () => apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/refresh', { method: 'POST' }),
   generateMarketReport: (body: { reportType?: string; marketStatus?: string } = {}) =>
     apiRequest<{ ok: true; report: NonNullable<MarketCopilotDashboard['latestReport']>; dashboard: MarketCopilotDashboard }>('/market-copilot/report/generate', { method: 'POST', body }),
+  generateMarketPrompt: (body: { reportType?: string } = {}) =>
+    apiRequest<{ ok: true; report: NonNullable<MarketCopilotDashboard['latestReport']>; dashboard: MarketCopilotDashboard }>('/market-copilot/prompt/generate', { method: 'POST', body }),
   saveMarketTransaction: (body: Record<string, unknown>) =>
     apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions', { method: 'POST', body }),
+  updateMarketTransaction: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions/update', { method: 'POST', body }),
+  deleteMarketTransaction: (id: number, reason?: string) =>
+    apiRequest<{ ok: true; count: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions/delete', { method: 'POST', body: { id, reason } }),
+  restoreMarketTransaction: (id: number, reason?: string) =>
+    apiRequest<{ ok: true; count: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions/restore', { method: 'POST', body: { id, reason } }),
+  voidMarketTransaction: (id: number, reason?: string) =>
+    apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions/void', { method: 'POST', body: { id, reason } }),
+  permanentDeleteMarketTransaction: (id: number, reason?: string) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/transactions/permanent-delete', { method: 'POST', body: { id, reason } }),
   saveMarketManualPrice: (body: { symbol: string; price: number }) =>
     apiRequest<{ ok: true; price: { symbol: string; price: number; observedAt: string }; dashboard: MarketCopilotDashboard }>('/market-copilot/manual-price', { method: 'POST', body }),
   saveMarketDayOrderPlan: (body: Record<string, unknown>) =>
     apiRequest<{ ok: true; plan: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans', { method: 'POST', body }),
+  updateMarketDayOrderPlan: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; plan: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans/update', { method: 'POST', body }),
+  deleteMarketDayOrderPlan: (id: number) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans/delete', { method: 'POST', body: { id } }),
+  duplicateMarketDayOrderPlan: (id: number) =>
+    apiRequest<{ ok: true; plan: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans/duplicate', { method: 'POST', body: { id } }),
+  convertMarketDayOrderPlan: (id: number, transaction: Record<string, unknown>) =>
+    apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/day-order-plans/convert', { method: 'POST', body: { id, transaction } }),
+  saveMarketReconciliation: (body: Record<string, unknown>) =>
+    apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/reconciliation', { method: 'POST', body }),
+  dryRunMarketImport: (csvText: string) =>
+    apiRequest<{ ok: true; result: Record<string, unknown> }>('/market-copilot/import/dry-run', { method: 'POST', body: { csvText } }),
+  commitMarketImport: (csvText: string) =>
+    apiRequest<{ ok: true; result: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/import/commit', { method: 'POST', body: { csvText } }),
+  markMarketMigration: (id: number, state: string) =>
+    apiRequest<{ ok: true; transaction: Record<string, unknown>; dashboard: MarketCopilotDashboard }>('/market-copilot/migration/mark', { method: 'POST', body: { id, state } }),
   saveMarketMacroEvent: (body: Record<string, unknown>) =>
     apiRequest<{ ok: true; id: number; dashboard: MarketCopilotDashboard }>('/market-copilot/macro-events', { method: 'POST', body }),
   getReports: () => cachedApiRequest<{ reports: LearningReport[] }>('/reports', 120_000),

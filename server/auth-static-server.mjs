@@ -4673,6 +4673,9 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
   if (!Number(sqliteScalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'instruments';") || 0)) {
     runSqlite(readFileSync(join(migrationsDir, '019_market_copilot_v1.sql'), 'utf8'));
   }
+  if (!Number(sqliteScalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'investment_accounts';") || 0)) {
+    runSqlite(readFileSync(join(migrationsDir, '020_market_copilot_ledger_refactor.sql'), 'utf8'));
+  }
   marketCopilotRepository.seedIfEmpty();
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
@@ -8592,12 +8595,79 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (apiPathname === '/api/market-copilot/prompt/generate' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const report = marketCopilotRepository.generateReport({
+      reportType: body.reportType || 'research_prompt',
+    });
+    sendJson(res, { ok: true, report, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
   if (apiPathname === '/api/market-copilot/transactions' && req.method === 'POST') {
     if (sessionRole === 'read') {
       sendJson(res, { error: 'Read-only mode' }, 403);
       return;
     }
     const id = marketCopilotRepository.saveTransaction(body);
+    tableChanged();
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions/update' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.updateTransaction(body.id, body.transaction || body, { reason: body.reason || '页面编辑' });
+    tableChanged();
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions/delete' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const count = marketCopilotRepository.softDeleteTransaction(body.id, body.reason || '页面删除');
+    tableChanged();
+    sendJson(res, { ok: true, count, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions/restore' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const count = marketCopilotRepository.restoreTransaction(body.id, body.reason || '页面恢复');
+    tableChanged();
+    sendJson(res, { ok: true, count, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions/void' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const result = marketCopilotRepository.voidTransaction(body.id, body.reason || '页面冲销');
+    tableChanged();
+    sendJson(res, { ok: true, result, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/transactions/permanent-delete' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.permanentDeleteTransaction(body.id, body.reason || '页面永久删除');
     tableChanged();
     sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
     return;
@@ -8623,13 +8693,91 @@ ORDER BY project_id;`);
     return;
   }
 
+  if (apiPathname === '/api/market-copilot/day-order-plans/update' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const plan = marketCopilotRepository.updateOrderPlan(body.id, body.plan || body);
+    sendJson(res, { ok: true, plan, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/day-order-plans/delete' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.deleteOrderPlan(body.id);
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/day-order-plans/duplicate' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const plan = marketCopilotRepository.duplicateOrderPlan(body.id);
+    sendJson(res, { ok: true, plan, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/day-order-plans/convert' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const result = marketCopilotRepository.convertOrderPlanToTransaction(body.id, body.transaction || {});
+    tableChanged();
+    sendJson(res, { ok: true, result, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/reconciliation' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const id = marketCopilotRepository.saveReconciliation(body);
+    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/import/dry-run' && req.method === 'POST') {
+    const result = marketCopilotRepository.dryRunImport(body.csvText || body.text || '');
+    sendJson(res, { ok: true, result });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/import/commit' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const result = marketCopilotRepository.commitImport(body.csvText || body.text || '');
+    tableChanged();
+    sendJson(res, { ok: true, result, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
+  if (apiPathname === '/api/market-copilot/migration/mark' && req.method === 'POST') {
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read-only mode' }, 403);
+      return;
+    }
+    const transaction = marketCopilotRepository.markMigration(body.id, body.state || 'active');
+    tableChanged();
+    sendJson(res, { ok: true, transaction, dashboard: marketCopilotRepository.dashboard() });
+    return;
+  }
+
   if (apiPathname === '/api/market-copilot/macro-events' && req.method === 'POST') {
     if (sessionRole === 'read') {
       sendJson(res, { error: 'Read-only mode' }, 403);
       return;
     }
-    const id = marketCopilotRepository.saveMacroEvent(body);
-    sendJson(res, { ok: true, id, dashboard: marketCopilotRepository.dashboard() });
+    sendJson(res, { ok: true, disabled: true, message: '外部宏观日历采集已停用；请在 ChatGPT 研究提示词中联网核验。', dashboard: marketCopilotRepository.dashboard() });
     return;
   }
 
