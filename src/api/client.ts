@@ -125,6 +125,10 @@ export interface DailyBriefSettings {
     count: number;
     offsetsMinutes: number[];
   };
+  customWeeklyPush: {
+    enabled: boolean;
+    days: Record<'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday', string>;
+  };
   email: {
     enabled: boolean;
     host: string;
@@ -153,6 +157,14 @@ export interface DailyBrief {
     title: string;
     generatedAt: string;
     trigger: string;
+    customWeeklyPush?: {
+      enabled: boolean;
+      date: string;
+      weekday: string;
+      weekdayLabel: string;
+      content: string;
+      hasContent: boolean;
+    };
     weather?: {
       ok: boolean;
       cityName?: string;

@@ -19,6 +19,7 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
   const learning = brief.payload.learning;
   const markets = brief.payload.markets ?? [];
   const indexAssessment = brief.payload.indexPurchaseAssessment;
+  const customWeeklyPush = brief.payload.customWeeklyPush;
 
   return (
     <section className="card p-5">
@@ -32,6 +33,13 @@ function BriefDetail({ brief }: { brief: DailyBrief }) {
           {brief.emailedAt ? `已邮件推送 ${new Date(brief.emailedAt).toLocaleString()}` : '尚未邮件推送'}
         </div>
       </div>
+
+      {customWeeklyPush?.hasContent ? (
+        <div className="mt-5 rounded-lg border border-emerald-100 bg-emerald-50 p-4">
+          <p className="flex items-center gap-2 text-sm font-semibold text-emerald-900"><BellRing size={16} />{customWeeklyPush.weekdayLabel}自定义推送</p>
+          <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-emerald-950">{customWeeklyPush.content}</p>
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">

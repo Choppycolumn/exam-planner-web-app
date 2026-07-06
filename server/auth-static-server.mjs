@@ -1884,6 +1884,18 @@ function defaultDailyBriefSettings() {
       count: 1,
       offsetsMinutes: [60],
     },
+    customWeeklyPush: {
+      enabled: true,
+      days: {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      },
+    },
     email: {
       enabled: false,
       host: '',
@@ -1895,6 +1907,48 @@ function defaultDailyBriefSettings() {
       to: '',
       subjectPrefix: 'Exam Planner 今日简报',
     },
+  };
+}
+
+const weekdayLabels = {
+  monday: '周一',
+  tuesday: '周二',
+  wednesday: '周三',
+  thursday: '周四',
+  friday: '周五',
+  saturday: '周六',
+  sunday: '周日',
+};
+
+const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function normalizeCustomWeeklyPushSettings(input = {}, previous = null) {
+  const defaults = defaultDailyBriefSettings().customWeeklyPush;
+  const previousSettings = previous?.customWeeklyPush || {};
+  const inputDays = input.days || {};
+  const previousDays = previousSettings.days || {};
+  const days = {};
+  for (const key of Object.keys(weekdayLabels)) {
+    days[key] = String(inputDays[key] ?? previousDays[key] ?? defaults.days[key] ?? '').slice(0, 1200);
+  }
+  return {
+    enabled: Boolean(input.enabled ?? previousSettings.enabled ?? defaults.enabled),
+    days,
+  };
+}
+
+function customWeeklyPushForDate(date, settings = getDailyBriefSettings({ includeSecret: true })) {
+  const dayIndex = new Date(`${String(date || todayISO()).slice(0, 10)}T12:00:00+08:00`).getDay();
+  const weekday = weekdayKeys[dayIndex] || 'monday';
+  const config = settings.customWeeklyPush || defaultDailyBriefSettings().customWeeklyPush;
+  const content = String(config.days?.[weekday] || '').trim();
+  return {
+    enabled: Boolean(config.enabled),
+    date: String(date || todayISO()).slice(0, 10),
+    weekday,
+    weekdayLabel: weekdayLabels[weekday] || weekday,
+    content: Boolean(config.enabled) ? content : '',
+    hasContent: Boolean(config.enabled && content),
   };
 }
 
@@ -1938,6 +1992,7 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
       enabled: Boolean(wechatInput.enabled ?? previousWechat.enabled ?? defaults.wechat.enabled),
     },
     taskReminders: normalizeTaskReminderSettings(input.taskReminders || {}, previous),
+    customWeeklyPush: normalizeCustomWeeklyPushSettings(input.customWeeklyPush || {}, previous),
     email: {
       enabled: Boolean(emailInput.enabled),
       host: String(emailInput.host || previousEmail.host || '').trim(),
@@ -3291,6 +3346,7 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     title: dailyBriefTitle(date),
     generatedAt,
     trigger,
+    customWeeklyPush: customWeeklyPushForDate(date, settings),
     weather,
     markets,
     indexPurchaseAssessment,
@@ -3448,6 +3504,7 @@ function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const customWeeklyPush = payload.customWeeklyPush || {};
   const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
     ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（5 年 ${escapeHtml(item.pePercentile5)}% / 10 年 ${escapeHtml(item.pePercentile10)}%）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
     : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
@@ -3463,6 +3520,7 @@ function dailyBriefHtml(payload) {
   <p>${escapeHtml(weather.cityName || '')}：${weather.ok ? `${escapeHtml(weather.condition)}，${escapeHtml(weather.temperature)}℃，${escapeHtml(weather.minTemperature)}-${escapeHtml(weather.maxTemperature)}℃，降水概率 ${escapeHtml(weather.precipitationProbability)}%` : `获取失败：${escapeHtml(weather.error || '')}`}</p>
   <h2>学习提醒</h2>
   <p>昨日学习：${Math.round(Number(learning.yesterdayMinutes || 0) / 60 * 10) / 10} 小时；近 7 天累计：${Math.round(Number(learning.last7Minutes || 0) / 60 * 10) / 10} 小时。</p>
+  ${customWeeklyPush.hasContent ? `<h2>${escapeHtml(customWeeklyPush.weekdayLabel || '今日')}自定义推送</h2><p style="white-space:pre-wrap">${escapeHtml(customWeeklyPush.content)}</p>` : ''}
   <h2>今日学习督促</h2>
   ${studyPush}
   ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
@@ -6907,6 +6965,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const learning = payload.learning || {};
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const customWeeklyPush = payload.customWeeklyPush || {};
   const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
   const weatherLine = weather.ok
     ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
@@ -6941,6 +7000,8 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     '',
     ...clawbotSection('学习', learningLines),
     '',
+    ...clawbotSection(customWeeklyPush.weekdayLabel ? `${customWeeklyPush.weekdayLabel}自定义推送` : '自定义推送', customWeeklyPush.hasContent ? String(customWeeklyPush.content || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []),
+    customWeeklyPush.hasContent ? '' : '',
     ...clawbotSection('今日待办', taskLines),
     '',
     ...clawbotSection('指数', marketLines),

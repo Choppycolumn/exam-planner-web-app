@@ -48,6 +48,16 @@ const settingsTabs: Array<{ id: SettingsTab; label: string; description: string 
   { id: 'danger', label: '危险区', description: '重置与清空' },
 ];
 
+const weeklyPushDays = [
+  { key: 'monday', label: '周一' },
+  { key: 'tuesday', label: '周二' },
+  { key: 'wednesday', label: '周三' },
+  { key: 'thursday', label: '周四' },
+  { key: 'friday', label: '周五' },
+  { key: 'saturday', label: '周六' },
+  { key: 'sunday', label: '周日' },
+] as const;
+
 function defaultBriefSettings(): DailyBriefSettings {
   return {
     enabled: true,
@@ -63,6 +73,18 @@ function defaultBriefSettings(): DailyBriefSettings {
       enabled: true,
       count: 1,
       offsetsMinutes: [60],
+    },
+    customWeeklyPush: {
+      enabled: true,
+      days: {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      },
     },
     email: {
       enabled: false,
@@ -159,6 +181,14 @@ export function SettingsPage() {
               ...briefResult.value.settings,
               wechat: { ...defaults.wechat, ...(briefResult.value.settings.wechat ?? {}) },
               taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) },
+              customWeeklyPush: {
+                ...defaults.customWeeklyPush,
+                ...(briefResult.value.settings.customWeeklyPush ?? {}),
+                days: {
+                  ...defaults.customWeeklyPush.days,
+                  ...(briefResult.value.settings.customWeeklyPush?.days ?? {}),
+                },
+              },
               email: { ...defaults.email, ...(briefResult.value.settings.email ?? {}) },
             });
             setTaskReminderOffsetsText(reminderOffsetsText({ ...defaults, ...briefResult.value.settings, taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) } }));
@@ -507,6 +537,42 @@ export function SettingsPage() {
                 />
                 <p className="mt-1 text-xs leading-5 text-slate-500">多个提醒用逗号分隔；例如 120, 60, 15 表示提前 2 小时、1 小时、15 分钟各提醒一次。</p>
               </label>
+            </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-emerald-100 bg-white p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                checked={briefSettings.customWeeklyPush?.enabled ?? true}
+                onChange={(event) => setBriefSettings({
+                  ...briefSettings,
+                  customWeeklyPush: { ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush), enabled: event.target.checked },
+                })}
+              />
+              <Bell size={16} />启用每周自定义推送栏目
+            </label>
+            <p className="mt-2 text-xs leading-5 text-slate-500">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {weeklyPushDays.map((day) => (
+                <label key={day.key}>
+                  <span className="label">{day.label}推送内容</span>
+                  <textarea
+                    className="field min-h-24"
+                    placeholder={`${day.label}要推送给自己的固定提醒`}
+                    value={briefSettings.customWeeklyPush?.days?.[day.key] ?? ''}
+                    onChange={(event) => setBriefSettings({
+                      ...briefSettings,
+                      customWeeklyPush: {
+                        ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush),
+                        days: {
+                          ...(briefSettings.customWeeklyPush?.days ?? defaultBriefSettings().customWeeklyPush.days),
+                          [day.key]: event.target.value,
+                        },
+                      },
+                    })}
+                  />
+                </label>
+              ))}
             </div>
           </div>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
