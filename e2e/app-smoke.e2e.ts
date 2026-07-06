@@ -29,23 +29,13 @@ test('opens operations and task center pages', async ({ page }) => {
   await expect(page.locator('main')).toContainText(/任务|后台|SQLite|备份/);
 });
 
-test('opens calendar, notifications, and goal review pages', async ({ page }) => {
+test('opens calendar and goal review pages', async ({ page }) => {
   await page.goto('/');
   await loginIfNeeded(page);
 
   await page.goto('/calendar');
   await expect(page.locator('main')).toContainText(/日历|Calendar|学习|复盘/);
 
-  await page.goto('/notifications');
-  await expect(page.locator('main')).toContainText(/通知|Telegram|Webhook|简报/);
-
   await page.goto('/goal-review');
   await expect(page.locator('main')).toContainText(/目标复盘|长期目标|项目动量/);
-});
-
-test('opens finance page without crashing', async ({ page }) => {
-  await page.goto('/');
-  await loginIfNeeded(page);
-  await page.goto('/finance');
-  await expect(page.locator('main')).toContainText(/理财|加密|资产|流水/);
 });

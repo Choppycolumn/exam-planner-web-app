@@ -263,7 +263,7 @@ export function SettingsPage() {
     try {
       await serverApi.generateBrief(false);
       notifyDataChanged();
-      setToast('今日简报已生成，可到通知中心查看');
+      setToast('今日简报已生成');
     } catch {
       setToast('简报生成失败，请稍后重试');
     } finally {

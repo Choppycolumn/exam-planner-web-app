@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, Bell, ClipboardCheck, Flag, Target, TrendingUp } from 'lucide-react';
+import { ArrowRight, ClipboardCheck, Flag, Settings, Target, TrendingUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Page } from '../components/Page';
 import { EmptyState } from '../components/EmptyState';
@@ -58,7 +58,7 @@ export function GoalReviewPage() {
               <h2 className="text-base font-semibold text-slate-900">本轮复盘问题</h2>
               <p className="mt-1 text-sm text-slate-500">每周打开一次，把这些问题回答到日报或报告里。</p>
             </div>
-            <Link className="btn btn-primary" to="/notifications"><Bell size={16} />查看简报</Link>
+            <Link className="btn btn-primary" to="/settings"><Settings size={16} />简报设置</Link>
           </div>
           <div className="mt-4 space-y-3">
             {reviewQuestions.map((question, index) => (

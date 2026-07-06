@@ -212,9 +212,9 @@ export function DashboardPage() {
           <p className="flex items-center gap-2 text-sm font-semibold"><CalendarCheck size={16} />阶段进度</p>
           <p className="mt-2 text-xs leading-5 opacity-80">查看学习、复盘、任务和目标推进节奏。</p>
         </Link>
-        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/notifications">
+        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/settings">
           <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />最近通知 {notificationCenter.metrics.open}</p>
-          <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件会在这里沉淀。'}</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件仍会保留在后台。'}</p>
         </Link>
       </section>
 
@@ -407,12 +407,12 @@ export function DashboardPage() {
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 {todayBrief?.payload.weather?.ok
                   ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；指数 ${briefMarkets.length} 项。`
-                  : '点击进入通知中心，生成天气、指数涨跌和学习提醒。'}
+                  : '可在设置里生成天气、指数涨跌和学习提醒。'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/notifications">
-                {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
+              <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/settings">
+                {todayBrief?.emailedAt ? '已邮件推送' : '简报设置'}
               </Link>
             </div>
           </div>
@@ -444,7 +444,7 @@ export function DashboardPage() {
                   <p className="mt-2 text-sm text-slate-600">{formatMarketPrice(item.price, item.currency)}</p>
                 </div>
               )) : (
-                <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-slate-500">指数暂时获取失败，可进入通知中心查看详情。</div>
+                <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-slate-500">指数暂时获取失败，可在设置里重新生成简报。</div>
               )}
             </div>
           ) : null}
