@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, PlayCircle, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, PenLine, PlayCircle, Plus, Target, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
@@ -79,6 +79,7 @@ export function DashboardPage() {
     visibleTasks,
     todayWaterRecord,
     todayBrief,
+    englishWritingPlan,
     startupPlan,
     reminders = [],
     activityCalendar = [],
@@ -114,6 +115,7 @@ export function DashboardPage() {
   const briefWeather = todayBrief?.payload.weather;
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
+  const showEnglishWritingPlan = Boolean(englishWritingPlan?.enabled && englishWritingPlan.showOnDashboard);
   const showBriefCard = true;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
@@ -217,6 +219,32 @@ export function DashboardPage() {
           <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件仍会保留在后台。'}</p>
         </Link>
       </section>
+
+      {showEnglishWritingPlan ? (
+        <section className="mt-6 rounded-xl border border-indigo-100 bg-indigo-50/70 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold text-indigo-700"><PenLine size={16} />英语写作计划</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                {englishWritingPlan?.currentStage?.name ?? '当前阶段未设置'}
+                {englishWritingPlan?.currentStage?.weeks ? <span className="ml-2 text-sm font-medium text-slate-500">{englishWritingPlan.currentStage.weeks}</span> : null}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{englishWritingPlan?.currentStage?.focus || '在设置页维护阶段重点后，这里会自动显示。'}</p>
+            </div>
+            <Link className="btn btn-soft" to="/settings">编辑计划</Link>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
+            <div className="rounded-lg border border-indigo-100 bg-white/80 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-500">建议用时</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{englishWritingPlan?.dailyMinutes || '20-25 分钟'}</p>
+            </div>
+            <div className="rounded-lg border border-indigo-100 bg-white/80 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-500">{englishWritingPlan?.weekdayLabel || '今日'}任务</p>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-900">{englishWritingPlan?.todayTask || '今天没有设置固定写作任务。'}</p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <section className="card p-5">

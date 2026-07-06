@@ -28,6 +28,7 @@ export interface DashboardData {
   visibleTasks: ShortTermTask[];
   todayWaterRecord: WaterIntakeRecord | null;
   todayBrief: DailyBrief | null;
+  englishWritingPlan?: EnglishWritingPlanForDate;
   startupPlan?: DashboardStartupPlan;
   reminders?: DashboardReminder[];
   activityCalendar?: DashboardActivityDay[];
@@ -129,6 +130,7 @@ export interface DailyBriefSettings {
     enabled: boolean;
     days: Record<'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday', string>;
   };
+  englishWritingPlan: EnglishWritingPlanSettings;
   email: {
     enabled: boolean;
     host: string;
@@ -141,6 +143,34 @@ export interface DailyBriefSettings {
     subjectPrefix: string;
     hasPassword?: boolean;
   };
+}
+
+export type WeekdayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+
+export interface EnglishWritingPlanStage {
+  id: string;
+  name: string;
+  weeks: string;
+  focus: string;
+}
+
+export interface EnglishWritingPlanSettings {
+  enabled: boolean;
+  showOnDashboard: boolean;
+  includeInBrief: boolean;
+  dailyMinutes: string;
+  currentStageId: string;
+  stages: EnglishWritingPlanStage[];
+  weeklyTasks: Record<WeekdayKey, string>;
+}
+
+export interface EnglishWritingPlanForDate extends EnglishWritingPlanSettings {
+  date: string;
+  weekday: WeekdayKey;
+  weekdayLabel: string;
+  currentStage: EnglishWritingPlanStage | null;
+  todayTask: string;
+  hasTodayTask: boolean;
 }
 
 export interface DailyBrief {
@@ -165,6 +195,7 @@ export interface DailyBrief {
       content: string;
       hasContent: boolean;
     };
+    englishWritingPlan?: EnglishWritingPlanForDate;
     weather?: {
       ok: boolean;
       cityName?: string;

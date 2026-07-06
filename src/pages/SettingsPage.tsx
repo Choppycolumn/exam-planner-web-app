@@ -58,7 +58,33 @@ const weeklyPushDays = [
   { key: 'sunday', label: '周日' },
 ] as const;
 
+function defaultEnglishWritingPlan() {
+  return {
+    enabled: true,
+    showOnDashboard: true,
+    includeInBrief: true,
+    dailyMinutes: '20-25 分钟',
+    currentStageId: 'foundation',
+    stages: [
+      { id: 'foundation', name: '基础修复期', weeks: '第 1-4 周', focus: '把中文想法变成正确英文；修拼写、语法、搭配' },
+      { id: 'past-paper', name: '真题强化期', weeks: '第 5-10 周', focus: '开始稳定写真题小作文和大作文，形成解题流程' },
+      { id: 'sprint', name: '高分冲刺期', weeks: '第 11-19 周', focus: '限时写作、整卷训练、减少低级错误' },
+      { id: 'stabilize', name: '考前稳定期', weeks: '第 20-24 周', focus: '固化自己的表达库，减少分数波动' },
+    ],
+    weeklyTasks: {
+      monday: '6 句应用文功能句：邀请、建议、感谢、投诉等',
+      tuesday: '真题或模拟题小作文：只写开头 + 主体段',
+      wednesday: '修改周二作文，整理错误表达',
+      thursday: '大作文：英文提纲 + 图画描述段',
+      friday: '大作文：写一个主体分析段',
+      saturday: '完整小作文一篇，限时 15 分钟',
+      sunday: '闭卷重写本周小作文 + 复盘错句',
+    },
+  };
+}
+
 function defaultBriefSettings(): DailyBriefSettings {
+  const englishWritingPlan = defaultEnglishWritingPlan();
   return {
     enabled: true,
     generateTime: '08:00',
@@ -86,6 +112,7 @@ function defaultBriefSettings(): DailyBriefSettings {
         sunday: '',
       },
     },
+    englishWritingPlan,
     email: {
       enabled: false,
       host: '',
@@ -187,6 +214,17 @@ export function SettingsPage() {
                 days: {
                   ...defaults.customWeeklyPush.days,
                   ...(briefResult.value.settings.customWeeklyPush?.days ?? {}),
+                },
+              },
+              englishWritingPlan: {
+                ...defaults.englishWritingPlan,
+                ...(briefResult.value.settings.englishWritingPlan ?? {}),
+                stages: briefResult.value.settings.englishWritingPlan?.stages?.length
+                  ? briefResult.value.settings.englishWritingPlan.stages
+                  : defaults.englishWritingPlan.stages,
+                weeklyTasks: {
+                  ...defaults.englishWritingPlan.weeklyTasks,
+                  ...(briefResult.value.settings.englishWritingPlan?.weeklyTasks ?? {}),
                 },
               },
               email: { ...defaults.email, ...(briefResult.value.settings.email ?? {}) },
@@ -390,6 +428,26 @@ export function SettingsPage() {
 
   const confusingLocalWordCount = confusingGroups.reduce((sum, group) => sum + group.words.length, 0);
   const confusingServerWordCount = confusingServerBackup?.groups.reduce((sum, group) => sum + group.words.length, 0) ?? 0;
+  const englishPlanDefaults = defaultBriefSettings().englishWritingPlan;
+  const englishPlan = {
+    ...englishPlanDefaults,
+    ...(briefSettings.englishWritingPlan ?? {}),
+    stages: briefSettings.englishWritingPlan?.stages?.length ? briefSettings.englishWritingPlan.stages : englishPlanDefaults.stages,
+    weeklyTasks: {
+      ...englishPlanDefaults.weeklyTasks,
+      ...(briefSettings.englishWritingPlan?.weeklyTasks ?? {}),
+    },
+  };
+  const updateEnglishPlan = (patch: Partial<DailyBriefSettings['englishWritingPlan']>) => {
+    setBriefSettings({ ...briefSettings, englishWritingPlan: { ...englishPlan, ...patch } });
+  };
+  const updateEnglishStage = (index: number, patch: Partial<DailyBriefSettings['englishWritingPlan']['stages'][number]>) => {
+    const stages = englishPlan.stages.map((stage, stageIndex) => (stageIndex === index ? { ...stage, ...patch } : stage));
+    updateEnglishPlan({ stages });
+  };
+  const updateEnglishWeeklyTask = (key: keyof DailyBriefSettings['englishWritingPlan']['weeklyTasks'], value: string) => {
+    updateEnglishPlan({ weeklyTasks: { ...englishPlan.weeklyTasks, [key]: value } });
+  };
 
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
@@ -570,6 +628,74 @@ export function SettingsPage() {
                         },
                       },
                     })}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-indigo-100 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">英语写作计划</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">主页展示当前阶段和今日任务；每日简报会按当天星期自动带上对应写作安排。</p>
+              </div>
+              <div className="flex flex-wrap gap-3 text-sm font-semibold text-slate-700">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.enabled} onChange={(event) => updateEnglishPlan({ enabled: event.target.checked })} />
+                  启用
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.showOnDashboard} onChange={(event) => updateEnglishPlan({ showOnDashboard: event.target.checked })} />
+                  主页显示
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.includeInBrief} onChange={(event) => updateEnglishPlan({ includeInBrief: event.target.checked })} />
+                  写入简报
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
+              <label>
+                <span className="label">每日用时</span>
+                <input className="field" value={englishPlan.dailyMinutes} onChange={(event) => updateEnglishPlan({ dailyMinutes: event.target.value })} />
+              </label>
+              <label>
+                <span className="label">当前阶段</span>
+                <select className="field" value={englishPlan.currentStageId} onChange={(event) => updateEnglishPlan({ currentStageId: event.target.value })}>
+                  {englishPlan.stages.map((stage) => (
+                    <option key={stage.id} value={stage.id}>{stage.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {englishPlan.stages.map((stage, index) => (
+                <div key={stage.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid gap-2 md:grid-cols-[1fr_120px]">
+                    <label>
+                      <span className="label">阶段名称</span>
+                      <input className="field" value={stage.name} onChange={(event) => updateEnglishStage(index, { name: event.target.value })} />
+                    </label>
+                    <label>
+                      <span className="label">时间</span>
+                      <input className="field" value={stage.weeks} onChange={(event) => updateEnglishStage(index, { weeks: event.target.value })} />
+                    </label>
+                  </div>
+                  <label className="mt-2 block">
+                    <span className="label">这一阶段要解决什么</span>
+                    <textarea className="field min-h-20" value={stage.focus} onChange={(event) => updateEnglishStage(index, { focus: event.target.value })} />
+                  </label>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {weeklyPushDays.map((day) => (
+                <label key={day.key}>
+                  <span className="label">{day.label}写作任务</span>
+                  <textarea
+                    className="field min-h-20"
+                    value={englishPlan.weeklyTasks[day.key]}
+                    onChange={(event) => updateEnglishWeeklyTask(day.key, event.target.value)}
                   />
                 </label>
               ))}

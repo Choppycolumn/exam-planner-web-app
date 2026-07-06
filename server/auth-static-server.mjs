@@ -1896,6 +1896,7 @@ function defaultDailyBriefSettings() {
         sunday: '',
       },
     },
+    englishWritingPlan: defaultEnglishWritingPlanSettings(),
     email: {
       enabled: false,
       host: '',
@@ -1921,6 +1922,95 @@ const weekdayLabels = {
 };
 
 const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function defaultEnglishWritingPlanSettings() {
+  return {
+    enabled: true,
+    showOnDashboard: true,
+    includeInBrief: true,
+    dailyMinutes: '20-25 分钟',
+    currentStageId: 'foundation',
+    stages: [
+      { id: 'foundation', name: '基础修复期', weeks: '第 1-4 周', focus: '把中文想法变成正确英文；修拼写、语法、搭配' },
+      { id: 'past-paper', name: '真题强化期', weeks: '第 5-10 周', focus: '开始稳定写真题小作文和大作文，形成解题流程' },
+      { id: 'sprint', name: '高分冲刺期', weeks: '第 11-19 周', focus: '限时写作、整卷训练、减少低级错误' },
+      { id: 'stabilize', name: '考前稳定期', weeks: '第 20-24 周', focus: '固化自己的表达库，减少分数波动' },
+    ],
+    weeklyTasks: {
+      monday: '6 句应用文功能句：邀请、建议、感谢、投诉等',
+      tuesday: '真题或模拟题小作文：只写开头 + 主体段',
+      wednesday: '修改周二作文，整理错误表达',
+      thursday: '大作文：英文提纲 + 图画描述段',
+      friday: '大作文：写一个主体分析段',
+      saturday: '完整小作文一篇，限时 15 分钟',
+      sunday: '闭卷重写本周小作文 + 复盘错句',
+    },
+  };
+}
+
+function normalizeEnglishWritingPlanSettings(input = {}, previous = null) {
+  const defaults = defaultEnglishWritingPlanSettings();
+  const previousSettings = previous?.englishWritingPlan || {};
+  const rawStages = Array.isArray(input.stages)
+    ? input.stages
+    : Array.isArray(previousSettings.stages)
+      ? previousSettings.stages
+      : defaults.stages;
+  const stages = rawStages.slice(0, 8).map((stage, index) => {
+    const fallback = defaults.stages[index] || defaults.stages[0];
+    const id = String(stage?.id || fallback.id || `stage-${index + 1}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || `stage-${index + 1}`;
+    return {
+      id,
+      name: String(stage?.name || fallback.name || `阶段 ${index + 1}`).trim().slice(0, 80),
+      weeks: String(stage?.weeks || fallback.weeks || '').trim().slice(0, 80),
+      focus: String(stage?.focus || fallback.focus || '').trim().slice(0, 240),
+    };
+  });
+  const inputTasks = input.weeklyTasks || {};
+  const previousTasks = previousSettings.weeklyTasks || {};
+  const weeklyTasks = {};
+  for (const key of Object.keys(weekdayLabels)) {
+    weeklyTasks[key] = String(inputTasks[key] ?? previousTasks[key] ?? defaults.weeklyTasks[key] ?? '').slice(0, 600);
+  }
+  const requestedStageId = String(input.currentStageId ?? previousSettings.currentStageId ?? defaults.currentStageId);
+  const currentStageId = stages.some((stage) => stage.id === requestedStageId) ? requestedStageId : stages[0]?.id || defaults.currentStageId;
+  return {
+    enabled: Boolean(input.enabled ?? previousSettings.enabled ?? defaults.enabled),
+    showOnDashboard: Boolean(input.showOnDashboard ?? previousSettings.showOnDashboard ?? defaults.showOnDashboard),
+    includeInBrief: Boolean(input.includeInBrief ?? previousSettings.includeInBrief ?? defaults.includeInBrief),
+    dailyMinutes: String(input.dailyMinutes ?? previousSettings.dailyMinutes ?? defaults.dailyMinutes).trim().slice(0, 40) || defaults.dailyMinutes,
+    currentStageId,
+    stages,
+    weeklyTasks,
+  };
+}
+
+function englishWritingPlanForDate(date, settings = getDailyBriefSettings({ includeSecret: true })) {
+  const dayIndex = new Date(`${String(date || todayISO()).slice(0, 10)}T12:00:00+08:00`).getDay();
+  const weekday = weekdayKeys[dayIndex] || 'monday';
+  const config = settings.englishWritingPlan || defaultEnglishWritingPlanSettings();
+  const currentStage = (config.stages || []).find((stage) => stage.id === config.currentStageId) || (config.stages || [])[0] || null;
+  const todayTask = String(config.weeklyTasks?.[weekday] || '').trim();
+  return {
+    enabled: Boolean(config.enabled),
+    showOnDashboard: Boolean(config.showOnDashboard),
+    includeInBrief: Boolean(config.includeInBrief),
+    date: String(date || todayISO()).slice(0, 10),
+    weekday,
+    weekdayLabel: weekdayLabels[weekday] || weekday,
+    dailyMinutes: config.dailyMinutes || '20-25 分钟',
+    currentStage,
+    stages: config.stages || [],
+    weeklyTasks: config.weeklyTasks || {},
+    todayTask: Boolean(config.enabled) ? todayTask : '',
+    hasTodayTask: Boolean(config.enabled && todayTask),
+  };
+}
 
 function normalizeCustomWeeklyPushSettings(input = {}, previous = null) {
   const defaults = defaultDailyBriefSettings().customWeeklyPush;
@@ -1993,6 +2083,7 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
     },
     taskReminders: normalizeTaskReminderSettings(input.taskReminders || {}, previous),
     customWeeklyPush: normalizeCustomWeeklyPushSettings(input.customWeeklyPush || {}, previous),
+    englishWritingPlan: normalizeEnglishWritingPlanSettings(input.englishWritingPlan || {}, previous),
     email: {
       enabled: Boolean(emailInput.enabled),
       host: String(emailInput.host || previousEmail.host || '').trim(),
@@ -3347,6 +3438,7 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     generatedAt,
     trigger,
     customWeeklyPush: customWeeklyPushForDate(date, settings),
+    englishWritingPlan: englishWritingPlanForDate(date, settings),
     weather,
     markets,
     indexPurchaseAssessment,
@@ -3505,6 +3597,7 @@ function dailyBriefHtml(payload) {
   const markets = payload.markets || [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
   const customWeeklyPush = payload.customWeeklyPush || {};
+  const englishWritingPlan = payload.englishWritingPlan || {};
   const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
     ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（5 年 ${escapeHtml(item.pePercentile5)}% / 10 年 ${escapeHtml(item.pePercentile10)}%）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
     : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
@@ -3520,6 +3613,7 @@ function dailyBriefHtml(payload) {
   <p>${escapeHtml(weather.cityName || '')}：${weather.ok ? `${escapeHtml(weather.condition)}，${escapeHtml(weather.temperature)}℃，${escapeHtml(weather.minTemperature)}-${escapeHtml(weather.maxTemperature)}℃，降水概率 ${escapeHtml(weather.precipitationProbability)}%` : `获取失败：${escapeHtml(weather.error || '')}`}</p>
   <h2>学习提醒</h2>
   <p>昨日学习：${Math.round(Number(learning.yesterdayMinutes || 0) / 60 * 10) / 10} 小时；近 7 天累计：${Math.round(Number(learning.last7Minutes || 0) / 60 * 10) / 10} 小时。</p>
+  ${englishWritingPlan.enabled && englishWritingPlan.includeInBrief ? `<h2>英语写作计划</h2><p><strong>当前阶段：</strong>${escapeHtml(englishWritingPlan.currentStage?.name || '未设置')} ${englishWritingPlan.currentStage?.weeks ? `（${escapeHtml(englishWritingPlan.currentStage.weeks)}）` : ''}</p><p><strong>阶段重点：</strong>${escapeHtml(englishWritingPlan.currentStage?.focus || '')}</p><p><strong>${escapeHtml(englishWritingPlan.weekdayLabel || '今日')}任务：</strong>${escapeHtml(englishWritingPlan.todayTask || '今天未设置固定写作任务')}；建议用时 ${escapeHtml(englishWritingPlan.dailyMinutes || '20-25 分钟')}。</p>` : ''}
   ${customWeeklyPush.hasContent ? `<h2>${escapeHtml(customWeeklyPush.weekdayLabel || '今日')}自定义推送</h2><p style="white-space:pre-wrap">${escapeHtml(customWeeklyPush.content)}</p>` : ''}
   <h2>今日学习督促</h2>
   ${studyPush}
@@ -5980,6 +6074,7 @@ ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_da
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
   const todayBrief = getDailyBriefByDate(today) || getLatestDailyBriefSummary();
+  const englishWritingPlan = englishWritingPlanForDate(today, getDailyBriefSettings({ includeSecret: true }));
   const stage = countdownStage(activeGoal, today);
   const daysLeft = activeGoal ? Math.max(1, Math.ceil((parseDateString(activeGoal.deadline).getTime() - parseDateString(today).getTime()) / (24 * 60 * 60 * 1000))) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
@@ -6012,6 +6107,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     visibleTasks,
     todayWaterRecord: waterRecord,
     todayBrief,
+    englishWritingPlan,
     startupPlan,
     reminders,
     activityCalendar,
@@ -6966,6 +7062,7 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
   const customWeeklyPush = payload.customWeeklyPush || {};
+  const englishWritingPlan = payload.englishWritingPlan || {};
   const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
   const weatherLine = weather.ok
     ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
@@ -6992,6 +7089,14 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const notificationLines = notificationMetrics.open
     ? [`待处理 ${notificationMetrics.open} 条，其中 warning ${notificationMetrics.warnings}，critical ${notificationMetrics.critical}`]
     : ['暂无待处理通知。'];
+  const englishPlanLines = englishWritingPlan.enabled && englishWritingPlan.includeInBrief
+    ? [
+      englishWritingPlan.currentStage ? `阶段：${englishWritingPlan.currentStage.name}${englishWritingPlan.currentStage.weeks ? `（${englishWritingPlan.currentStage.weeks}）` : ''}` : '',
+      englishWritingPlan.currentStage?.focus ? `重点：${compactText(englishWritingPlan.currentStage.focus, 120)}` : '',
+      `${englishWritingPlan.weekdayLabel || '今日'}任务：${englishWritingPlan.todayTask || '未设置固定写作任务'}`,
+      `建议用时：${englishWritingPlan.dailyMinutes || '20-25 分钟'}`,
+    ]
+    : [];
   const lines = [
     `${payload.title}`,
     `生成时间：${new Date(payload.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
@@ -7000,6 +7105,8 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     '',
     ...clawbotSection('学习', learningLines),
     '',
+    ...clawbotSection('英语写作计划', englishPlanLines),
+    englishPlanLines.length ? '' : '',
     ...clawbotSection(customWeeklyPush.weekdayLabel ? `${customWeeklyPush.weekdayLabel}自定义推送` : '自定义推送', customWeeklyPush.hasContent ? String(customWeeklyPush.content || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []),
     customWeeklyPush.hasContent ? '' : '',
     ...clawbotSection('今日待办', taskLines),
