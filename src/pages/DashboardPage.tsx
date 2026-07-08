@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, PenLine, PlayCircle, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Coffee, Hourglass, PenLine, PlayCircle, Plus, Target, TimerReset, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
@@ -84,6 +84,7 @@ export function DashboardPage() {
     reminders = [],
     activityCalendar = [],
     errorThemeWall = [],
+    breakGuard,
     readOnly,
   } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), dueTime: '', urgency: 'medium' as TaskUrgency });
@@ -205,7 +206,7 @@ export function DashboardPage() {
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-3">
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Link className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700 transition hover:bg-blue-100" to="/goal-review">
           <p className="flex items-center gap-2 text-sm font-semibold"><Target size={16} />目标复盘</p>
           <p className="mt-2 text-xs leading-5 opacity-80">把长期目标、项目动量和最近报告汇总校准。</p>
@@ -218,6 +219,13 @@ export function DashboardPage() {
           <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />最近通知 {notificationCenter.metrics.open}</p>
           <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件仍会保留在后台。'}</p>
         </Link>
+        <div className={`rounded-lg border p-4 ${breakGuard?.unfocusedCount ? 'border-rose-100 bg-rose-50 text-rose-700' : 'border-sky-100 bg-sky-50 text-sky-700'}`}>
+          <p className="flex items-center gap-2 text-sm font-semibold"><TimerReset size={16} />休息守护</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">
+            今日休息 {breakGuard?.breakCount ?? 0} 次，不专注 {breakGuard?.unfocusedCount ?? 0} 次
+          </p>
+          <p className="mt-1 flex items-center gap-1 text-xs opacity-80"><Coffee size={13} />午饭 {breakGuard?.lunchCount ?? 0} / 晚饭 {breakGuard?.dinnerCount ?? 0}</p>
+        </div>
       </section>
 
       {showEnglishWritingPlan ? (

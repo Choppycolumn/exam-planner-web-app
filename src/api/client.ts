@@ -33,6 +33,7 @@ export interface DashboardData {
   reminders?: DashboardReminder[];
   activityCalendar?: DashboardActivityDay[];
   errorThemeWall?: DashboardErrorThemeWallItem[];
+  breakGuard?: BreakGuardSummary;
   readOnly?: boolean;
 }
 
@@ -69,6 +70,25 @@ export interface DashboardErrorThemeWallItem {
   occurrenceCount: number;
   reviewDayCount: number;
   lastSeenAt: string;
+}
+
+export interface BreakGuardSummary {
+  date: string;
+  breakCount: number;
+  completedBreakCount: number;
+  timeoutWarningCount: number;
+  unfocusedCount: number;
+  lunchCount: number;
+  dinnerCount: number;
+  latest: Array<{
+    id: number;
+    eventType: string;
+    label: string;
+    status: string;
+    note: string;
+    overdueSeconds: number;
+    createdAt: string;
+  }>;
 }
 
 export interface ReviewTrendResponse {

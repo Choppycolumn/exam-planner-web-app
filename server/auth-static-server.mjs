@@ -52,6 +52,7 @@ const cookieName = 'exam_planner_session';
 const corsOrigin = process.env.CORS_ORIGIN || '*';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const clawbotSecret = process.env.CLAWBOT_SECRET || '';
+const breakGuardToken = process.env.BREAK_GUARD_TOKEN || '';
 const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
 const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
 const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
@@ -600,6 +601,18 @@ CREATE TABLE IF NOT EXISTS problem_inbox_items (
   updated_at TEXT NOT NULL,
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS break_guard_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'desktop',
+  note TEXT NOT NULL DEFAULT '',
+  started_at TEXT,
+  ended_at TEXT,
+  overdue_seconds INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS visit_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT NOT NULL,
@@ -792,6 +805,8 @@ CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_created ON confusing_wor
 CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_hash ON confusing_words_backup_versions(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
+CREATE INDEX IF NOT EXISTS idx_break_guard_events_created ON break_guard_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_break_guard_events_type_created ON break_guard_events(event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_visit_events_created_at ON visit_events(created_at);
@@ -5453,6 +5468,109 @@ function deleteProblemInboxItem(id) {
   tableChanged();
 }
 
+const breakGuardEventLabels = {
+  break_started: '开始休息',
+  break_completed: '休息结束',
+  break_timeout_warning: '休息超时提醒',
+  unfocused: '不专注记录',
+  lunch: '中午吃饭',
+  dinner: '晚上吃饭',
+  meal: '吃饭',
+};
+
+function requireBreakGuardToken(req, body = {}) {
+  if (!breakGuardToken) return { ok: false, status: 503, error: 'Break guard token is not configured' };
+  const provided = String(req.headers['x-break-guard-token'] || body.token || '');
+  const expectedBuffer = Buffer.from(String(breakGuardToken));
+  const providedBuffer = Buffer.from(provided);
+  if (providedBuffer.length !== expectedBuffer.length || !timingSafeEqual(providedBuffer, expectedBuffer)) {
+    return { ok: false, status: 401, error: 'Unauthorized' };
+  }
+  return { ok: true };
+}
+
+function normalizeBreakGuardEvent(body = {}) {
+  const eventType = String(body.eventType || body.type || '').trim();
+  if (!breakGuardEventLabels[eventType]) {
+    const error = new Error('Invalid break guard event type');
+    error.statusCode = 400;
+    throw error;
+  }
+  return {
+    eventType,
+    status: String(body.status || '').trim().slice(0, 40),
+    source: String(body.source || 'desktop').trim().slice(0, 40) || 'desktop',
+    note: String(body.note || '').trim().slice(0, 500),
+    startedAt: body.startedAt ? String(body.startedAt).slice(0, 40) : null,
+    endedAt: body.endedAt ? String(body.endedAt).slice(0, 40) : null,
+    overdueSeconds: Math.max(0, Math.min(24 * 60 * 60, Math.round(Number(body.overdueSeconds || 0)))),
+    payload: body.payload && typeof body.payload === 'object' ? body.payload : {},
+  };
+}
+
+function recordBreakGuardEvent(body = {}) {
+  const event = normalizeBreakGuardEvent(body);
+  const createdAt = nowISO();
+  runSqlite(`INSERT INTO break_guard_events (event_type, status, source, note, started_at, ended_at, overdue_seconds, payload_json, created_at)
+VALUES (${sqlString(event.eventType)}, ${sqlString(event.status)}, ${sqlString(event.source)}, ${sqlString(event.note)}, ${sqlValue(event.startedAt)}, ${sqlValue(event.endedAt)}, ${sqlValue(event.overdueSeconds)}, ${sqlString(JSON.stringify(event.payload))}, ${sqlString(createdAt)});`);
+  tableChanged();
+  return {
+    ...event,
+    label: breakGuardEventLabels[event.eventType],
+    createdAt,
+  };
+}
+
+function getBreakGuardSummary(date = todayISO()) {
+  const rows = sqliteJson(`SELECT event_type AS eventType, COUNT(*) AS count, MAX(created_at) AS latestAt
+FROM break_guard_events
+WHERE date(created_at, 'localtime') = date(${sqlString(date)})
+GROUP BY event_type;`);
+  const byType = Object.fromEntries(rows.map((row) => [row.eventType, { count: Number(row.count || 0), latestAt: row.latestAt || null }]));
+  const latest = sqliteJson(`SELECT id, event_type AS eventType, status, note, overdue_seconds AS overdueSeconds, created_at AS createdAt
+FROM break_guard_events
+ORDER BY created_at DESC, id DESC
+LIMIT 5;`).map((row) => ({
+    id: Number(row.id),
+    eventType: row.eventType,
+    label: breakGuardEventLabels[row.eventType] || row.eventType,
+    status: row.status || '',
+    note: row.note || '',
+    overdueSeconds: Number(row.overdueSeconds || 0),
+    createdAt: row.createdAt,
+  }));
+  return {
+    date,
+    breakCount: Number(byType.break_started?.count || 0),
+    completedBreakCount: Number(byType.break_completed?.count || 0),
+    timeoutWarningCount: Number(byType.break_timeout_warning?.count || 0),
+    unfocusedCount: Number(byType.unfocused?.count || 0),
+    lunchCount: Number(byType.lunch?.count || 0),
+    dinnerCount: Number(byType.dinner?.count || 0),
+    latest,
+  };
+}
+
+function queueBreakGuardNotification(event) {
+  const title = event.eventType === 'unfocused' ? '休息超时未归记录' : '休息结束提醒';
+  const text = event.eventType === 'unfocused'
+    ? `休息结束后已超过 ${Math.max(5, Math.round(event.overdueSeconds / 60))} 分钟仍未取消，已记录一次不专注。`
+    : '10 分钟休息已经结束，请回到学习。如果已经回来了，请在桌面悬浮窗点“我回来了”。';
+  return queueProactiveNotification({
+    eventKey: `break-guard:${event.eventType}:${Date.now()}`,
+    source: 'break_guard',
+    severity: event.eventType === 'unfocused' ? 'warning' : 'info',
+    title,
+    content: text,
+    text: `【${title}】\n${text}`,
+    payload: {
+      eventType: event.eventType,
+      overdueSeconds: event.overdueSeconds,
+      createdAt: event.createdAt,
+    },
+  });
+}
+
 function resolveProblemInboxForDate(date = todayISO()) {
   const timestamp = nowISO();
   runSqlite(`UPDATE problem_inbox_items
@@ -6094,6 +6212,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
   const reminders = getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview: reviews.find((review) => review.date === today) || null });
   const activityCalendar = getActivityCalendar(84, today);
   const errorThemeWall = (getPrecomputedCache(`dashboard-error-wall:${today}`)?.items || getErrorThemeWall(10, 90, today)).slice(0, 10);
+  const breakGuard = getBreakGuardSummary(today);
 
   const payload = {
     activeGoal,
@@ -6112,6 +6231,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     reminders,
     activityCalendar,
     errorThemeWall,
+    breakGuard,
   };
   dashboardPayloadCache = { revision: dataRevision, date: today, payload };
   return { ...payload, readOnly: sessionRole === 'read' };
@@ -8030,6 +8150,22 @@ async function handleApi(req, res) {
     writeState(next);
     writeAuditEvent({ action: 'state_import', req, actorRole: 'password-import', detail: { goals: next.goals.length, reviews: next.dailyReviews.length } });
     sendJson(res, { ok: true });
+    return;
+  }
+
+  if (req.url === '/api/break-guard/events' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const access = requireBreakGuardToken(req, body);
+    if (!access.ok) {
+      sendJson(res, { ok: false, error: access.error }, access.status);
+      return;
+    }
+    const event = recordBreakGuardEvent(body);
+    let delivery = null;
+    if (event.eventType === 'break_timeout_warning' || event.eventType === 'unfocused') {
+      delivery = queueBreakGuardNotification(event);
+    }
+    sendJson(res, { ok: true, event, summary: getBreakGuardSummary(todayISO()), delivery });
     return;
   }
 
