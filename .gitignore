@@ -12,11 +12,12 @@ node_modules
 __pycache__
 *.pyc
 dist
+desktop-break-guard/config.local.json
+desktop-pet/.local-data
+desktop-pet/config.json
 dist-ssr
 data-local
 data/analysis
-desktop-pet/.local-data
-desktop-pet/config.json
 screenshots
 test-results
 playwright-report

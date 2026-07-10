@@ -1,5 +1,5 @@
-const CACHE_NAME = 'exam-planner-shell-v5';
-const ASSET_CACHE_NAME = 'exam-planner-assets-v5';
+const CACHE_NAME = 'exam-planner-shell-v6';
+const ASSET_CACHE_NAME = 'exam-planner-assets-v6';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/app-icon.svg', '/assets/pwa-icon-192.png', '/assets/pwa-icon-512.png', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -40,9 +40,9 @@ self.addEventListener('fetch', (event) => {
         if (response.ok && ['script', 'style', 'image', 'font'].includes(request.destination)) {
           const copy = response.clone();
           caches.open(ASSET_CACHE_NAME).then((cache) => cache.put(request, copy));
-        } else if (response.ok && ['manifest'].includes(request.destination)) {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        } else if (response.ok && request.destination === 'manifest') {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
         return response;
       });

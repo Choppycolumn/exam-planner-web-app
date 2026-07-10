@@ -70,23 +70,13 @@
 
 支持待办创建、查询、完成、延期、简报查询、健康状态查询，以及经过一次性按钮确认的备份、SQLite 维护和简报重发。
 
-## 资料库与词典
+## 词典与多端备份
 
 - `GET /api/dictionary/lookup`
 - `GET /api/confusing-words/backup`
 - `POST /api/confusing-words/backup`
-- `GET /api/library/books`
-- `GET /api/library/books/:id`
-- `GET /api/library/books/:id/text`
-- `GET /api/library/books/:id/file`
-- `GET /api/library/search`
-- `POST /api/library/upload`
-- `POST /api/library/books/save`
-- `POST /api/library/books/remove`
-- `POST /api/library/progress`
-- `POST /api/library/notes/save`
-- `POST /api/library/bookmarks/save`
-- `POST /api/library/bookmarks/remove`
+
+资料库与理财情报台已经下线，`/api/library/*` 和 `/api/market-copilot*` 仅保留 `410 Gone` 兼容响应，避免旧客户端误写数据。
 
 ## 运维
 
@@ -98,5 +88,6 @@
 - `POST /api/maintenance/precompute`
 - `GET /api/visits/summary`
 - `GET /api/ops/logs/summary`
+- `POST /api/client-errors`
 
-日志接口会脱敏 Cookie、Password、Token、Secret、Authorization 等敏感片段。
+日志接口会脱敏 Cookie、Password、Token、Secret、Authorization 等敏感片段。`/api/client-errors` 用于前端错误摘要上报，读写会话都允许调用，但不会保存完整 URL 查询串或敏感值。

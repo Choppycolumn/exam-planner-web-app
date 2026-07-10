@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Hourglass, PlayCircle, Plus, Target, Trash2 } from 'lucide-react';
+import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Coffee, Hourglass, PenLine, PlayCircle, Plus, Target, TimerReset, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
@@ -79,10 +79,12 @@ export function DashboardPage() {
     visibleTasks,
     todayWaterRecord,
     todayBrief,
+    englishWritingPlan,
     startupPlan,
     reminders = [],
     activityCalendar = [],
     errorThemeWall = [],
+    breakGuard,
     readOnly,
   } = useDashboardData();
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), dueTime: '', urgency: 'medium' as TaskUrgency });
@@ -114,6 +116,7 @@ export function DashboardPage() {
   const briefWeather = todayBrief?.payload.weather;
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
+  const showEnglishWritingPlan = Boolean(englishWritingPlan?.enabled && englishWritingPlan.showOnDashboard);
   const showBriefCard = true;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
@@ -203,7 +206,7 @@ export function DashboardPage() {
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-3">
+      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Link className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700 transition hover:bg-blue-100" to="/goal-review">
           <p className="flex items-center gap-2 text-sm font-semibold"><Target size={16} />目标复盘</p>
           <p className="mt-2 text-xs leading-5 opacity-80">把长期目标、项目动量和最近报告汇总校准。</p>
@@ -212,11 +215,44 @@ export function DashboardPage() {
           <p className="flex items-center gap-2 text-sm font-semibold"><CalendarCheck size={16} />阶段进度</p>
           <p className="mt-2 text-xs leading-5 opacity-80">查看学习、复盘、任务和目标推进节奏。</p>
         </Link>
-        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/notifications">
+        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/settings">
           <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />最近通知 {notificationCenter.metrics.open}</p>
-          <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件会在这里沉淀。'}</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件仍会保留在后台。'}</p>
         </Link>
+        <div className={`rounded-lg border p-4 ${breakGuard?.unfocusedCount ? 'border-rose-100 bg-rose-50 text-rose-700' : 'border-sky-100 bg-sky-50 text-sky-700'}`}>
+          <p className="flex items-center gap-2 text-sm font-semibold"><TimerReset size={16} />休息守护</p>
+          <p className="mt-2 text-xs leading-5 opacity-80">
+            今日休息 {breakGuard?.breakCount ?? 0} 次，不专注 {breakGuard?.unfocusedCount ?? 0} 次
+          </p>
+          <p className="mt-1 flex items-center gap-1 text-xs opacity-80"><Coffee size={13} />午饭 {breakGuard?.lunchCount ?? 0} / 晚饭 {breakGuard?.dinnerCount ?? 0}</p>
+        </div>
       </section>
+
+      {showEnglishWritingPlan ? (
+        <section className="mt-6 rounded-xl border border-indigo-100 bg-indigo-50/70 p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 text-sm font-semibold text-indigo-700"><PenLine size={16} />英语写作计划</p>
+              <h2 className="mt-1 text-lg font-semibold text-slate-950">
+                {englishWritingPlan?.currentStage?.name ?? '当前阶段未设置'}
+                {englishWritingPlan?.currentStage?.weeks ? <span className="ml-2 text-sm font-medium text-slate-500">{englishWritingPlan.currentStage.weeks}</span> : null}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600">{englishWritingPlan?.currentStage?.focus || '在设置页维护阶段重点后，这里会自动显示。'}</p>
+            </div>
+            <Link className="btn btn-soft" to="/settings">编辑计划</Link>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
+            <div className="rounded-lg border border-indigo-100 bg-white/80 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-500">建议用时</p>
+              <p className="mt-1 text-sm font-semibold text-slate-900">{englishWritingPlan?.dailyMinutes || '20-25 分钟'}</p>
+            </div>
+            <div className="rounded-lg border border-indigo-100 bg-white/80 px-3 py-2">
+              <p className="text-xs font-semibold text-slate-500">{englishWritingPlan?.weekdayLabel || '今日'}任务</p>
+              <p className="mt-1 text-sm font-semibold leading-6 text-slate-900">{englishWritingPlan?.todayTask || '今天没有设置固定写作任务。'}</p>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <div className="mt-6 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <section className="card p-5">
@@ -407,12 +443,12 @@ export function DashboardPage() {
               <p className="mt-2 text-sm leading-6 text-slate-600">
                 {todayBrief?.payload.weather?.ok
                   ? `${todayBrief.payload.weather.cityName} ${todayBrief.payload.weather.condition} ${todayBrief.payload.weather.temperature}℃；指数 ${briefMarkets.length} 项。`
-                  : '点击进入通知中心，生成天气、指数涨跌和学习提醒。'}
+                  : '可在设置里生成天气、指数涨跌和学习提醒。'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/notifications">
-                {todayBrief?.emailedAt ? '已邮件推送' : '查看简报'}
+              <Link className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-white" to="/settings">
+                {todayBrief?.emailedAt ? '已邮件推送' : '简报设置'}
               </Link>
             </div>
           </div>
@@ -444,7 +480,7 @@ export function DashboardPage() {
                   <p className="mt-2 text-sm text-slate-600">{formatMarketPrice(item.price, item.currency)}</p>
                 </div>
               )) : (
-                <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-slate-500">指数暂时获取失败，可进入通知中心查看详情。</div>
+                <div className="rounded-lg border border-blue-100 bg-white/80 px-3 py-2 text-sm text-slate-500">指数暂时获取失败，可在设置里重新生成简报。</div>
               )}
             </div>
           ) : null}

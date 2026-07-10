@@ -1,0 +1,10 @@
+{
+  "server_url": "https://your-exam-planner.example.com",
+  "token": "fill-break-guard-token-here",
+  "break_minutes": 10,
+  "notify_after_seconds": 60,
+  "unfocused_after_seconds": 300,
+  "always_on_top": true,
+  "opacity": 0.99,
+  "verify_tls": true
+}

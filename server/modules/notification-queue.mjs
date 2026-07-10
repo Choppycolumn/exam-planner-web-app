@@ -53,6 +53,18 @@ export function createNotificationQueue({
         } catch (error) {
           result = { ok: false, error: error instanceof Error ? error.message : String(error) };
         }
+        if (result?.deferred && result.nextAttemptAt) {
+          repository.deferDelivery(delivery.id, {
+            nextAttemptAt: result.nextAttemptAt,
+            reason: String(result.error || 'delivery deferred'),
+          });
+          log('info', 'proactive_notification_deferred', {
+            deliveryId: delivery.id,
+            eventId: delivery.eventId,
+            nextAttemptAt: result.nextAttemptAt,
+          });
+          continue;
+        }
         if (result?.ok) {
           repository.markDeliveryAccepted(delivery.id, {
             attemptedAt: now().toISOString(),

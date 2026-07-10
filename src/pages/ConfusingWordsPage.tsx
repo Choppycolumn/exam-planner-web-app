@@ -14,7 +14,6 @@ const nowISO = () => new Date().toISOString();
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
 const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
-const BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
 const BACKUP_INTERVAL_MS = 60 * 60 * 1000;
 
 const countWords = (items: ConfusingWordGroup[]) => items.reduce((sum, group) => sum + group.words.length, 0);
@@ -69,7 +68,7 @@ export function ConfusingWordsPage() {
       try {
         const backup = await fetchConfusingWordsBackup({
           baseUrl: '',
-          password: localStorage.getItem(BACKUP_PASSWORD_KEY) || '',
+          syncToken: '',
         });
         if (cancelled || !backup?.groups?.length) return;
         const backupWords = countWords(backup.groups);
@@ -184,7 +183,7 @@ export function ConfusingWordsPage() {
     try {
       const result = await backupConfusingWords(buildExport(groups), {
         baseUrl: localStorage.getItem(BACKUP_BASE_URL_KEY) || '',
-        password: localStorage.getItem(BACKUP_PASSWORD_KEY) || '',
+        syncToken: '',
       }, { source: hasLocalChanges ? 'browser-sync' : 'hourly-sync' });
       localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
       setLastBackupAt(result.backedUpAt);

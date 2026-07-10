@@ -7,6 +7,7 @@
 - 备份管理：查看备份、手动备份、确认后恢复。
 - 访问统计：今日访问、近 7 天访问、近 14 天趋势、热门路径。
 - 日志摘要：读取 systemd 与 Nginx 日志尾部，并脱敏敏感字段。
+- 前端页面错误：浏览器渲染错误、全局 JS 错误和 Promise 未处理错误会写入脱敏摘要，方便定位空白页或页面崩溃。
 
 后台任务中心 `/task-center` 继续保留：
 
@@ -32,6 +33,16 @@ nginx -t
 - Nginx access：`/var/log/nginx/access.log`
 - Nginx error：`/var/log/nginx/error.log`
 - 本地 Vite 日志：`vite-*.log`，已加入忽略规则。
+- SQLite 客户端错误表：`client_error_log`，只保存脱敏摘要、路径、来源、角色和时间。
+
+## 自动清理策略
+
+夜间 SQLite 维护会执行：
+
+- 访问统计保留 180 天。
+- API 慢/错请求日志保留 90 天。
+- 前端页面错误摘要保留 120 天。
+- 后台任务运行记录保留 180 天。
 
 ## 安全基线
 
@@ -42,6 +53,7 @@ nginx -t
 - 前端 API 错误统一解析。
 - CORS 可通过 `CORS_ORIGIN` 收窄；默认保留 `*` 以兼容本地易混词跨源备份。
 - 日志摘要接口对 Cookie、Token、Password、Secret 做脱敏。
+- 前端页面错误上报会移除 URL 查询参数，并脱敏 Cookie、Token、Password、Secret、Authorization。
 - 访问统计不保存明文 IP。
 
 仍建议继续做：

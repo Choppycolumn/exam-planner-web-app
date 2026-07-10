@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { reportClientError } from '../utils/clientErrorReporter';
 
 type ErrorBoundaryState = {
   error: Error | null;
@@ -14,6 +15,12 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('App render failed', error, info.componentStack);
+    reportClientError({
+      source: 'render',
+      message: error.message || error.name,
+      stack: error.stack,
+      componentStack: info.componentStack || '',
+    });
   }
 
   render() {

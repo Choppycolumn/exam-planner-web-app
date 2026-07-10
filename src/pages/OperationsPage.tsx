@@ -64,6 +64,7 @@ export function OperationsPage() {
   const diskOk = !status?.runtime.disk || diskAvailable >= 2 * 1024 * 1024 * 1024;
   const taskOk = (status?.tasks?.metrics?.failed ?? 0) === 0 && !(status?.maintenance.lastError || status?.maintenance.lastPrecomputeError);
   const logOk = (logs?.apiMetrics?.serverErrors ?? 0) === 0 && (logs?.sources ?? []).every((source) => source.errorCount === 0);
+  const clientErrorOk = (logs?.clientErrors?.metrics.last24h ?? 0) === 0;
   const briefOk = !status?.dailyBrief.latest || status.dailyBrief.latest.status !== 'failed';
 
   const visitTrend = useMemo(() => (visitsQuery.data?.daily ?? []).map((item) => ({ date: item.date, minutes: item.visits })), [visitsQuery.data?.daily]);
@@ -111,6 +112,7 @@ export function OperationsPage() {
     { label: '每日简报', ok: briefOk, detail: status?.dailyBrief.latest ? `${status.dailyBrief.latest.date} · ${status.dailyBrief.latest.status}` : '暂无简报' },
     { label: '后台任务', ok: taskOk, detail: `失败 ${status?.tasks?.metrics?.failed ?? 0} 次，运行中 ${status?.tasks?.metrics?.running ?? 0}` },
     { label: '日志健康', ok: logOk, detail: `5xx ${logs?.apiMetrics?.serverErrors ?? 0} 次，日志源 ${logs?.sources.filter((source) => source.available).length ?? 0}/${logs?.sources.length ?? 0}` },
+    { label: '页面错误', ok: clientErrorOk, detail: `24 小时 ${logs?.clientErrors?.metrics.last24h ?? 0} 次，7 天 ${logs?.clientErrors?.metrics.last7d ?? 0} 次` },
     { label: '访问入口', ok: Boolean(visitsQuery.data), detail: `今日 ${visitsQuery.data?.today ?? 0} 次，近 7 天 ${visitsQuery.data?.last7 ?? 0} 次` },
   ];
 
@@ -169,7 +171,7 @@ export function OperationsPage() {
         <MetricCard label="CPU 负载" value={status?.runtime.loadAverage?.[0]?.toFixed(2) ?? '--'} hint={`${status?.runtime.cpuCount ?? '--'} 核心`} icon={<Activity size={20} />} />
         <MetricCard label="进程内存" value={formatBytes(status?.runtime.memory.processRssBytes ?? 0)} hint={`可用 ${formatBytes(status?.runtime.memory.freeBytes ?? 0)}`} icon={<HardDrive size={20} />} />
         <MetricCard label="任务运行" value={status?.tasks?.metrics?.total ?? 0} hint={`近 24 小时 ${status?.tasks?.metrics?.last24h ?? 0} 次`} icon={<Clock3 size={20} />} />
-        <MetricCard label="慢/错接口" value={logs?.apiMetrics?.logged ?? 0} hint={`平均 ${logs?.apiMetrics?.averageDurationMs ?? '--'}ms`} icon={<FileWarning size={20} />} />
+        <MetricCard label="页面错误" value={logs?.clientErrors?.metrics.last24h ?? 0} hint={`最近 ${formatDateTime(logs?.clientErrors?.metrics.latestAt)}`} icon={<FileWarning size={20} />} />
       </div>
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
@@ -294,6 +296,26 @@ export function OperationsPage() {
             {logs?.slowApi?.length ? null : <div className="p-4"><EmptyState title="暂无慢接口记录" /></div>}
           </div>
         </div>
+        <div className="card p-5">
+          <h2 className="text-base font-semibold text-slate-900">前端页面错误</h2>
+          <p className="mt-1 text-sm text-slate-500">只显示脱敏摘要；如果 24 小时内不为 0，优先检查对应页面。</p>
+          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+            {(logs?.clientErrors?.latest ?? []).map((item) => (
+              <div key={`${item.createdAt}-${item.source}-${item.path}`} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-semibold text-slate-900">{item.path}</span>
+                  <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.source}</span>
+                </div>
+                <p className="mt-1 truncate text-xs text-rose-600">{item.message}</p>
+                <p className="mt-1 text-xs text-slate-500">{formatDateTime(item.createdAt)} · {item.role || 'unknown'}</p>
+              </div>
+            ))}
+            {logs?.clientErrors?.latest?.length ? null : <div className="p-4"><EmptyState title="暂无前端页面错误" /></div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-5 grid gap-5 xl:grid-cols-2">
         <div className="card p-5">
           <h2 className="text-base font-semibold text-slate-900">最近访问</h2>
           <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">

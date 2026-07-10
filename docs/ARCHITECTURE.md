@@ -11,7 +11,7 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 - `src/components/`：通用 UI 与图表组件。
 - `src/hooks/`：前端数据读取与页面状态 Hook。
 - `src/api/`：前端请求封装、TanStack Query 缓存键。
-- `src/features/`：领域功能模块，目前包含易混词和资料库。
+- `src/features/`：领域功能模块，目前保留易混词等仍在使用的能力。
 - `src/db/`：历史本地 IndexedDB/Dexie 结构与迁移能力。
 - `server/auth-static-server.mjs`：生产 Node 服务，负责静态文件、登录、API、SQLite、备份、简报和报告。
 - `server/embedding_worker.py`：错因主题向量提取的 Python Worker。
@@ -40,17 +40,16 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 2. Node 校验登录 Cookie。
 3. 前端通过 `/api/*` 请求数据。
 4. Node 使用 `sqlite3` CLI 读写 `data/exam-planner.sqlite`。
-5. 保存成功后前端调用 `notifyDataChanged()` 失效缓存。
-6. TanStack Query 重新拉取页面级数据。
+5. 保存成功后 TanStack Query 精确失效相关 query key。
+6. TanStack Query 重新拉取页面级数据；不再叠加自定义短缓存。
 
 ## 当前新增结构
 
 - `src/pages/LearningProgressPage.tsx`：学习进度仪表盘。
-- `src/pages/ProjectProgressPage.tsx`：项目进展看板。
-- `src/pages/OperationsPage.tsx`：备份、访问统计、日志摘要运维观察台。
+- `src/pages/OperationsPage.tsx`：统一的运维与健康中心，只呈现可执行结论、备份和日志摘要。
 - `src/utils/theme.ts`：浅色/深色模式持久化。
 - `.env.example`：环境变量模板。
 
 ## 维护边界
 
-`server/auth-static-server.mjs` 仍然是最大维护风险。后续如果继续扩展后端，建议先按领域拆出 `server/modules/*`，再考虑 Express/Fastify 迁移。
+生产服务按 `SERVICE_ROLE=web|worker` 分为 Web 请求进程和后台任务进程。路由、认证、HTTP、备份、通知与 Break Guard 领域边界已经拆出；历史 schema 和复杂数据计算仍由兼容入口编排。后续应继续抽 repository/service，不需要为拆分而迁移到另一套 Web 框架。

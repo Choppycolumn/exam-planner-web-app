@@ -28,10 +28,12 @@ export interface DashboardData {
   visibleTasks: ShortTermTask[];
   todayWaterRecord: WaterIntakeRecord | null;
   todayBrief: DailyBrief | null;
+  englishWritingPlan?: EnglishWritingPlanForDate;
   startupPlan?: DashboardStartupPlan;
   reminders?: DashboardReminder[];
   activityCalendar?: DashboardActivityDay[];
   errorThemeWall?: DashboardErrorThemeWallItem[];
+  breakGuard?: BreakGuardSummary;
   readOnly?: boolean;
 }
 
@@ -68,6 +70,25 @@ export interface DashboardErrorThemeWallItem {
   occurrenceCount: number;
   reviewDayCount: number;
   lastSeenAt: string;
+}
+
+export interface BreakGuardSummary {
+  date: string;
+  breakCount: number;
+  completedBreakCount: number;
+  timeoutWarningCount: number;
+  unfocusedCount: number;
+  lunchCount: number;
+  dinnerCount: number;
+  latest: Array<{
+    id: number;
+    eventType: string;
+    label: string;
+    status: string;
+    note: string;
+    overdueSeconds: number;
+    createdAt: string;
+  }>;
 }
 
 export interface ReviewTrendResponse {
@@ -125,6 +146,11 @@ export interface DailyBriefSettings {
     count: number;
     offsetsMinutes: number[];
   };
+  customWeeklyPush: {
+    enabled: boolean;
+    days: Record<'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday', string>;
+  };
+  englishWritingPlan: EnglishWritingPlanSettings;
   email: {
     enabled: boolean;
     host: string;
@@ -137,6 +163,34 @@ export interface DailyBriefSettings {
     subjectPrefix: string;
     hasPassword?: boolean;
   };
+}
+
+export type WeekdayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
+
+export interface EnglishWritingPlanStage {
+  id: string;
+  name: string;
+  weeks: string;
+  focus: string;
+}
+
+export interface EnglishWritingPlanSettings {
+  enabled: boolean;
+  showOnDashboard: boolean;
+  includeInBrief: boolean;
+  dailyMinutes: string;
+  currentStageId: string;
+  stages: EnglishWritingPlanStage[];
+  weeklyTasks: Record<WeekdayKey, string>;
+}
+
+export interface EnglishWritingPlanForDate extends EnglishWritingPlanSettings {
+  date: string;
+  weekday: WeekdayKey;
+  weekdayLabel: string;
+  currentStage: EnglishWritingPlanStage | null;
+  todayTask: string;
+  hasTodayTask: boolean;
 }
 
 export interface DailyBrief {
@@ -153,6 +207,15 @@ export interface DailyBrief {
     title: string;
     generatedAt: string;
     trigger: string;
+    customWeeklyPush?: {
+      enabled: boolean;
+      date: string;
+      weekday: string;
+      weekdayLabel: string;
+      content: string;
+      hasContent: boolean;
+    };
+    englishWritingPlan?: EnglishWritingPlanForDate;
     weather?: {
       ok: boolean;
       cityName?: string;
@@ -207,62 +270,6 @@ export interface StatisticsSummary {
   distribution: Array<{ name: string; value: number }>;
   last7: Array<{ date: string; minutes: number }>;
   last30: Array<{ name: string; minutes: number }>;
-}
-
-export type StudyPetCategory = 'study' | 'entertainment' | 'tool' | 'social' | 'unknown';
-
-export interface StudyPetSiteUsage {
-  date?: string;
-  deviceId?: string;
-  domain: string;
-  category: StudyPetCategory;
-  seconds: number;
-  visits: number;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface StudyPetDailyReport {
-  date: string;
-  timezone: string;
-  deviceId: string;
-  totalComputerSeconds: number;
-  studySeconds: number;
-  entertainmentSeconds: number;
-  toolSeconds: number;
-  socialSeconds: number;
-  unknownSeconds: number;
-  entertainmentOvertimeCount: number;
-  strongReminderCount: number;
-  studyGoal: {
-    targetStudySeconds: number;
-    completed: boolean;
-  };
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface StudyPetReportPayload extends Omit<StudyPetDailyReport, 'createdAt' | 'updatedAt'> {
-  sites: StudyPetSiteUsage[];
-}
-
-export interface StudyPetTodayResponse {
-  generatedAt: string;
-  date: string;
-  timezone: string;
-  report: StudyPetDailyReport | null;
-  sites: StudyPetSiteUsage[];
-  readOnly?: boolean;
-}
-
-export interface StudyPetStatsResponse {
-  generatedAt: string;
-  timezone: string;
-  startDate: string;
-  endDate: string;
-  daily: StudyPetDailyReport[];
-  siteUsage: StudyPetSiteUsage[];
-  readOnly?: boolean;
 }
 
 export interface ReferenceList<T> {
@@ -445,6 +452,16 @@ export interface OpsLogSummaryResponse {
   sources: OpsLogSource[];
   auditEvents?: Array<{ action: string; actorRole: string; detail: Record<string, unknown>; createdAt: string }>;
   slowApi?: Array<{ method: string; path: string; statusCode: number; durationMs: number; error: string; createdAt: string }>;
+  clientErrors?: {
+    metrics: {
+      total: number;
+      last24h: number;
+      last7d: number;
+      latestAt: string | null;
+      bySource: Array<{ source: string; count: number }>;
+    };
+    latest: Array<{ source: string; path: string; message: string; role: string; createdAt: string }>;
+  };
   apiMetrics?: {
     logged: number;
     serverErrors: number;
@@ -800,104 +817,22 @@ export interface ErrorThemeDetail {
   readOnly?: boolean;
 }
 
-export interface LibraryBook {
-  id: number;
-  title: string;
-  author: string;
-  category: string;
-  tags: string[];
-  originalFileName: string;
-  fileType: 'pdf' | 'epub' | 'txt' | 'md' | string;
-  mimeType: string;
-  fileSize: number;
-  textStatus: 'pending' | 'processing' | 'ready' | 'empty' | 'failed' | string;
-  textError: string;
-  pageCount: number | null;
-  chapterCount: number | null;
-  progressPercent: number;
-  lastLocator: string;
-  lastOpenedAt: string | null;
-  isFavorite: boolean;
-  isArchived: boolean;
-  schemaVersion: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LibraryNote {
-  id: number;
-  bookId: number;
-  locator: string;
-  title: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LibraryBookmark {
-  id: number;
-  bookId: number;
-  pageNumber: number;
-  title: string;
-  note: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LibraryTextChunk {
-  id: number;
-  bookId: number;
-  chunkIndex: number;
-  locator: string;
-  title: string;
-  text: string;
-  createdAt: string;
-}
-
-export interface LibraryBookDetail {
-  book: LibraryBook;
-  notes: LibraryNote[];
-  bookmarks: LibraryBookmark[];
-  chunkCount: number;
-  readOnly?: boolean;
-}
-
-export interface LibraryBooksResponse {
-  items: LibraryBook[];
-  categories: Array<{ category: string; count: number }>;
-  readOnly?: boolean;
-}
-
-export interface LibraryTextResponse {
-  chunks: LibraryTextChunk[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-export interface LibrarySearchResponse {
-  results: Array<{ book: LibraryBook; matchType: 'metadata' | 'text' | 'note' | string; snippet: string; locator: string }>;
-  readOnly?: boolean;
-}
-
 type ApiOptions = {
   method?: string;
   body?: unknown;
+  timeoutMs?: number;
 };
 
-let stateCache: ServerState | null = null;
-let statePromise: Promise<ServerState> | null = null;
-let dashboardCache: DashboardData | null = null;
-let dashboardPromise: Promise<DashboardData> | null = null;
-const shortApiCache = new Map<string, { expiresAt: number; value: unknown }>();
-
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
   const response = await fetch(`/api${path}`, {
     method: options.method ?? 'GET',
     credentials: 'same-origin',
     headers: options.body ? { accept: 'application/json', 'content-type': 'application/json' } : { accept: 'application/json' },
     body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+    signal: controller.signal,
+  }).finally(() => window.clearTimeout(timeoutId));
 
   if (!response.ok) {
     const text = await response.text();
@@ -917,96 +852,21 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
 }
 
 export const notifyDataChanged = () => {
-  stateCache = null;
-  statePromise = null;
-  dashboardCache = null;
-  dashboardPromise = null;
-  shortApiCache.clear();
   invalidateServerQueries();
   window.dispatchEvent(new Event('server-data-changed'));
 };
 
 function cachedApiRequest<T>(path: string, ttlMs = 60_000): Promise<T> {
-  const key = `GET:${path}`;
-  const cached = shortApiCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.value as T);
-  return apiRequest<T>(path).then((value) => {
-    shortApiCache.set(key, { value, expiresAt: Date.now() + ttlMs });
-    return value;
-  });
+  void ttlMs;
+  return apiRequest<T>(path);
 }
 
 function cachedState() {
-  if (stateCache) return Promise.resolve(stateCache);
-  statePromise ??= apiRequest<ServerState>('/state').then((state) => {
-    stateCache = state;
-    statePromise = null;
-    return state;
-  });
-  return statePromise;
+  return apiRequest<ServerState>('/state');
 }
 
 function cachedDashboard() {
-  if (dashboardCache) return Promise.resolve(dashboardCache);
-  dashboardPromise ??= apiRequest<DashboardData>('/dashboard').then((data) => {
-    dashboardCache = data;
-    dashboardPromise = null;
-    return data;
-  });
-  return dashboardPromise;
-}
-
-async function postStudyPetReport(report: StudyPetReportPayload, apiToken: string) {
-  const response = await fetch('/api/study-pet/report', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${apiToken}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(report),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const payload = JSON.parse(text) as { error?: string; message?: string };
-      message = payload.error || payload.message || message;
-    } catch {
-      // Keep the plain response text when the server returns non-JSON.
-    }
-    const error = new Error(message) as Error & { status?: number };
-    error.status = response.status;
-    throw error;
-  }
-
-  return response.json() as Promise<{ ok: true; date: string; deviceId: string }>;
-}
-
-function uploadLibraryBook(formData: FormData, onProgress?: (percent: number) => void) {
-  return new Promise<{ ok: true; detail: LibraryBookDetail }>((resolveUpload, rejectUpload) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', '/api/library/upload');
-    request.withCredentials = true;
-    request.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
-    };
-    request.onload = () => {
-      if (request.status >= 200 && request.status < 300) {
-        try {
-          resolveUpload(JSON.parse(request.responseText) as { ok: true; detail: LibraryBookDetail });
-        } catch (error) {
-          rejectUpload(error);
-        }
-        return;
-      }
-      rejectUpload(new Error(request.responseText || `Upload failed: ${request.status}`));
-    };
-    request.onerror = () => rejectUpload(new Error('Upload failed'));
-    request.send(formData);
-  });
+  return apiRequest<DashboardData>('/dashboard');
 }
 
 export const serverApi = {
@@ -1045,16 +905,6 @@ export const serverApi = {
   resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
   getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
   getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
-  postStudyPetReport,
-  getStudyPetToday: (date?: string) =>
-    cachedApiRequest<StudyPetTodayResponse>(`/study-pet/today${date ? `?date=${encodeURIComponent(date)}` : ''}`, 30_000),
-  getStudyPetStats: (params: { startDate?: string; endDate?: string } = {}) => {
-    const query = new URLSearchParams();
-    if (params.startDate) query.set('startDate', params.startDate);
-    if (params.endDate) query.set('endDate', params.endDate);
-    const suffix = query.toString();
-    return cachedApiRequest<StudyPetStatsResponse>(`/study-pet/stats${suffix ? `?${suffix}` : ''}`, 30_000);
-  },
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
     apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
   saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
@@ -1142,30 +992,5 @@ export const serverApi = {
     from?: string;
     to?: string;
   }) => apiRequest<{ ok: true; analysis: ErrorThemeAnalysis }>('/error-themes/corrections/save', { method: 'POST', body }),
-  getLibraryBooks: (params?: { search?: string; category?: string; sort?: string; archived?: boolean }) => {
-    const query = new URLSearchParams();
-    if (params?.search) query.set('search', params.search);
-    if (params?.category) query.set('category', params.category);
-    if (params?.sort) query.set('sort', params.sort);
-    if (params?.archived) query.set('archived', '1');
-    const suffix = query.toString();
-    return cachedApiRequest<LibraryBooksResponse>(`/library/books${suffix ? `?${suffix}` : ''}`, 45_000);
-  },
-  getLibraryBook: (id: number) => apiRequest<LibraryBookDetail>(`/library/books/${id}`),
-  getLibraryText: (id: number, offset = 0, limit = 120) =>
-    cachedApiRequest<LibraryTextResponse>(`/library/books/${id}/text?offset=${offset}&limit=${limit}`, 90_000),
-  searchLibrary: (query: string) => cachedApiRequest<LibrarySearchResponse>(`/library/search?q=${encodeURIComponent(query)}`, 45_000),
-  uploadLibraryBook,
-  saveLibraryBook: (book: Partial<LibraryBook> & { id: number }) =>
-    apiRequest<{ ok: true; book: LibraryBook }>('/library/books/save', { method: 'POST', body: book }),
-  removeLibraryBook: (id: number) => apiRequest<{ ok: true }>('/library/books/remove', { method: 'POST', body: { id } }),
-  saveLibraryProgress: (payload: { bookId: number; locator?: string; progressPercent?: number }) =>
-    apiRequest<{ ok: true; updatedAt: string }>('/library/progress', { method: 'POST', body: payload }),
-  saveLibraryNote: (payload: { id?: number; bookId: number; locator?: string; title?: string; content: string }) =>
-    apiRequest<{ ok: true; id: number }>('/library/notes/save', { method: 'POST', body: payload }),
-  saveLibraryBookmark: (payload: { id?: number; bookId: number; pageNumber: number; title?: string; note?: string }) =>
-    apiRequest<{ ok: true; id: number }>('/library/bookmarks/save', { method: 'POST', body: payload }),
-  removeLibraryBookmark: (id: number) => apiRequest<{ ok: true }>('/library/bookmarks/remove', { method: 'POST', body: { id } }),
-  libraryFileUrl: (id: number) => `/api/library/books/${id}/file`,
   reset: () => apiRequest<void>('/reset', { method: 'POST' }),
 };

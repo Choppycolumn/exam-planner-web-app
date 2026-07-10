@@ -1,27 +1,23 @@
 import { useEffect, useState } from 'react';
-import { Activity, Bell, BookOpen, BriefcaseBusiness, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LibraryBig, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
+import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
-import { preloadSecondaryRoutes } from '../router/preload';
+import { preloadRoute, preloadSecondaryRoutes } from '../router/preload';
 import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 
 const navItems = [
-  { to: '/study-pet-stats', label: '桌宠统计', icon: Activity },
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
   { to: '/progress', label: '学习进度', icon: TrendingUp },
-  { to: '/project-progress', label: '项目进展', icon: BriefcaseBusiness },
   { to: '/goal-review', label: '目标复盘', icon: Flag },
-  { to: '/notifications', label: '通知中心', icon: Bell },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
-  { to: '/library', label: '资料图书馆', icon: LibraryBig },
   { to: '/settings', label: '设置', icon: Settings },
   { to: '/operations', label: '运维与健康', icon: ShieldCheck },
 ];
@@ -53,6 +49,8 @@ export function Layout() {
                   isActive ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
                 }`
               }
+              onMouseEnter={() => preloadRoute(to)}
+              onFocus={() => preloadRoute(to)}
             >
               <Icon size={18} />
               {label}
@@ -89,7 +87,7 @@ export function Layout() {
             </div>
             <div className="flex gap-2 overflow-x-auto lg:hidden">
               {navItems.map(({ to, label }) => (
-                <NavLink key={to} to={to} className={({ isActive }) => `whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'}`}>
+                <NavLink key={to} to={to} onMouseEnter={() => preloadRoute(to)} onFocus={() => preloadRoute(to)} className={({ isActive }) => `whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'}`}>
                   {label}
                 </NavLink>
               ))}

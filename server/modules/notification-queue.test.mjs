@@ -9,6 +9,7 @@ function fakeRepository(delivery) {
     markDeliverySending: vi.fn(),
     markDeliveryAccepted: vi.fn(),
     markDeliveryFailed: vi.fn(),
+    deferDelivery: vi.fn(),
   };
 }
 
@@ -82,5 +83,28 @@ describe('notification queue', () => {
       source: 'notification',
       severity: 'warning',
     }));
+  });
+
+  it('defers a quiet-hours delivery without consuming a retry attempt', async () => {
+    const repository = fakeRepository({
+      id: 11,
+      eventId: 7,
+      attemptCount: 0,
+      maxAttempts: 2,
+      payload: { text: 'hello' },
+    });
+    const queue = createNotificationQueue({
+      repository,
+      sendProactive: vi.fn(async () => ({ ok: false, deferred: true, error: 'wechat quiet hours', nextAttemptAt: '2026-06-07T23:00:00.000Z' })),
+      notifyEvent: vi.fn(),
+    });
+
+    await queue.processDue();
+
+    expect(repository.deferDelivery).toHaveBeenCalledWith(11, {
+      nextAttemptAt: '2026-06-07T23:00:00.000Z',
+      reason: 'wechat quiet hours',
+    });
+    expect(repository.markDeliveryFailed).not.toHaveBeenCalled();
   });
 });

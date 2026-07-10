@@ -1,0 +1,19 @@
+[Unit]
+Description=Exam Planner Background Worker
+After=network-online.target exam-planner.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/exam-planner
+Environment=NODE_ENV=production
+Environment=SERVICE_ROLE=worker
+ExecStart=/usr/bin/node /opt/exam-planner/server/auth-static-server.mjs
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

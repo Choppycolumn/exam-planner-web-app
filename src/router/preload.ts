@@ -4,15 +4,11 @@ export const routeLoaders = {
   reviews: () => import('../pages/ReviewsPage'),
   reviewInsights: () => import('../pages/ReviewInsightsPage'),
   progress: () => import('../pages/LearningProgressPage'),
-  studyPetStats: () => import('../pages/StudyPetStatsPage'),
-  projectProgress: () => import('../pages/ProjectProgressPage'),
   goalReview: () => import('../pages/GoalReviewPage'),
-  notifications: () => import('../pages/NotificationsPage'),
+  calendar: () => import('../pages/CalendarPage'),
   operations: () => import('../pages/OperationsPage'),
   mockExams: () => import('../pages/MockExamsPage'),
   confusingWords: () => import('../pages/ConfusingWordsPage'),
-  library: () => import('../pages/LibraryPage'),
-  libraryReader: () => import('../pages/LibraryReaderPage'),
   settings: () => import('../pages/SettingsPage'),
   migrateLocalData: () => import('../pages/MigrateLocalDataPage'),
   dashboardCharts: () => import('../components/DashboardCharts'),
@@ -25,32 +21,9 @@ type IdleWindow = Window & {
 
 export function preloadSecondaryRoutes() {
   const win = window as IdleWindow;
-  const loaders = [
-    routeLoaders.dashboardCharts,
-    routeLoaders.studyTime,
-    routeLoaders.reviews,
-    routeLoaders.progress,
-    routeLoaders.studyPetStats,
-    routeLoaders.projectProgress,
-    routeLoaders.goalReview,
-    routeLoaders.notifications,
-    routeLoaders.mockExams,
-    routeLoaders.confusingWords,
-    routeLoaders.library,
-    routeLoaders.reviewInsights,
-    routeLoaders.settings,
-    routeLoaders.goals,
-    routeLoaders.operations,
-    routeLoaders.migrateLocalData,
-  ];
-
-  const run = () => {
-    loaders.forEach((loader, index) => {
-      window.setTimeout(() => {
-        void loader().catch(() => undefined);
-      }, index * 220);
-    });
-  };
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  if (connection?.saveData || ['slow-2g', '2g'].includes(connection?.effectiveType || '')) return undefined;
+  const run = () => void routeLoaders.dashboardCharts().catch(() => undefined);
 
   if (win.requestIdleCallback) {
     const idleId = win.requestIdleCallback(run, { timeout: 1800 });
@@ -59,4 +32,23 @@ export function preloadSecondaryRoutes() {
 
   const timeoutId = window.setTimeout(run, 800);
   return () => window.clearTimeout(timeoutId);
+}
+
+const pathLoaders: Record<string, () => Promise<unknown>> = {
+  '/goals': routeLoaders.goals,
+  '/study-time': routeLoaders.studyTime,
+  '/reviews': routeLoaders.reviews,
+  '/review-insights': routeLoaders.reviewInsights,
+  '/progress': routeLoaders.progress,
+  '/goal-review': routeLoaders.goalReview,
+  '/calendar': routeLoaders.calendar,
+  '/operations': routeLoaders.operations,
+  '/mock-exams': routeLoaders.mockExams,
+  '/confusing-words': routeLoaders.confusingWords,
+  '/settings': routeLoaders.settings,
+  '/migrate-local-data': routeLoaders.migrateLocalData,
+};
+
+export function preloadRoute(path: string) {
+  void pathLoaders[path]?.().catch(() => undefined);
 }

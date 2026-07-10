@@ -20,7 +20,7 @@ import type { ConfusingWordGroup } from '../features/confusing-words/types';
 
 const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
 const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
-const BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
+const LEGACY_BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -48,7 +48,43 @@ const settingsTabs: Array<{ id: SettingsTab; label: string; description: string 
   { id: 'danger', label: '危险区', description: '重置与清空' },
 ];
 
+const weeklyPushDays = [
+  { key: 'monday', label: '周一' },
+  { key: 'tuesday', label: '周二' },
+  { key: 'wednesday', label: '周三' },
+  { key: 'thursday', label: '周四' },
+  { key: 'friday', label: '周五' },
+  { key: 'saturday', label: '周六' },
+  { key: 'sunday', label: '周日' },
+] as const;
+
+function defaultEnglishWritingPlan() {
+  return {
+    enabled: true,
+    showOnDashboard: true,
+    includeInBrief: true,
+    dailyMinutes: '20-25 分钟',
+    currentStageId: 'foundation',
+    stages: [
+      { id: 'foundation', name: '基础修复期', weeks: '第 1-4 周', focus: '把中文想法变成正确英文；修拼写、语法、搭配' },
+      { id: 'past-paper', name: '真题强化期', weeks: '第 5-10 周', focus: '开始稳定写真题小作文和大作文，形成解题流程' },
+      { id: 'sprint', name: '高分冲刺期', weeks: '第 11-19 周', focus: '限时写作、整卷训练、减少低级错误' },
+      { id: 'stabilize', name: '考前稳定期', weeks: '第 20-24 周', focus: '固化自己的表达库，减少分数波动' },
+    ],
+    weeklyTasks: {
+      monday: '6 句应用文功能句：邀请、建议、感谢、投诉等',
+      tuesday: '真题或模拟题小作文：只写开头 + 主体段',
+      wednesday: '修改周二作文，整理错误表达',
+      thursday: '大作文：英文提纲 + 图画描述段',
+      friday: '大作文：写一个主体分析段',
+      saturday: '完整小作文一篇，限时 15 分钟',
+      sunday: '闭卷重写本周小作文 + 复盘错句',
+    },
+  };
+}
+
 function defaultBriefSettings(): DailyBriefSettings {
+  const englishWritingPlan = defaultEnglishWritingPlan();
   return {
     enabled: true,
     generateTime: '08:00',
@@ -64,6 +100,19 @@ function defaultBriefSettings(): DailyBriefSettings {
       count: 1,
       offsetsMinutes: [60],
     },
+    customWeeklyPush: {
+      enabled: true,
+      days: {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      },
+    },
+    englishWritingPlan,
     email: {
       enabled: false,
       host: '',
@@ -95,7 +144,7 @@ export function SettingsPage() {
   const [toast, setToast] = useState('');
   const [studyTargetHours, setStudyTargetHours] = useState('');
   const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
-  const [backupPassword, setBackupPassword] = useState(() => localStorage.getItem(BACKUP_PASSWORD_KEY) || '');
+  const [backupSyncToken, setBackupSyncToken] = useState('');
   const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
   const [confusingBackupVersions, setConfusingBackupVersions] = useState<ConfusingWordsBackupVersion[]>([]);
   const [confusingServerBackup, setConfusingServerBackup] = useState<{ groups: ConfusingWordGroup[]; backedUpAt?: string } | null>(null);
@@ -117,7 +166,7 @@ export function SettingsPage() {
           setTimeout(() => setToast(''), 2200);
           return;
         }
-        const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword }, { force: true, source: 'manual-force' });
+        const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { force: true, source: 'manual-force' });
         localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
         await refreshConfusingWordsBackups();
         setToast('已强制覆盖服务器单词备份');
@@ -130,7 +179,7 @@ export function SettingsPage() {
 
   const refreshConfusingWordsBackups = async () => {
     try {
-      const settings = { baseUrl: backupBaseUrl, password: backupPassword };
+      const settings = { baseUrl: backupBaseUrl, syncToken: backupSyncToken };
       const [serverBackup, versionsResult] = await Promise.all([
         fetchConfusingWordsBackup(settings),
         fetchConfusingWordsBackupVersions(settings),
@@ -144,6 +193,7 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
+    localStorage.removeItem(LEGACY_BACKUP_PASSWORD_KEY);
     let mounted = true;
     const timeoutId = window.setTimeout(() => {
       Promise.allSettled([serverApi.getBackupStatus(), serverApi.getStudyTarget(), serverApi.getBriefSettings()])
@@ -159,6 +209,25 @@ export function SettingsPage() {
               ...briefResult.value.settings,
               wechat: { ...defaults.wechat, ...(briefResult.value.settings.wechat ?? {}) },
               taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) },
+              customWeeklyPush: {
+                ...defaults.customWeeklyPush,
+                ...(briefResult.value.settings.customWeeklyPush ?? {}),
+                days: {
+                  ...defaults.customWeeklyPush.days,
+                  ...(briefResult.value.settings.customWeeklyPush?.days ?? {}),
+                },
+              },
+              englishWritingPlan: {
+                ...defaults.englishWritingPlan,
+                ...(briefResult.value.settings.englishWritingPlan ?? {}),
+                stages: briefResult.value.settings.englishWritingPlan?.stages?.length
+                  ? briefResult.value.settings.englishWritingPlan.stages
+                  : defaults.englishWritingPlan.stages,
+                weeklyTasks: {
+                  ...defaults.englishWritingPlan.weeklyTasks,
+                  ...(briefResult.value.settings.englishWritingPlan?.weeklyTasks ?? {}),
+                },
+              },
               email: { ...defaults.email, ...(briefResult.value.settings.email ?? {}) },
             });
             setTaskReminderOffsetsText(reminderOffsetsText({ ...defaults, ...briefResult.value.settings, taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) } }));
@@ -176,7 +245,7 @@ export function SettingsPage() {
       void refreshConfusingWordsBackups();
     }, 500);
     return () => window.clearTimeout(timeoutId);
-    // Backup settings are saved in localStorage first; avoid refetching while the password field is being typed.
+    // Cross-site tokens stay in memory; initial refresh uses the authenticated same-origin session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -233,7 +302,7 @@ export function SettingsPage() {
     try {
       await serverApi.generateBrief(false);
       notifyDataChanged();
-      setToast('今日简报已生成，可到通知中心查看');
+      setToast('今日简报已生成');
     } catch {
       setToast('简报生成失败，请稍后重试');
     } finally {
@@ -267,7 +336,6 @@ export function SettingsPage() {
 
   const saveBackupSettings = () => {
     localStorage.setItem(BACKUP_BASE_URL_KEY, backupBaseUrl.trim());
-    localStorage.setItem(BACKUP_PASSWORD_KEY, backupPassword);
     void refreshConfusingWordsBackups();
     setToast('易混单词备份设置已保存');
     setTimeout(() => setToast(''), 1800);
@@ -275,7 +343,7 @@ export function SettingsPage() {
 
   const backupNow = async () => {
     try {
-      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, password: backupPassword }, { source: 'manual-settings' });
+      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { source: 'manual-settings' });
       localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
       await refreshConfusingWordsBackups();
       setToast('易混单词已备份到服务器');
@@ -288,7 +356,7 @@ export function SettingsPage() {
   const restoreConfusingWordsBackup = async () => {
     if (!confirm('确定从服务器备份恢复易混单词吗？这会覆盖当前浏览器中的易混单词数据。')) return;
     try {
-      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, password: backupPassword });
+      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, syncToken: backupSyncToken });
       if (!backup?.groups?.length) return alert('服务器上还没有可恢复的易混单词备份');
       saveGroups(backup.groups);
       setConfusingGroups(backup.groups);
@@ -304,8 +372,8 @@ export function SettingsPage() {
   const restoreConfusingWordsVersion = async (version: ConfusingWordsBackupVersion) => {
     if (!confirm(`确定恢复这个历史版本吗？它包含 ${version.groupCount} 组 / ${version.wordCount} 个词，会覆盖当前浏览器里的易混单词。`)) return;
     try {
-      await restoreConfusingWordsBackupVersion(version.id, { baseUrl: backupBaseUrl, password: backupPassword });
-      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, password: backupPassword });
+      await restoreConfusingWordsBackupVersion(version.id, { baseUrl: backupBaseUrl, syncToken: backupSyncToken });
+      const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, syncToken: backupSyncToken });
       if (backup?.groups?.length) {
         saveGroups(backup.groups);
         setConfusingGroups(backup.groups);
@@ -360,6 +428,26 @@ export function SettingsPage() {
 
   const confusingLocalWordCount = confusingGroups.reduce((sum, group) => sum + group.words.length, 0);
   const confusingServerWordCount = confusingServerBackup?.groups.reduce((sum, group) => sum + group.words.length, 0) ?? 0;
+  const englishPlanDefaults = defaultBriefSettings().englishWritingPlan;
+  const englishPlan = {
+    ...englishPlanDefaults,
+    ...(briefSettings.englishWritingPlan ?? {}),
+    stages: briefSettings.englishWritingPlan?.stages?.length ? briefSettings.englishWritingPlan.stages : englishPlanDefaults.stages,
+    weeklyTasks: {
+      ...englishPlanDefaults.weeklyTasks,
+      ...(briefSettings.englishWritingPlan?.weeklyTasks ?? {}),
+    },
+  };
+  const updateEnglishPlan = (patch: Partial<DailyBriefSettings['englishWritingPlan']>) => {
+    setBriefSettings({ ...briefSettings, englishWritingPlan: { ...englishPlan, ...patch } });
+  };
+  const updateEnglishStage = (index: number, patch: Partial<DailyBriefSettings['englishWritingPlan']['stages'][number]>) => {
+    const stages = englishPlan.stages.map((stage, stageIndex) => (stageIndex === index ? { ...stage, ...patch } : stage));
+    updateEnglishPlan({ stages });
+  };
+  const updateEnglishWeeklyTask = (key: keyof DailyBriefSettings['englishWritingPlan']['weeklyTasks'], value: string) => {
+    updateEnglishPlan({ weeklyTasks: { ...englishPlan.weeklyTasks, [key]: value } });
+  };
 
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
@@ -509,6 +597,110 @@ export function SettingsPage() {
               </label>
             </div>
           </div>
+          <div className="mb-4 rounded-lg border border-emerald-100 bg-white p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <input
+                type="checkbox"
+                checked={briefSettings.customWeeklyPush?.enabled ?? true}
+                onChange={(event) => setBriefSettings({
+                  ...briefSettings,
+                  customWeeklyPush: { ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush), enabled: event.target.checked },
+                })}
+              />
+              <Bell size={16} />启用每周自定义推送栏目
+            </label>
+            <p className="mt-2 text-xs leading-5 text-slate-500">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {weeklyPushDays.map((day) => (
+                <label key={day.key}>
+                  <span className="label">{day.label}推送内容</span>
+                  <textarea
+                    className="field min-h-24"
+                    placeholder={`${day.label}要推送给自己的固定提醒`}
+                    value={briefSettings.customWeeklyPush?.days?.[day.key] ?? ''}
+                    onChange={(event) => setBriefSettings({
+                      ...briefSettings,
+                      customWeeklyPush: {
+                        ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush),
+                        days: {
+                          ...(briefSettings.customWeeklyPush?.days ?? defaultBriefSettings().customWeeklyPush.days),
+                          [day.key]: event.target.value,
+                        },
+                      },
+                    })}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-indigo-100 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">英语写作计划</h3>
+                <p className="mt-1 text-xs leading-5 text-slate-500">主页展示当前阶段和今日任务；每日简报会按当天星期自动带上对应写作安排。</p>
+              </div>
+              <div className="flex flex-wrap gap-3 text-sm font-semibold text-slate-700">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.enabled} onChange={(event) => updateEnglishPlan({ enabled: event.target.checked })} />
+                  启用
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.showOnDashboard} onChange={(event) => updateEnglishPlan({ showOnDashboard: event.target.checked })} />
+                  主页显示
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={englishPlan.includeInBrief} onChange={(event) => updateEnglishPlan({ includeInBrief: event.target.checked })} />
+                  写入简报
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
+              <label>
+                <span className="label">每日用时</span>
+                <input className="field" value={englishPlan.dailyMinutes} onChange={(event) => updateEnglishPlan({ dailyMinutes: event.target.value })} />
+              </label>
+              <label>
+                <span className="label">当前阶段</span>
+                <select className="field" value={englishPlan.currentStageId} onChange={(event) => updateEnglishPlan({ currentStageId: event.target.value })}>
+                  {englishPlan.stages.map((stage) => (
+                    <option key={stage.id} value={stage.id}>{stage.name}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {englishPlan.stages.map((stage, index) => (
+                <div key={stage.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid gap-2 md:grid-cols-[1fr_120px]">
+                    <label>
+                      <span className="label">阶段名称</span>
+                      <input className="field" value={stage.name} onChange={(event) => updateEnglishStage(index, { name: event.target.value })} />
+                    </label>
+                    <label>
+                      <span className="label">时间</span>
+                      <input className="field" value={stage.weeks} onChange={(event) => updateEnglishStage(index, { weeks: event.target.value })} />
+                    </label>
+                  </div>
+                  <label className="mt-2 block">
+                    <span className="label">这一阶段要解决什么</span>
+                    <textarea className="field min-h-20" value={stage.focus} onChange={(event) => updateEnglishStage(index, { focus: event.target.value })} />
+                  </label>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {weeklyPushDays.map((day) => (
+                <label key={day.key}>
+                  <span className="label">{day.label}写作任务</span>
+                  <textarea
+                    className="field min-h-20"
+                    value={englishPlan.weeklyTasks[day.key]}
+                    onChange={(event) => updateEnglishWeeklyTask(day.key, event.target.value)}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
             <input
               type="checkbox"
@@ -602,7 +794,7 @@ export function SettingsPage() {
         </div>
         <div className="mt-5 grid gap-3 md:grid-cols-[1fr_220px]">
           <label><span className="label">服务器备份地址</span><input className="field" placeholder="部署版同源可留空；本地可填 http://服务器IP" value={backupBaseUrl} onChange={(event) => setBackupBaseUrl(event.target.value)} /></label>
-          <label><span className="label">备份密码</span><input className="field" type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} /></label>
+          <label><span className="label">跨站同步令牌</span><input className="field" type="password" value={backupSyncToken} onChange={(event) => setBackupSyncToken(event.target.value)} autoComplete="off" placeholder="同源备份可留空" /></label>
         </div>
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn btn-soft" onClick={saveBackupSettings}>保存备份设置</button>

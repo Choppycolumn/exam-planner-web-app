@@ -1,0 +1,20 @@
+[Unit]
+Description=Exam Planner Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/exam-planner
+Environment=NODE_ENV=production
+Environment=SERVICE_ROLE=web
+Environment=COOKIE_SECURE=1
+ExecStart=/usr/bin/node /opt/exam-planner/server/auth-static-server.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

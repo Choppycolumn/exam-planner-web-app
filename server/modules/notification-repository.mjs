@@ -142,6 +142,13 @@ SET status = ${sqlString(retrying ? 'retrying' : 'failed')}, attempt_count = att
     response_json = ${sqlString(JSON.stringify(response))}, updated_at = ${sqlString(attemptedAt)}
 WHERE id = ${sqlValue(Number(id))};`);
 
+  const deferDelivery = (id, { nextAttemptAt, reason = '' }) => {
+    const timestamp = new Date().toISOString();
+    sqlite.run(`UPDATE notification_deliveries
+SET status = 'retrying', next_attempt_at = ${sqlString(nextAttemptAt)}, error = ${sqlString(reason)}, updated_at = ${sqlString(timestamp)}
+WHERE id = ${sqlValue(Number(id))};`);
+  };
+
   const acknowledge = (id) => {
     const timestamp = new Date().toISOString();
     sqlite.run(`UPDATE notification_events
@@ -182,6 +189,7 @@ FROM notification_events;`)[0] || {};
     markDeliverySending,
     markDeliveryAccepted,
     markDeliveryFailed,
+    deferDelivery,
     acknowledge,
     requeueDelivery,
     metrics,

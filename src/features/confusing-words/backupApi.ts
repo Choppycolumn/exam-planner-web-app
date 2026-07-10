@@ -22,7 +22,7 @@ export interface ConfusingWordsBackupVersion extends ConfusingWordsBackupSummary
 
 export interface BackupSettings {
   baseUrl: string;
-  password: string;
+  syncToken: string;
 }
 
 export interface BackupWriteOptions {
@@ -49,10 +49,11 @@ export class ConfusingWordsBackupConflictError extends Error {
 export async function backupConfusingWords(payload: ConfusingWordsExport, settings: BackupSettings, options: BackupWriteOptions = {}) {
   const response = await fetch(endpoint(settings.baseUrl), {
     method: 'POST',
+    credentials: settings.baseUrl ? 'omit' : 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       ...payload,
-      password: settings.password || undefined,
+      syncToken: settings.syncToken || undefined,
       force: options.force || undefined,
       source: options.source || undefined,
     }),
@@ -69,7 +70,8 @@ export async function backupConfusingWords(payload: ConfusingWordsExport, settin
 
 export async function fetchConfusingWordsBackup(settings: BackupSettings) {
   const response = await fetch(endpoint(settings.baseUrl), {
-    headers: settings.password ? { 'x-backup-password': settings.password } : undefined,
+    credentials: settings.baseUrl ? 'omit' : 'same-origin',
+    headers: settings.syncToken ? { 'x-backup-token': settings.syncToken } : undefined,
   });
   if (!response.ok) {
     throw new Error('Backup fetch failed');
@@ -79,7 +81,8 @@ export async function fetchConfusingWordsBackup(settings: BackupSettings) {
 
 export async function fetchConfusingWordsBackupVersions(settings: BackupSettings) {
   const response = await fetch(versionEndpoint(settings.baseUrl), {
-    headers: settings.password ? { 'x-backup-password': settings.password } : undefined,
+    credentials: settings.baseUrl ? 'omit' : 'same-origin',
+    headers: settings.syncToken ? { 'x-backup-token': settings.syncToken } : undefined,
   });
   if (!response.ok) {
     throw new Error('Backup versions fetch failed');
@@ -90,8 +93,9 @@ export async function fetchConfusingWordsBackupVersions(settings: BackupSettings
 export async function restoreConfusingWordsBackupVersion(versionId: number, settings: BackupSettings) {
   const response = await fetch(restoreEndpoint(settings.baseUrl), {
     method: 'POST',
+    credentials: settings.baseUrl ? 'omit' : 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ versionId, password: settings.password || undefined }),
+    body: JSON.stringify({ versionId, syncToken: settings.syncToken || undefined }),
   });
   if (!response.ok) {
     throw new Error('Backup version restore failed');

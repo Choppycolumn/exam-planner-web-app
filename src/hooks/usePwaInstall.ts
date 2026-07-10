@@ -67,15 +67,18 @@ export function usePwaInstall() {
 
   const install = async () => {
     if (!installPrompt) return false;
-    await installPrompt.prompt();
-    const choice = await installPrompt.userChoice;
-    if (choice.outcome === 'accepted') {
-      installed = true;
-      installPrompt = null;
+    const prompt = installPrompt;
+    installPrompt = null;
+    notifyListeners();
+    try {
+      await prompt.prompt();
+      const choice = await prompt.userChoice;
+      if (choice.outcome === 'accepted') installed = true;
       notifyListeners();
-      return true;
+      return choice.outcome === 'accepted';
+    } catch {
+      return false;
     }
-    return false;
   };
 
   return {

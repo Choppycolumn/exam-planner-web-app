@@ -12,14 +12,13 @@ export function sqlValue(value) {
   return sqlString(value);
 }
 
-export function createSqliteRepository({ sqliteFile, dataDir, sqliteCommand = 'sqlite3', sqliteUseShell = false }) {
+export function createSqliteRepository({ sqliteFile, dataDir }) {
   const run = (script, { maxBuffer = 128 * 1024 * 1024 } = {}) => {
     mkdirSync(dataDir, { recursive: true });
-    const result = spawnSync(sqliteCommand, [sqliteFile], {
+    const result = spawnSync('sqlite3', [sqliteFile], {
       input: script,
       encoding: 'utf8',
       maxBuffer,
-      shell: sqliteUseShell,
     });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`sqlite3 failed: ${result.stderr || result.stdout}`);

@@ -1,6 +1,7 @@
-﻿import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, normalize, resolve } from 'node:path';
+﻿import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createCipheriv, createDecipheriv } from 'node:crypto';
+import { dirname, extname, join, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
@@ -21,14 +22,53 @@ import { createNotificationRepository } from './modules/notification-repository.
 import { createNotificationQueue } from './modules/notification-queue.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
 import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
+import { isWechatQuietHours, nextWechatActiveAt } from './modules/notification-policy.mjs';
 import { runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
-import { createStudyPetRepository } from './modules/study-pet-repository.mjs';
+import { sanitizeClientErrorPayload } from './modules/client-error-sanitizer.mjs';
+import { handlePublicApiRoutes } from './routes/public-api-routes.mjs';
+import { handleNotificationRoutes } from './routes/notification-routes.mjs';
+import { handleProxySettingsRoutes } from './routes/proxy-settings-routes.mjs';
+import { handleOpsRoutes } from './routes/ops-routes.mjs';
+import { handleBriefRoutes } from './routes/brief-routes.mjs';
+import { handleLearningReadRoutes } from './routes/learning-read-routes.mjs';
+import { handleLearningWriteRoutes } from './routes/learning-write-routes.mjs';
+import { createBackupService } from './services/backup-service.mjs';
+import { createBreakGuardService } from './domains/break-guard/service.mjs';
+import {
+  addDaysISO,
+  addYearISO,
+  currentPeriod,
+  endOfMonthISO,
+  endOfWeekISO,
+  formatDateString,
+  localDateISO,
+  nowISO,
+  parseDateString,
+  previousMonthPeriod,
+  previousPeriod,
+  previousWeekPeriod,
+  startOfMonthISO,
+  startOfWeekISO,
+  todayISO,
+} from './core/date-time.mjs';
+import { createSqliteCli, runSqliteFile, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
+import { createHttpUtils, headerString, isObjectPayload } from './http/http-utils.mjs';
+import { createStaticAssetServer, defaultMimeTypes } from './http/static-assets.mjs';
+import {
+  clientHashForRequest,
+  createSessionAuth,
+  getClientIp,
+  lockMessage,
+  safeSecretEqual,
+  sleep,
+} from './auth/session-auth.mjs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const root = resolve(fileURLToPath(new URL('../dist', import.meta.url)));
-const dataDir = resolve(fileURLToPath(new URL('../data', import.meta.url)));
+const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const root = resolve(process.env.STATIC_ROOT || join(appRoot, 'dist'));
+const dataDir = resolve(process.env.DATA_DIR || join(appRoot, 'data'));
 const legacyDataFile = join(dataDir, 'db.json');
 const sqliteFile = join(dataDir, 'exam-planner.sqlite');
 const backupsDir = join(dataDir, 'backups');
@@ -39,23 +79,26 @@ const dictionaryFile = join(dataDir, 'ecdict.csv');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
-const sqliteCommand = process.env.SQLITE3_BIN || 'sqlite3';
-const sqliteUseShell = process.env.SQLITE3_USE_SHELL === '1';
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
 const smallEmbeddingModelName = process.env.EMBEDDING_MODEL_NAME || 'BAAI/bge-small-zh-v1.5';
 const largeEmbeddingModelName = process.env.LARGE_EMBEDDING_MODEL_NAME || 'intfloat/multilingual-e5-large';
 const port = Number(process.env.PORT || 8080);
+const serviceRole = ['web', 'worker', 'all'].includes(process.env.SERVICE_ROLE) ? process.env.SERVICE_ROLE : 'all';
+const backgroundJobsEnabled = serviceRole !== 'web';
+const httpEnabled = serviceRole !== 'worker';
 const appPassword = process.env.APP_PASSWORD;
-const readOnlyPassword = process.env.READONLY_PASSWORD || '123';
+const readOnlyPassword = process.env.READONLY_PASSWORD || '';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
 const cookieName = 'exam_planner_session';
-const corsOrigin = process.env.CORS_ORIGIN || '*';
+const corsOrigin = process.env.CORS_ORIGIN || '';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const clawbotSecret = process.env.CLAWBOT_SECRET || '';
+const breakGuardToken = process.env.BREAK_GUARD_TOKEN || '';
+const dataImportToken = process.env.DATA_IMPORT_TOKEN || '';
+const backupSyncToken = process.env.BACKUP_SYNC_TOKEN || '';
 const clawbotWebhookUrl = process.env.CLAWBOT_WEBHOOK_URL || '';
-const studyPetApiToken = process.env.STUDY_PET_API_TOKEN || '';
 const openClawChannel = process.env.OPENCLAW_CLAWBOT_CHANNEL || 'openclaw-weixin';
 const openClawAccountDir = process.env.OPENCLAW_ACCOUNT_DIR || '/root/.openclaw/openclaw-weixin/accounts';
 const openClawNpmProjectsDir = process.env.OPENCLAW_NPM_PROJECTS_DIR || '/root/.openclaw/npm/projects';
@@ -64,16 +107,16 @@ const openClawTarget = process.env.OPENCLAW_CLAWBOT_TARGET || '';
 const openClawCli = process.env.OPENCLAW_CLI || (existsSync('/opt/node22/bin/openclaw') ? '/opt/node22/bin/openclaw' : 'openclaw');
 const requestLogSlowMs = Number(process.env.REQUEST_LOG_SLOW_MS || 1500);
 const jsonBodyMaxBytes = Number(process.env.JSON_BODY_MAX_BYTES || 10 * 1024 * 1024);
-const libraryUploadMaxBytes = Number(process.env.LIBRARY_UPLOAD_MAX_BYTES || 350 * 1024 * 1024);
 const minFreeDiskBytes = Number(process.env.MIN_FREE_DISK_BYTES || 512 * 1024 * 1024);
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
+const settingsEncryptionKey = createHash('sha256').update(String(cookieSecret)).digest();
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
-const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir, sqliteCommand, sqliteUseShell });
+const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
 const externalApiClient = createExternalApiClient();
@@ -86,7 +129,78 @@ const notificationQueue = createNotificationQueue({
 });
 const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
-const studyPetRepository = createStudyPetRepository(sqliteRepository);
+const { runSqlite, sqliteScalar, sqliteJson, runSqliteTransaction } = createSqliteCli({ sqliteFile, dataDir });
+const { sendJson, sendHtml, readBody, readJsonBody } = createHttpUtils({ corsOrigin, jsonBodyMaxBytes });
+const serveStatic = createStaticAssetServer({ root, mimeTypes: defaultMimeTypes });
+const sessionAuth = createSessionAuth({
+  appPassword,
+  readOnlyPassword,
+  cookieSecret,
+  cookieName,
+  loginAttemptsFile,
+  loginFailureLimit,
+  loginLockMs,
+  loginFailureDelayMinMs,
+  loginFailureDelaySpreadMs,
+});
+const {
+  createSessionValue,
+  getSessionRole,
+  isValidSession,
+  getLoginLock,
+  recordLoginSuccess,
+  recordLoginFailure,
+  loginFailureDelay,
+  loginPage,
+} = sessionAuth;
+const backupService = createBackupService({
+  backupsDir,
+  sqliteFile,
+  libraryDir,
+  libraryFilesDir,
+  assertDiskSpace,
+  runSqlite,
+  runSqliteFile,
+  sqlitePath,
+  sqlString,
+  sqliteScalar,
+  sqliteJson,
+  nowISO,
+  resolveBackupPath,
+  redactSecretText,
+  ensureSqliteStore: () => ensureSqliteStore(),
+  resetSqliteRuntime: () => {
+    sqliteReady = false;
+    dictionaryIndexChecked = false;
+  },
+});
+const {
+  createBackupFile,
+  restoreBackupFile,
+  ensureDailyBackup,
+  ensureWeeklyBackup,
+  getBackupStatus,
+  nextWeeklyBackupAt,
+  nextDailyBackupAt,
+} = backupService;
+const breakGuardService = createBreakGuardService({
+  token: breakGuardToken,
+  safeSecretEqual,
+  nowISO,
+  todayISO,
+  runSqlite,
+  sqliteJson,
+  sqlString,
+  sqlValue,
+  tableChanged,
+  queueProactiveNotification,
+});
+const {
+  requireToken: requireBreakGuardToken,
+  recordEvent: recordBreakGuardEvent,
+  getSummary: getBreakGuardSummary,
+  queueNotification: queueBreakGuardNotification,
+} = breakGuardService;
 
 if (!appPassword) {
   throw new Error('APP_PASSWORD is required');
@@ -98,37 +212,28 @@ try {
   // Older Node runtimes can ignore this; curl fallback below also forces IPv4.
 }
 
-const mimeTypes = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.pdf': 'application/pdf',
-  '.epub': 'application/epub+zip',
-  '.txt': 'text/plain; charset=utf-8',
-  '.md': 'text/markdown; charset=utf-8',
-};
-
 const projectColors = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
 const subjectColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626'];
 const dictionaryCache = new Map();
 let sqliteReady = false;
 let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
+let reportTimer = null;
 let nightlyErrorThemeTimerStarted = false;
+let nightlyErrorThemeTimer = null;
 let dailyBriefTimerStarted = false;
 let maintenanceTimerStarted = false;
+let maintenanceTimer = null;
 let dailyBriefTimer = null;
 let taskReminderTimerStarted = false;
 let taskReminderTimer = null;
+let taskReminderInitialTimer = null;
 let notificationQueueTimerStarted = false;
 let notificationQueueTimer = null;
-let backupVerificationCache = null;
+let startupReady = false;
+let startupError = '';
+let workerKeepAliveTimer = null;
+let workerHeartbeatTimer = null;
 let errorThemeBatchJob = null;
 let shuttingDown = false;
 let nextNightlyErrorThemeAt = null;
@@ -138,79 +243,6 @@ let nextTaskReminderScanAt = null;
 let dataRevision = 0;
 let dashboardPayloadCache = null;
 let statisticsSummaryCache = null;
-let loginAttempts = loadLoginAttempts();
-
-function nowISO() {
-  return new Date().toISOString();
-}
-
-function localDateISO(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function dateISOInTimeZone(date = new Date(), timeZone = 'Asia/Shanghai') {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function shanghaiTodayISO() {
-  return dateISOInTimeZone(new Date(), 'Asia/Shanghai');
-}
-
-function todayISO() {
-  return localDateISO();
-}
-
-function addYearISO() {
-  const date = new Date();
-  date.setFullYear(date.getFullYear() + 1);
-  return localDateISO(date);
-}
-
-function parseDateString(value) {
-  const [year, month, day] = value.split('-').map(Number);
-  return new Date(Date.UTC(year, month - 1, day));
-}
-
-function formatDateString(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function addDaysISO(value, days) {
-  const date = parseDateString(value);
-  date.setUTCDate(date.getUTCDate() + days);
-  return formatDateString(date);
-}
-
-function startOfWeekISO(value) {
-  const date = parseDateString(value);
-  const day = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() - day + 1);
-  return formatDateString(date);
-}
-
-function endOfWeekISO(value) {
-  return addDaysISO(startOfWeekISO(value), 6);
-}
-
-function startOfMonthISO(value) {
-  return `${value.slice(0, 7)}-01`;
-}
-
-function endOfMonthISO(value) {
-  const [year, month] = value.split('-').map(Number);
-  return formatDateString(new Date(Date.UTC(year, month, 0)));
-}
-
 function normalizeTaskDueTime(value) {
   const text = String(value || '').trim();
   const match = /^(\d{1,2}):(\d{2})$/.exec(text);
@@ -245,27 +277,6 @@ function normalizeTaskRow(item = {}) {
     reminderSentOffsets: normalizeReminderSentOffsets(item.reminderSentOffsets),
     reminderLastSentAt: item.reminderLastSentAt || undefined,
   };
-}
-
-function previousWeekPeriod(today = todayISO()) {
-  const currentWeekStart = startOfWeekISO(today);
-  const end = addDaysISO(currentWeekStart, -1);
-  return { periodStart: startOfWeekISO(end), periodEnd: end };
-}
-
-function previousMonthPeriod(today = todayISO()) {
-  const [year, month] = today.split('-').map(Number);
-  const previousMonthEnd = formatDateString(new Date(Date.UTC(year, month - 1, 0)));
-  return { periodStart: startOfMonthISO(previousMonthEnd), periodEnd: previousMonthEnd };
-}
-
-function currentPeriod(kind, today = todayISO()) {
-  if (kind === 'monthly') return { periodStart: startOfMonthISO(today), periodEnd: endOfMonthISO(today) };
-  return { periodStart: startOfWeekISO(today), periodEnd: endOfWeekISO(today) };
-}
-
-function previousPeriod(kind, today = todayISO()) {
-  return kind === 'monthly' ? previousMonthPeriod(today) : previousWeekPeriod(today);
 }
 
 function baseState() {
@@ -328,56 +339,6 @@ function normalizeState(state = {}) {
   };
 }
 
-function sqlitePath(value) {
-  return `'${String(value).replace(/\\/g, '/').replace(/'/g, "''")}'`;
-}
-
-function sqlString(value) {
-  return `'${String(value ?? '').replace(/'/g, "''")}'`;
-}
-
-function sqlValue(value) {
-  if (value === undefined || value === null) return 'NULL';
-  if (typeof value === 'boolean') return value ? '1' : '0';
-  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'NULL';
-  return sqlString(value);
-}
-
-function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
-  mkdirSync(dataDir, { recursive: true });
-  const result = spawnSync(sqliteCommand, [databaseFile], {
-    input: script,
-    encoding: 'utf8',
-    maxBuffer,
-    shell: sqliteUseShell,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`sqlite3 failed: ${result.stderr || result.stdout}`);
-  }
-  return result.stdout;
-}
-
-function runSqlite(script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
-  return runSqliteFile(sqliteFile, script, { maxBuffer });
-}
-
-function sqliteScalar(sql) {
-  return runSqlite(`.headers off\n.mode list\n${sql}\n`).trim();
-}
-
-function sqliteJson(sql) {
-  const output = runSqlite(`.mode json\n${sql}\n`).trim();
-  return output ? JSON.parse(output) : [];
-}
-
-function runSqliteTransaction(statements = []) {
-  const body = Array.isArray(statements) ? statements.join('\n') : String(statements || '');
-  return runSqlite(`BEGIN IMMEDIATE;\n${body}\nCOMMIT;`);
-}
-
 function getAppConfigSnapshot() {
   return {
     port,
@@ -387,10 +348,11 @@ function getAppConfigSnapshot() {
     libraryDir,
     requestLogSlowMs,
     jsonBodyMaxBytes,
-    libraryUploadMaxBytes,
     minFreeDiskBytes,
     corsOrigin,
     secureCookie,
+    serviceRole,
+    backgroundJobsEnabled,
     embeddingCacheDir,
     smallEmbeddingModelName,
     largeEmbeddingModelName,
@@ -399,16 +361,66 @@ function getAppConfigSnapshot() {
 
 function validateStartupConfig() {
   const problems = [];
-  if (readOnlyPassword === '123') problems.push('READONLY_PASSWORD is using the unsafe default value');
+  const fatalProblems = [];
+  if (process.env.NODE_ENV === 'production' && !appPassword) fatalProblems.push('APP_PASSWORD is required in production');
+  if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_SECRET) fatalProblems.push('COOKIE_SECRET is required in production');
   if (!cookieSecret || cookieSecret.length < 32) problems.push('COOKIE_SECRET should be at least 32 characters');
   if (!Number.isFinite(port) || port <= 0 || port > 65535) problems.push('PORT must be a valid TCP port');
   if (!Number.isFinite(jsonBodyMaxBytes) || jsonBodyMaxBytes < 1024) problems.push('JSON_BODY_MAX_BYTES is too small');
-  if (!Number.isFinite(libraryUploadMaxBytes) || libraryUploadMaxBytes < jsonBodyMaxBytes) problems.push('LIBRARY_UPLOAD_MAX_BYTES should be >= JSON_BODY_MAX_BYTES');
   if (!Number.isFinite(minFreeDiskBytes) || minFreeDiskBytes < 0) problems.push('MIN_FREE_DISK_BYTES must be non-negative');
+  if (corsOrigin === '*') problems.push('CORS_ORIGIN should not be wildcard in production');
+  if (serviceRole === 'web' && !secureCookie && process.platform !== 'win32') problems.push('COOKIE_SECURE should be enabled for the HTTPS web service');
   if (problems.length) {
     console.warn(JSON.stringify({ level: 'warn', event: 'startup_config_warnings', problems }));
   }
-  return problems;
+  if (fatalProblems.length) {
+    throw new Error(`Invalid production configuration: ${fatalProblems.join('; ')}`);
+  }
+  return { problems, fatalProblems };
+}
+
+function setRuntimeMetadata(key, value) {
+  runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+VALUES (${sqlString(key)}, ${sqlString(String(value ?? ''))}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+}
+
+function runtimeScheduleValue(key, fallback = null) {
+  if (fallback) return fallback;
+  try {
+    return sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(key)} LIMIT 1;`) || null;
+  } catch {
+    return null;
+  }
+}
+
+function workerHeartbeatStatus() {
+  const heartbeatAt = runtimeScheduleValue('worker_heartbeat_at');
+  const heartbeatMs = heartbeatAt ? Date.parse(heartbeatAt) : NaN;
+  const ageSeconds = Number.isFinite(heartbeatMs) ? Math.max(0, Math.round((Date.now() - heartbeatMs) / 1000)) : null;
+  return {
+    heartbeatAt,
+    ageSeconds,
+    pid: Number(runtimeScheduleValue('worker_pid') || 0) || null,
+    healthy: ageSeconds !== null && ageSeconds <= 120,
+  };
+}
+
+function startWorkerHeartbeat() {
+  if (!backgroundJobsEnabled || workerHeartbeatTimer) return;
+  const writeHeartbeat = () => {
+    try {
+      runSqlite(`INSERT INTO app_metadata (key, value, updated_at) VALUES
+('worker_heartbeat_at', ${sqlString(nowISO())}, datetime('now')),
+('worker_pid', ${sqlString(String(process.pid))}, datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    } catch (error) {
+      logStructured('warn', 'worker_heartbeat_failed', { error: redactSecretText(error.message || String(error)) });
+    }
+  };
+  writeHeartbeat();
+  workerHeartbeatTimer = setInterval(writeHeartbeat, 30 * 1000);
+  workerHeartbeatTimer.unref?.();
 }
 
 function assertDiskSpace(minBytes = minFreeDiskBytes) {
@@ -614,6 +626,18 @@ CREATE TABLE IF NOT EXISTS problem_inbox_items (
   updated_at TEXT NOT NULL,
   resolved_at TEXT
 );
+CREATE TABLE IF NOT EXISTS break_guard_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'desktop',
+  note TEXT NOT NULL DEFAULT '',
+  started_at TEXT,
+  ended_at TEXT,
+  overdue_seconds INTEGER NOT NULL DEFAULT 0,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS visit_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT NOT NULL,
@@ -650,6 +674,18 @@ CREATE TABLE IF NOT EXISTS api_request_log (
   duration_ms INTEGER NOT NULL,
   role TEXT NOT NULL DEFAULT '',
   error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_error_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL DEFAULT 'client',
+  path TEXT NOT NULL DEFAULT '/',
+  message TEXT NOT NULL DEFAULT '',
+  stack TEXT NOT NULL DEFAULT '',
+  component_stack TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
+  client_hash TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS precomputed_cache (
@@ -806,6 +842,8 @@ CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_created ON confusing_wor
 CREATE INDEX IF NOT EXISTS idx_confusing_words_versions_hash ON confusing_words_backup_versions(payload_hash);
 CREATE INDEX IF NOT EXISTS idx_learning_reports_period ON learning_reports(kind, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_daily_briefs_date ON daily_briefs(date);
+CREATE INDEX IF NOT EXISTS idx_break_guard_events_created ON break_guard_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_break_guard_events_type_created ON break_guard_events(event_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_date_status ON problem_inbox_items(date, status);
 CREATE INDEX IF NOT EXISTS idx_problem_inbox_status_updated ON problem_inbox_items(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_visit_events_created_at ON visit_events(created_at);
@@ -814,6 +852,8 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_name_started ON task_runs(task_name, st
 CREATE INDEX IF NOT EXISTS idx_task_runs_status_started ON task_runs(status, started_at);
 CREATE INDEX IF NOT EXISTS idx_audit_events_action_created ON audit_events(action, created_at);
 CREATE INDEX IF NOT EXISTS idx_api_request_log_path_created ON api_request_log(path, created_at);
+CREATE INDEX IF NOT EXISTS idx_client_error_log_created ON client_error_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_client_error_log_path_created ON client_error_log(path, created_at);
 CREATE INDEX IF NOT EXISTS idx_precomputed_cache_computed_at ON precomputed_cache(computed_at);
 CREATE INDEX IF NOT EXISTS idx_library_books_updated ON library_books(is_archived, updated_at);
 CREATE INDEX IF NOT EXISTS idx_library_books_category ON library_books(category, updated_at);
@@ -1871,12 +1911,13 @@ function nextChinaThreeAMDelay() {
   if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
   const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
   nextNightlyErrorThemeAt = new Date(targetUtcMs).toISOString();
+  setRuntimeMetadata('worker_next_error_theme_at', nextNightlyErrorThemeAt);
   return Math.max(60 * 1000, targetUtcMs - now.getTime());
 }
 
 function scheduleNightlyErrorThemeBatch() {
   const delay = nextChinaThreeAMDelay();
-  setTimeout(() => {
+  nightlyErrorThemeTimer = setTimeout(() => {
     startErrorThemeBatchJob({ periodStart: '1900-01-01', periodEnd: todayISO(), mode: 'rules', trigger: 'nightly' });
     scheduleNightlyErrorThemeBatch();
   }, delay).unref();
@@ -1898,6 +1939,19 @@ function defaultDailyBriefSettings() {
       count: 1,
       offsetsMinutes: [60],
     },
+    customWeeklyPush: {
+      enabled: true,
+      days: {
+        monday: '',
+        tuesday: '',
+        wednesday: '',
+        thursday: '',
+        friday: '',
+        saturday: '',
+        sunday: '',
+      },
+    },
+    englishWritingPlan: defaultEnglishWritingPlanSettings(),
     email: {
       enabled: false,
       host: '',
@@ -1909,6 +1963,137 @@ function defaultDailyBriefSettings() {
       to: '',
       subjectPrefix: 'Exam Planner 今日简报',
     },
+  };
+}
+
+const weekdayLabels = {
+  monday: '周一',
+  tuesday: '周二',
+  wednesday: '周三',
+  thursday: '周四',
+  friday: '周五',
+  saturday: '周六',
+  sunday: '周日',
+};
+
+const weekdayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function defaultEnglishWritingPlanSettings() {
+  return {
+    enabled: true,
+    showOnDashboard: true,
+    includeInBrief: true,
+    dailyMinutes: '20-25 分钟',
+    currentStageId: 'foundation',
+    stages: [
+      { id: 'foundation', name: '基础修复期', weeks: '第 1-4 周', focus: '把中文想法变成正确英文；修拼写、语法、搭配' },
+      { id: 'past-paper', name: '真题强化期', weeks: '第 5-10 周', focus: '开始稳定写真题小作文和大作文，形成解题流程' },
+      { id: 'sprint', name: '高分冲刺期', weeks: '第 11-19 周', focus: '限时写作、整卷训练、减少低级错误' },
+      { id: 'stabilize', name: '考前稳定期', weeks: '第 20-24 周', focus: '固化自己的表达库，减少分数波动' },
+    ],
+    weeklyTasks: {
+      monday: '6 句应用文功能句：邀请、建议、感谢、投诉等',
+      tuesday: '真题或模拟题小作文：只写开头 + 主体段',
+      wednesday: '修改周二作文，整理错误表达',
+      thursday: '大作文：英文提纲 + 图画描述段',
+      friday: '大作文：写一个主体分析段',
+      saturday: '完整小作文一篇，限时 15 分钟',
+      sunday: '闭卷重写本周小作文 + 复盘错句',
+    },
+  };
+}
+
+function normalizeEnglishWritingPlanSettings(input = {}, previous = null) {
+  const defaults = defaultEnglishWritingPlanSettings();
+  const previousSettings = previous?.englishWritingPlan || {};
+  const rawStages = Array.isArray(input.stages)
+    ? input.stages
+    : Array.isArray(previousSettings.stages)
+      ? previousSettings.stages
+      : defaults.stages;
+  const stages = rawStages.slice(0, 8).map((stage, index) => {
+    const fallback = defaults.stages[index] || defaults.stages[0];
+    const id = String(stage?.id || fallback.id || `stage-${index + 1}`)
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 40) || `stage-${index + 1}`;
+    return {
+      id,
+      name: String(stage?.name || fallback.name || `阶段 ${index + 1}`).trim().slice(0, 80),
+      weeks: String(stage?.weeks || fallback.weeks || '').trim().slice(0, 80),
+      focus: String(stage?.focus || fallback.focus || '').trim().slice(0, 240),
+    };
+  });
+  const inputTasks = input.weeklyTasks || {};
+  const previousTasks = previousSettings.weeklyTasks || {};
+  const weeklyTasks = {};
+  for (const key of Object.keys(weekdayLabels)) {
+    weeklyTasks[key] = String(inputTasks[key] ?? previousTasks[key] ?? defaults.weeklyTasks[key] ?? '').slice(0, 600);
+  }
+  const requestedStageId = String(input.currentStageId ?? previousSettings.currentStageId ?? defaults.currentStageId);
+  const currentStageId = stages.some((stage) => stage.id === requestedStageId) ? requestedStageId : stages[0]?.id || defaults.currentStageId;
+  return {
+    enabled: Boolean(input.enabled ?? previousSettings.enabled ?? defaults.enabled),
+    showOnDashboard: Boolean(input.showOnDashboard ?? previousSettings.showOnDashboard ?? defaults.showOnDashboard),
+    includeInBrief: Boolean(input.includeInBrief ?? previousSettings.includeInBrief ?? defaults.includeInBrief),
+    dailyMinutes: String(input.dailyMinutes ?? previousSettings.dailyMinutes ?? defaults.dailyMinutes).trim().slice(0, 40) || defaults.dailyMinutes,
+    currentStageId,
+    stages,
+    weeklyTasks,
+  };
+}
+
+function englishWritingPlanForDate(date, settings = getDailyBriefSettings({ includeSecret: true })) {
+  const dayIndex = new Date(`${String(date || todayISO()).slice(0, 10)}T12:00:00+08:00`).getDay();
+  const weekday = weekdayKeys[dayIndex] || 'monday';
+  const config = settings.englishWritingPlan || defaultEnglishWritingPlanSettings();
+  const currentStage = (config.stages || []).find((stage) => stage.id === config.currentStageId) || (config.stages || [])[0] || null;
+  const todayTask = String(config.weeklyTasks?.[weekday] || '').trim();
+  return {
+    enabled: Boolean(config.enabled),
+    showOnDashboard: Boolean(config.showOnDashboard),
+    includeInBrief: Boolean(config.includeInBrief),
+    date: String(date || todayISO()).slice(0, 10),
+    weekday,
+    weekdayLabel: weekdayLabels[weekday] || weekday,
+    dailyMinutes: config.dailyMinutes || '20-25 分钟',
+    currentStage,
+    stages: config.stages || [],
+    weeklyTasks: config.weeklyTasks || {},
+    todayTask: Boolean(config.enabled) ? todayTask : '',
+    hasTodayTask: Boolean(config.enabled && todayTask),
+  };
+}
+
+function normalizeCustomWeeklyPushSettings(input = {}, previous = null) {
+  const defaults = defaultDailyBriefSettings().customWeeklyPush;
+  const previousSettings = previous?.customWeeklyPush || {};
+  const inputDays = input.days || {};
+  const previousDays = previousSettings.days || {};
+  const days = {};
+  for (const key of Object.keys(weekdayLabels)) {
+    days[key] = String(inputDays[key] ?? previousDays[key] ?? defaults.days[key] ?? '').slice(0, 1200);
+  }
+  return {
+    enabled: Boolean(input.enabled ?? previousSettings.enabled ?? defaults.enabled),
+    days,
+  };
+}
+
+function customWeeklyPushForDate(date, settings = getDailyBriefSettings({ includeSecret: true })) {
+  const dayIndex = new Date(`${String(date || todayISO()).slice(0, 10)}T12:00:00+08:00`).getDay();
+  const weekday = weekdayKeys[dayIndex] || 'monday';
+  const config = settings.customWeeklyPush || defaultDailyBriefSettings().customWeeklyPush;
+  const content = String(config.days?.[weekday] || '').trim();
+  return {
+    enabled: Boolean(config.enabled),
+    date: String(date || todayISO()).slice(0, 10),
+    weekday,
+    weekdayLabel: weekdayLabels[weekday] || weekday,
+    content: Boolean(config.enabled) ? content : '',
+    hasContent: Boolean(config.enabled && content),
   };
 }
 
@@ -1952,6 +2137,8 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
       enabled: Boolean(wechatInput.enabled ?? previousWechat.enabled ?? defaults.wechat.enabled),
     },
     taskReminders: normalizeTaskReminderSettings(input.taskReminders || {}, previous),
+    customWeeklyPush: normalizeCustomWeeklyPushSettings(input.customWeeklyPush || {}, previous),
+    englishWritingPlan: normalizeEnglishWritingPlanSettings(input.englishWritingPlan || {}, previous),
     email: {
       enabled: Boolean(emailInput.enabled),
       host: String(emailInput.host || previousEmail.host || '').trim(),
@@ -1966,6 +2153,36 @@ function normalizeDailyBriefSettings(input = {}, previous = null) {
   };
 }
 
+function encryptSettingSecret(value = '') {
+  if (!value) return '';
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', settingsEncryptionKey, iv);
+  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), encrypted.toString('base64url')].join('.');
+}
+
+function decryptSettingSecret(value = '') {
+  if (!String(value).startsWith('v1.')) return '';
+  try {
+    const [, iv, tag, encrypted] = String(value).split('.');
+    const decipher = createDecipheriv('aes-256-gcm', settingsEncryptionKey, Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(encrypted, 'base64url')), decipher.final()]).toString('utf8');
+  } catch (error) {
+    logStructured('warn', 'settings_secret_decrypt_failed', { error: redactSecretText(error.message || String(error)) });
+    return '';
+  }
+}
+
+function storedDailyBriefSettings(settings) {
+  const publicEmail = { ...settings.email };
+  delete publicEmail.password;
+  return {
+    ...settings,
+    email: { ...publicEmail, passwordEncrypted: encryptSettingSecret(settings.email.password || '') },
+  };
+}
+
 function publicDailyBriefSettings(settings) {
   return {
     ...settings,
@@ -1974,7 +2191,7 @@ function publicDailyBriefSettings(settings) {
       password: '',
       hasPassword: Boolean(settings.email.password),
     },
-    nextDailyBriefAt,
+    nextDailyBriefAt: runtimeScheduleValue('worker_next_daily_brief_at', nextDailyBriefAt),
   };
 }
 
@@ -1983,10 +2200,16 @@ function getDailyBriefSettings({ includeSecret = false } = {}) {
   try {
     const raw = sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(dailyBriefSettingsKey)} LIMIT 1;`);
     parsed = raw ? JSON.parse(raw) : {};
+    if (parsed.email?.passwordEncrypted && !parsed.email.password) {
+      parsed.email.password = decryptSettingSecret(parsed.email.passwordEncrypted);
+    }
   } catch {
     parsed = {};
   }
   const settings = normalizeDailyBriefSettings(parsed);
+  if (parsed.email?.password && !parsed.email.passwordEncrypted) {
+    runSqlite(`UPDATE app_metadata SET value = ${sqlString(JSON.stringify(storedDailyBriefSettings(settings)))}, updated_at = datetime('now') WHERE key = ${sqlString(dailyBriefSettingsKey)};`);
+  }
   return includeSecret ? settings : publicDailyBriefSettings(settings);
 }
 
@@ -1994,7 +2217,7 @@ function saveDailyBriefSettings(input = {}) {
   const previous = getDailyBriefSettings({ includeSecret: true });
   const settings = normalizeDailyBriefSettings(input, previous);
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES (${sqlString(dailyBriefSettingsKey)}, ${sqlString(JSON.stringify(settings))}, datetime('now'))
+VALUES (${sqlString(dailyBriefSettingsKey)}, ${sqlString(JSON.stringify(storedDailyBriefSettings(settings)))}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   scheduleDailyBrief();
   return publicDailyBriefSettings(settings);
@@ -3305,6 +3528,8 @@ async function generateDailyBrief({ date = todayISO(), trigger = 'manual', sendE
     title: dailyBriefTitle(date),
     generatedAt,
     trigger,
+    customWeeklyPush: customWeeklyPushForDate(date, settings),
+    englishWritingPlan: englishWritingPlanForDate(date, settings),
     weather,
     markets,
     indexPurchaseAssessment,
@@ -3399,6 +3624,7 @@ function nextChinaWallClockDelay(timeText = '07:00') {
   if (chinaNow >= targetChina) targetChina.setUTCDate(targetChina.getUTCDate() + 1);
   const targetUtcMs = targetChina.getTime() - 8 * 60 * 60 * 1000;
   nextDailyBriefAt = new Date(targetUtcMs).toISOString();
+  setRuntimeMetadata('worker_next_daily_brief_at', nextDailyBriefAt);
   return Math.max(60 * 1000, targetUtcMs - now.getTime());
 }
 
@@ -3462,6 +3688,8 @@ function dailyBriefHtml(payload) {
   const weather = payload.weather || {};
   const markets = payload.markets || [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const customWeeklyPush = payload.customWeeklyPush || {};
+  const englishWritingPlan = payload.englishWritingPlan || {};
   const assessmentRows = (indexPurchaseAssessment.items || []).map((item) => item.ok
     ? `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.signal)}</td><td>${escapeHtml(item.pe)}（5 年 ${escapeHtml(item.pePercentile5)}% / 10 年 ${escapeHtml(item.pePercentile10)}%）</td><td>${escapeHtml(item.sma50Margin)}% / ${escapeHtml(item.sma200Margin)}%</td><td>${escapeHtml(item.intensity)}</td></tr>`
     : `<tr><td>${escapeHtml(item.name)}</td><td colspan="4">评估失败：${escapeHtml(item.error || '')}</td></tr>`).join('');
@@ -3477,6 +3705,8 @@ function dailyBriefHtml(payload) {
   <p>${escapeHtml(weather.cityName || '')}：${weather.ok ? `${escapeHtml(weather.condition)}，${escapeHtml(weather.temperature)}℃，${escapeHtml(weather.minTemperature)}-${escapeHtml(weather.maxTemperature)}℃，降水概率 ${escapeHtml(weather.precipitationProbability)}%` : `获取失败：${escapeHtml(weather.error || '')}`}</p>
   <h2>学习提醒</h2>
   <p>昨日学习：${Math.round(Number(learning.yesterdayMinutes || 0) / 60 * 10) / 10} 小时；近 7 天累计：${Math.round(Number(learning.last7Minutes || 0) / 60 * 10) / 10} 小时。</p>
+  ${englishWritingPlan.enabled && englishWritingPlan.includeInBrief ? `<h2>英语写作计划</h2><p><strong>当前阶段：</strong>${escapeHtml(englishWritingPlan.currentStage?.name || '未设置')} ${englishWritingPlan.currentStage?.weeks ? `（${escapeHtml(englishWritingPlan.currentStage.weeks)}）` : ''}</p><p><strong>阶段重点：</strong>${escapeHtml(englishWritingPlan.currentStage?.focus || '')}</p><p><strong>${escapeHtml(englishWritingPlan.weekdayLabel || '今日')}任务：</strong>${escapeHtml(englishWritingPlan.todayTask || '今天未设置固定写作任务')}；建议用时 ${escapeHtml(englishWritingPlan.dailyMinutes || '20-25 分钟')}。</p>` : ''}
+  ${customWeeklyPush.hasContent ? `<h2>${escapeHtml(customWeeklyPush.weekdayLabel || '今日')}自定义推送</h2><p style="white-space:pre-wrap">${escapeHtml(customWeeklyPush.content)}</p>` : ''}
   <h2>今日学习督促</h2>
   ${studyPush}
   ${learning.yesterdayReview ? `<p><strong>昨日问题：</strong>${escapeHtml(learning.yesterdayReview.problems || '未填写')}</p>` : '<p>昨日尚未填写复盘。</p>'}
@@ -3903,207 +4133,6 @@ LIMIT 24;`);
   return rows.map((row) => ({ id: row.id, ...JSON.parse(row.payloadJson), generatedAt: row.generatedAt, updatedAt: row.updatedAt }));
 }
 
-function createBackupFile(kind = 'manual', note = '') {
-  mkdirSync(backupsDir, { recursive: true });
-  assertDiskSpace();
-  const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
-  const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
-  let libraryArchivePath = null;
-  runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
-  if (existsSync(filePath)) unlinkSync(filePath);
-  runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
-  const integrity = runSqliteFile(filePath, 'PRAGMA integrity_check;').trim();
-  if (integrity !== 'ok') {
-    try {
-      unlinkSync(filePath);
-    } catch {
-      // Ignore cleanup failure; the integrity error below is the useful signal.
-    }
-    throw new Error(`Backup integrity check failed: ${integrity}`);
-  }
-  if (existsSync(libraryFilesDir)) {
-    libraryArchivePath = join(backupsDir, `exam-planner-${kind}-${timestamp}-library.tar.gz`);
-    const archiveResult = spawnSync('tar', ['-czf', libraryArchivePath, '-C', libraryDir, 'files'], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
-    if (archiveResult.status !== 0) {
-      libraryArchivePath = null;
-    }
-  }
-  runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
-VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
-  backupVerificationCache = { ok: true, checkedAt: nowISO(), fileName: filePath.split(/[\\/]/).pop() || '', integrity: 'ok' };
-  if (kind === 'weekly') {
-    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
-  }
-  if (kind === 'daily') {
-    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('last_daily_backup_at', ${sqlString(nowISO())}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
-  }
-  return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
-}
-
-function backupFileToRecord(fileName) {
-  const filePath = join(backupsDir, fileName);
-  const stats = statSync(filePath);
-  const match = fileName.match(/^exam-planner-([a-z-]+)-(.+)\.sqlite$/);
-  return {
-    fileName,
-    kind: match?.[1] || 'unknown',
-    createdAt: stats.mtime.toISOString(),
-    sizeBytes: stats.size,
-  };
-}
-
-function listBackupFiles() {
-  if (!existsSync(backupsDir)) return [];
-  return readdirSync(backupsDir)
-    .filter((name) => /^exam-planner-[a-z-]+-.+\.sqlite$/.test(name))
-    .map(backupFileToRecord)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
-
-function restoreBackupFile(fileName) {
-  const sourceFile = resolveBackupPath(backupsDir, fileName);
-  if (!existsSync(sourceFile)) {
-    throw new Error('Backup file not found');
-  }
-  const integrity = runSqliteFile(sourceFile, 'PRAGMA integrity_check;').trim();
-  if (integrity !== 'ok') {
-    throw new Error(`Backup integrity check failed: ${integrity}`);
-  }
-
-  const safetyBackup = createBackupFile('pre-restore', `automatic safety backup before restoring ${fileName}`);
-  runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
-  copyFileSync(sourceFile, sqliteFile);
-  const libraryArchivePath = join(backupsDir, fileName.replace(/\.sqlite$/, '-library.tar.gz'));
-  if (existsSync(libraryArchivePath) && libraryArchivePath.startsWith(backupsDir)) {
-    if (existsSync(libraryFilesDir)) rmSync(libraryFilesDir, { recursive: true, force: true });
-    mkdirSync(libraryDir, { recursive: true });
-    const restoreArchive = spawnSync('tar', ['-xzf', libraryArchivePath, '-C', libraryDir], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
-    if (restoreArchive.status !== 0) {
-      throw new Error(`Library archive restore failed: ${restoreArchive.stderr || restoreArchive.stdout}`);
-    }
-  }
-  for (const suffix of ['-wal', '-shm']) {
-    const sidecar = `${sqliteFile}${suffix}`;
-    if (existsSync(sidecar)) unlinkSync(sidecar);
-  }
-  sqliteReady = false;
-  dictionaryIndexChecked = false;
-  ensureSqliteStore();
-  runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
-VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`restored from ${fileName}; safety backup ${safetyBackup.filePath}`)});`);
-  return { restoredFrom: fileName, safetyBackup };
-}
-
-function cleanupWeeklyBackups(keepCount = 12) {
-  if (!existsSync(backupsDir)) return;
-  const weeklyBackups = readdirSync(backupsDir)
-    .filter((name) => /^exam-planner-weekly-.*\.sqlite$/.test(name))
-    .sort()
-    .reverse();
-  for (const name of weeklyBackups.slice(keepCount)) {
-    try {
-      unlinkSync(join(backupsDir, name));
-    } catch {
-      // A stale backup failing to delete should not block the app.
-    }
-  }
-}
-
-function cleanupDailyBackups(keepCount = 14) {
-  if (!existsSync(backupsDir)) return;
-  const dailyBackups = readdirSync(backupsDir)
-    .filter((name) => /^exam-planner-daily-.*\.sqlite$/.test(name))
-    .sort()
-    .reverse();
-  for (const name of dailyBackups.slice(keepCount)) {
-    try {
-      unlinkSync(join(backupsDir, name));
-    } catch {
-      // A stale backup failing to delete should not block the app.
-    }
-  }
-}
-
-function ensureDailyBackup() {
-  const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
-  const oneDayMs = 24 * 60 * 60 * 1000;
-  if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneDayMs) {
-    createBackupFile('daily', 'automatic daily backup');
-    cleanupDailyBackups();
-  }
-}
-
-function ensureWeeklyBackup() {
-  const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
-  const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
-  if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneWeekMs) {
-    createBackupFile('weekly', 'automatic weekly backup');
-    cleanupWeeklyBackups();
-  }
-}
-
-function latestBackupVerification(backups = [], { force = false } = {}) {
-  const latest = backups.find((backup) => backup.kind === 'manual' || backup.kind === 'daily' || backup.kind === 'weekly') || backups[0];
-  if (!latest) return { ok: false, checkedAt: nowISO(), fileName: '', integrity: 'missing' };
-  const cacheFreshMs = 6 * 60 * 60 * 1000;
-  if (!force && backupVerificationCache?.fileName === latest.fileName && Date.now() - new Date(backupVerificationCache.checkedAt).getTime() < cacheFreshMs) {
-    return backupVerificationCache;
-  }
-  if (!force) return backupVerificationCache?.fileName === latest.fileName ? backupVerificationCache : { ok: null, checkedAt: '', fileName: latest.fileName, integrity: 'not_checked' };
-  try {
-    const integrity = runSqliteFile(join(backupsDir, latest.fileName), 'PRAGMA integrity_check;').trim();
-    backupVerificationCache = { ok: integrity === 'ok', checkedAt: nowISO(), fileName: latest.fileName, integrity };
-    return backupVerificationCache;
-  } catch (error) {
-    backupVerificationCache = { ok: false, checkedAt: nowISO(), fileName: latest.fileName, integrity: redactSecretText(error.message || String(error)) };
-    return backupVerificationCache;
-  }
-}
-
-function getBackupStatus({ verifyLatest = false } = {}) {
-  ensureSqliteStore();
-  const backups = listBackupFiles();
-  const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
-FROM backup_log
-ORDER BY datetime(created_at) DESC
-LIMIT 1;`);
-  const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
-  const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
-  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
-  const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
-  return {
-    storage: 'sqlite-tables',
-    sqliteFile,
-    sqliteSizeBytes: existsSync(sqliteFile) ? statSync(sqliteFile).size : 0,
-    backupCount: backups.length,
-    backups,
-    lastBackup: backupRows[0] || null,
-    latestVerification: latestBackupVerification(backups, { force: verifyLatest }),
-    lastDailyBackupAt: lastDailyBackupAt || null,
-    lastWeeklyBackupAt: lastWeeklyBackupAt || null,
-    dictionaryCount,
-    dictionaryIndexedAt: dictionaryIndexedAt || null,
-  };
-}
-
-function nextWeeklyBackupAt() {
-  const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
-  if (!lastWeeklyBackupAt) return nowISO();
-  const next = new Date(new Date(lastWeeklyBackupAt).getTime() + 7 * 24 * 60 * 60 * 1000);
-  return next.toISOString();
-}
-
-function nextDailyBackupAt() {
-  const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
-  if (!lastDailyBackupAt) return nowISO();
-  const next = new Date(new Date(lastDailyBackupAt).getTime() + 24 * 60 * 60 * 1000);
-  return next.toISOString();
-}
-
 function chinaWallClockDelay(timeText = '03:20') {
   const [hourText, minuteText] = String(timeText || '03:20').split(':');
   const hour = Math.max(0, Math.min(23, Number(hourText) || 3));
@@ -4129,6 +4158,9 @@ function runSqliteMaintenance(kind = 'manual') {
   const ranAt = nowISO();
   try {
     runSqlite(`DELETE FROM visit_events WHERE substr(created_at, 1, 10) < ${sqlString(addDaysISO(todayISO(), -180))};`);
+    runSqlite(`DELETE FROM api_request_log WHERE substr(created_at, 1, 10) < ${sqlString(addDaysISO(todayISO(), -90))};`);
+    runSqlite(`DELETE FROM client_error_log WHERE substr(created_at, 1, 10) < ${sqlString(addDaysISO(todayISO(), -120))};`);
+    runSqlite(`DELETE FROM task_runs WHERE substr(started_at, 1, 10) < ${sqlString(addDaysISO(todayISO(), -180))};`);
     runSqlite('PRAGMA optimize;\nANALYZE;');
     runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_sqlite_maintenance_at', ${sqlString(ranAt)}, datetime('now'))
@@ -4152,7 +4184,8 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 function scheduleDailyMaintenance() {
   const { delay, nextAt } = chinaWallClockDelay('03:20');
   nextMaintenanceAt = nextAt;
-  setTimeout(async () => {
+  setRuntimeMetadata('worker_next_maintenance_at', nextMaintenanceAt);
+  maintenanceTimer = setTimeout(async () => {
     try {
       await runExclusiveTask('nightly-maintenance', 'nightly', async () => {
         ensureDailyBackup();
@@ -4230,7 +4263,7 @@ function getHealthPayload() {
   }
   try {
     const backup = getBackupStatus();
-    const backupStatus = !backup.lastBackup || backup.latestVerification?.ok === false ? 'warn' : 'ok';
+    const backupStatus = !backup.lastBackup || backup.latestVerification?.ok !== true ? 'warn' : 'ok';
     addCheck('backup', backupStatus, {
       backupCount: backup.backupCount,
       lastBackupAt: backup.lastBackup?.createdAt ?? null,
@@ -4240,6 +4273,8 @@ function getHealthPayload() {
     addCheck('backup', 'error', { error: redactSecretText(error.message || String(error)) });
   }
   addCheck('tasks', activeTaskLocks.size ? 'warn' : 'ok', { active: Array.from(activeTaskLocks) });
+  const worker = workerHeartbeatStatus();
+  addCheck('background-worker', worker.healthy ? 'ok' : 'warn', { worker });
   const externalApis = externalApiClient.status();
   addCheck('external-api', externalApis.openCircuits.length ? 'warn' : 'ok', {
     openCircuitCount: externalApis.openCircuits.length,
@@ -4260,6 +4295,36 @@ function getHealthPayload() {
     externalApis,
     checks,
   };
+}
+
+function getReadinessPayload() {
+  const checks = [];
+  const add = (name, ok, detail = {}) => checks.push({ name, ok: Boolean(ok), ...detail });
+  add('startup', startupReady && !startupError, startupError ? { error: startupError } : {});
+  try {
+    const indexFile = join(root, 'index.html');
+    const indexOk = existsSync(indexFile) && statSync(indexFile).size > 128;
+    add('static-index', indexOk, { path: 'index.html' });
+    if (indexOk) {
+      const html = readFileSync(indexFile, 'utf8');
+      const assetPaths = Array.from(html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g), (match) => match[1]);
+      const missingAssets = assetPaths.filter((assetPath) => !existsSync(join(root, assetPath)));
+      add('static-assets', assetPaths.length > 0 && missingAssets.length === 0, {
+        referencedAssets: assetPaths.length,
+        missingAssets: missingAssets.map((assetPath) => assetPath.split('/').pop()),
+      });
+    }
+  } catch (error) {
+    add('static-index', false, { error: redactSecretText(error.message || String(error)) });
+  }
+  try {
+    const probe = sqliteReady ? Number(sqliteScalar(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('goals','short_term_tasks','daily_reviews');`)) : 0;
+    add('sqlite', probe === 3, { requiredTables: 3, availableTables: probe });
+  } catch (error) {
+    add('sqlite', false, { error: redactSecretText(error.message || String(error)) });
+  }
+  const ok = checks.every((check) => check.ok);
+  return { ok, status: ok ? 'ready' : 'not_ready', serviceRole, generatedAt: nowISO(), checks };
 }
 
 function getTaskCenterStatus() {
@@ -4304,15 +4369,15 @@ LIMIT 1;`)[0] || null;
     },
     dailyBrief: {
       latest: getLatestDailyBriefSummary(),
-      nextDailyBriefAt,
+      nextDailyBriefAt: runtimeScheduleValue('worker_next_daily_brief_at', nextDailyBriefAt),
       emailEnabled: Boolean(getDailyBriefSettings({ includeSecret: true }).email.enabled),
       taskReminders: getDailyBriefSettings({ includeSecret: true }).taskReminders,
-      nextTaskReminderScanAt,
+      nextTaskReminderScanAt: runtimeScheduleValue('worker_next_task_reminder_at', nextTaskReminderScanAt),
     },
     errorThemes: {
       job: currentErrorThemeJobSnapshot(),
       latestBatch,
-      nextNightlyBatchAt: nextNightlyErrorThemeAt,
+      nextNightlyBatchAt: runtimeScheduleValue('worker_next_error_theme_at', nextNightlyErrorThemeAt),
       correctionCount: Number(corrections.count || 0),
       lastCorrectionAt: corrections.lastUpdatedAt || null,
     },
@@ -4321,7 +4386,7 @@ LIMIT 1;`)[0] || null;
       lastAt: lastMaintenanceAt,
       lastKind: lastMaintenanceKind,
       lastError: lastMaintenanceError,
-      nextMaintenanceAt,
+      nextMaintenanceAt: runtimeScheduleValue('worker_next_maintenance_at', nextMaintenanceAt),
       lastPrecomputeAt,
       lastPrecomputeTrigger,
       lastPrecomputeError,
@@ -4337,6 +4402,7 @@ LIMIT 1;`)[0] || null;
       metrics: taskMetrics,
     },
     runtime: getRuntimeStatus(),
+    worker: workerHeartbeatStatus(),
     unifiedHealth: getHealthPayload().unified,
     externalApis: externalApiClient.status(),
   };
@@ -4348,6 +4414,7 @@ function runStructuredMigrations() {
     sqlite: sqliteRepository,
     migrationsDir,
     currentVersion,
+    shouldApply: (_fileName, version) => ![19, 20].includes(version),
     setVersion: (version) => runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('structured_schema_version', ${sqlString(String(version))}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`),
@@ -4471,25 +4538,36 @@ function collectOperationalNotifications() {
       });
     }
     const taskMetrics = taskRunsRepository.getMetrics();
-    if (taskMetrics.failed > 0) {
+    if (taskMetrics.failedLast24h > 0) {
       notifyEvent({
         eventKey: `ops:task-failed:${todayISO()}`,
         source: 'ops',
         severity: 'warning',
         title: '后台任务存在失败记录',
-        content: `任务中心累计失败 ${taskMetrics.failed} 次，建议查看后台任务控制台。`,
+        content: `过去 24 小时后台任务失败 ${taskMetrics.failedLast24h} 次，建议查看后台任务控制台。`,
         payload: { metrics: taskMetrics },
       });
     }
     const apiMetrics = opsRepository.getApiMetrics?.();
-    if (apiMetrics?.serverErrors > 0) {
+    if (apiMetrics?.serverErrorsLast24h > 0) {
       notifyEvent({
         eventKey: `ops:api-error:${todayISO()}`,
         source: 'ops',
         severity: 'warning',
         title: '接口错误需要关注',
-        content: `请求日志中存在 ${apiMetrics.serverErrors} 个服务端错误。`,
+        content: `过去 24 小时请求日志中存在 ${apiMetrics.serverErrorsLast24h} 个服务端错误。`,
         payload: { apiMetrics },
+      });
+    }
+    const clientErrorMetrics = opsRepository.getClientErrorMetrics?.();
+    if (clientErrorMetrics?.last24h > 0) {
+      notifyEvent({
+        eventKey: `ops:client-error:${todayISO()}`,
+        source: 'ops',
+        severity: 'warning',
+        title: '前端页面错误需要关注',
+        content: `过去 24 小时记录到 ${clientErrorMetrics.last24h} 个页面错误，请在运维中心查看摘要。`,
+        payload: { metrics: clientErrorMetrics },
       });
     }
   } catch (error) {
@@ -4497,12 +4575,33 @@ function collectOperationalNotifications() {
   }
 }
 
+function scheduleBackupChecks() {
+  if (!backgroundJobsEnabled) return;
+  if (reportTimer) clearTimeout(reportTimer);
+  const candidates = [nextDailyBackupAt(), nextWeeklyBackupAt()]
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  const nextAt = candidates.length ? Math.min(...candidates) : Date.now() + 60 * 60 * 1000;
+  const delay = Math.max(60 * 1000, nextAt - Date.now());
+  reportTimer = setTimeout(() => {
+    try {
+      ensureDailyBackup();
+      ensureWeeklyBackup();
+    } catch (error) {
+      logStructured('error', 'scheduled_backup_failed', { error: redactSecretText(error.message || String(error)) });
+    } finally {
+      scheduleBackupChecks();
+    }
+  }, delay);
+  reportTimer.unref?.();
+  reportTimerStarted = true;
+}
+
 function ensureSqliteStore() {
   if (sqliteReady) return;
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
-  mkdirSync(libraryFilesDir, { recursive: true });
-  const versionCheck = spawnSync(sqliteCommand, ['--version'], { encoding: 'utf8', shell: sqliteUseShell });
+  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
   if (versionCheck.error || versionCheck.status !== 0) {
     throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
   }
@@ -4637,22 +4736,17 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 
   runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
   sqliteReady = true;
+  if (!backgroundJobsEnabled) return;
+  startWorkerHeartbeat();
   ensureDailyBackup();
   ensureWeeklyBackup();
+  getBackupStatus({ verifyLatest: true });
   ensureDictionaryIndex();
   ensureStudySummariesReady();
-  if (!Number(sqliteScalar('SELECT COUNT(*) FROM learning_reports;') || 0)) {
-    ensureAutomaticReports();
-  }
-  if (!reportTimerStarted) {
-    setInterval(() => {
-      ensureDailyBackup();
-      ensureWeeklyBackup();
-    }, 6 * 60 * 60 * 1000).unref();
-    reportTimerStarted = true;
-  }
+  if (!Number(sqliteScalar('SELECT COUNT(*) FROM learning_reports;') || 0)) ensureAutomaticReports();
+  if (!reportTimerStarted) scheduleBackupChecks();
   if (!nightlyErrorThemeTimerStarted) {
     scheduleNightlyErrorThemeBatch();
     nightlyErrorThemeTimerStarted = true;
@@ -4799,20 +4893,6 @@ function seedCurrentConfusingWordsBackupVersionIfNeeded() {
   const versionCount = Number(sqliteScalar('SELECT COUNT(*) FROM confusing_words_backup_versions;') || 0);
   if (versionCount > 0) return;
   insertConfusingWordsBackupVersion(current, 'current-seed');
-}
-
-function sendJson(res, data, status = 200) {
-  const headers = {
-    'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,x-backup-password,x-clawbot-secret,authorization',
-  };
-  if (corsOrigin) {
-    headers['access-control-allow-origin'] = corsOrigin;
-    headers.vary = 'Origin';
-  }
-  res.writeHead(status, headers);
-  res.end(JSON.stringify(data));
 }
 
 function cleanChineseDefinition(value = '') {
@@ -5266,392 +5346,6 @@ WHERE date = ${sqlString(date)} AND status = 'open';`);
   return { ok: true, resolvedAt: timestamp };
 }
 
-function parseTags(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
-  return String(value || '')
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function safeFileName(value = 'book') {
-  return String(value)
-    .normalize('NFKC')
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 160) || 'book';
-}
-
-function libraryFileType(fileName = '') {
-  const ext = extname(fileName).toLowerCase();
-  if (ext === '.pdf') return 'pdf';
-  if (ext === '.epub') return 'epub';
-  if (ext === '.txt') return 'txt';
-  if (ext === '.md' || ext === '.markdown') return 'md';
-  return '';
-}
-
-function libraryMimeType(fileType) {
-  if (fileType === 'pdf') return 'application/pdf';
-  if (fileType === 'epub') return 'application/epub+zip';
-  if (fileType === 'md') return 'text/markdown; charset=utf-8';
-  return 'text/plain; charset=utf-8';
-}
-
-function libraryBookRowToObject(row) {
-  let tags = [];
-  try {
-    tags = JSON.parse(row.tagsJson || '[]');
-  } catch {
-    tags = [];
-  }
-  return {
-    id: Number(row.id),
-    title: row.title,
-    author: row.author || '',
-    category: row.category || '未分类',
-    tags,
-    originalFileName: row.originalFileName,
-    fileType: row.fileType,
-    mimeType: row.mimeType,
-    fileSize: Number(row.fileSize || 0),
-    textStatus: row.textStatus,
-    textError: row.textError || '',
-    pageCount: row.pageCount === null || row.pageCount === undefined ? null : Number(row.pageCount),
-    chapterCount: row.chapterCount === null || row.chapterCount === undefined ? null : Number(row.chapterCount),
-    progressPercent: Number(row.progressPercent || 0),
-    lastLocator: row.lastLocator || '',
-    lastOpenedAt: row.lastOpenedAt || null,
-    isFavorite: Boolean(row.isFavorite),
-    isArchived: Boolean(row.isArchived),
-    schemaVersion: Number(row.schemaVersion || entitySchemaVersion),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-function getLibraryBookById(id) {
-  const row = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
-file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
-page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
-last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
-created_at AS createdAt, updated_at AS updatedAt
-FROM library_books WHERE id = ${sqlValue(Number(id))} LIMIT 1;`)[0];
-  return row ? libraryBookRowToObject(row) : null;
-}
-
-function getLibraryStoragePath(id) {
-  const row = sqliteJson(`SELECT storage_path AS storagePath FROM library_books WHERE id = ${sqlValue(Number(id))} LIMIT 1;`)[0];
-  if (!row?.storagePath) return '';
-  const resolved = resolve(row.storagePath);
-  return resolved.startsWith(resolve(libraryFilesDir)) ? resolved : '';
-}
-
-function listLibraryBooks({ search = '', category = '', sort = 'recent', includeArchived = false } = {}, sessionRole = 'write') {
-  const clauses = includeArchived ? ['1=1'] : ['is_archived = 0'];
-  if (category) clauses.push(`category = ${sqlString(category)}`);
-  if (search) {
-    const like = `%${String(search).replace(/[%_]/g, '')}%`;
-    clauses.push(`(title LIKE ${sqlString(like)} OR author LIKE ${sqlString(like)} OR original_file_name LIKE ${sqlString(like)} OR tags_json LIKE ${sqlString(like)})`);
-  }
-  const orderBy = sort === 'title'
-    ? 'title COLLATE NOCASE ASC'
-    : sort === 'uploaded'
-      ? 'created_at DESC, id DESC'
-      : sort === 'progress'
-        ? 'progress_percent DESC, updated_at DESC'
-        : 'COALESCE(last_opened_at, updated_at) DESC, updated_at DESC';
-  const items = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
-file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
-page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
-last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
-created_at AS createdAt, updated_at AS updatedAt
-FROM library_books
-WHERE ${clauses.join(' AND ')}
-ORDER BY ${orderBy};`).map(libraryBookRowToObject);
-  const categories = sqliteJson(`SELECT category, COUNT(*) AS count FROM library_books WHERE is_archived = 0 GROUP BY category ORDER BY category;`)
-    .map((item) => ({ category: item.category || '未分类', count: Number(item.count || 0) }));
-  return { items, categories, readOnly: sessionRole === 'read' };
-}
-
-function getLibraryBookDetail(id, sessionRole = 'write') {
-  const book = getLibraryBookById(id);
-  if (!book) return null;
-  const notes = sqliteJson(`SELECT id, book_id AS bookId, locator, title, content, created_at AS createdAt, updated_at AS updatedAt
-FROM library_notes
-WHERE book_id = ${sqlValue(Number(id))}
-ORDER BY updated_at DESC, id DESC;`);
-  const bookmarks = sqliteJson(`SELECT id, book_id AS bookId, page_number AS pageNumber, title, note, created_at AS createdAt, updated_at AS updatedAt
-FROM library_bookmarks
-WHERE book_id = ${sqlValue(Number(id))}
-ORDER BY page_number ASC, updated_at DESC;`);
-  const chunkCount = Number(sqliteScalar(`SELECT COUNT(*) FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};`) || 0);
-  return { book, notes, bookmarks, chunkCount, readOnly: sessionRole === 'read' };
-}
-
-function stripHtml(value = '') {
-  return String(value)
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function splitTextChunks(text, chunkSize = 3000) {
-  const clean = String(text || '').replace(/\r\n/g, '\n').replace(/\n{4,}/g, '\n\n').trim();
-  if (!clean) return [];
-  const chunks = [];
-  for (let index = 0; index < clean.length && chunks.length < 3000; index += chunkSize) {
-    chunks.push(clean.slice(index, index + chunkSize));
-  }
-  return chunks;
-}
-
-function extractPdfText(filePath) {
-  let pageCount = null;
-  const infoResult = spawnSync('pdfinfo', [filePath], { encoding: 'utf8', timeout: 15000 });
-  const match = infoResult.stdout?.match(/^Pages:\s+(\d+)/m);
-  if (match) pageCount = Number(match[1]);
-  const textResult = spawnSync('pdftotext', ['-layout', filePath, '-'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 120000 });
-  if (textResult.status !== 0) {
-    throw new Error(textResult.stderr || 'pdftotext failed');
-  }
-  return { text: textResult.stdout, pageCount, chapterCount: null };
-}
-
-function extractEpubText(filePath) {
-  const listResult = spawnSync('unzip', ['-Z1', filePath], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, timeout: 30000 });
-  if (listResult.status !== 0) throw new Error(listResult.stderr || 'unzip unavailable');
-  const entries = listResult.stdout.split(/\r?\n/)
-    .filter((name) => /\.(xhtml|html|htm|txt)$/i.test(name))
-    .filter((name) => !/META-INF/i.test(name))
-    .slice(0, 800);
-  const texts = [];
-  for (const entry of entries) {
-    const result = spawnSync('unzip', ['-p', filePath, entry], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, timeout: 30000 });
-    if (result.status === 0 && result.stdout) texts.push(stripHtml(result.stdout));
-  }
-  return { text: texts.join('\n\n'), pageCount: null, chapterCount: entries.length };
-}
-
-function extractLibraryText(filePath, fileType) {
-  if (fileType === 'txt' || fileType === 'md') {
-    return { text: readFileSync(filePath, 'utf8'), pageCount: null, chapterCount: null };
-  }
-  if (fileType === 'pdf') return extractPdfText(filePath);
-  if (fileType === 'epub') return extractEpubText(filePath);
-  return { text: '', pageCount: null, chapterCount: null };
-}
-
-function indexLibraryBookText(bookId) {
-  const book = getLibraryBookById(bookId);
-  const filePath = getLibraryStoragePath(bookId);
-  if (!book || !filePath || !existsSync(filePath)) return;
-  const timestamp = nowISO();
-  try {
-    runSqlite(`UPDATE library_books SET text_status = 'processing', text_error = '', updated_at = ${sqlString(timestamp)} WHERE id = ${sqlValue(bookId)};`);
-    const extracted = extractLibraryText(filePath, book.fileType);
-    const chunks = splitTextChunks(extracted.text);
-    const statements = [
-      'BEGIN;',
-      `DELETE FROM library_text_chunks WHERE book_id = ${sqlValue(bookId)};`,
-      `DELETE FROM library_text_fts WHERE book_id = ${sqlValue(bookId)};`,
-    ];
-    chunks.forEach((text, index) => {
-      const locator = book.fileType === 'pdf' ? `chunk:${index + 1}` : `section:${index + 1}`;
-      statements.push(`INSERT INTO library_text_chunks (book_id, chunk_index, locator, title, text, created_at)
-VALUES (${sqlValue(bookId)}, ${sqlValue(index)}, ${sqlString(locator)}, ${sqlString(`片段 ${index + 1}`)}, ${sqlString(text)}, ${sqlString(timestamp)});`);
-    });
-    statements.push('COMMIT;');
-    runSqlite(statements.join('\n'), { maxBuffer: 128 * 1024 * 1024 });
-    const rows = sqliteJson(`SELECT id, chunk_index AS chunkIndex, title, text FROM library_text_chunks WHERE book_id = ${sqlValue(bookId)} ORDER BY chunk_index;`);
-    const ftsStatements = ['BEGIN;'];
-    rows.forEach((row) => {
-      ftsStatements.push(`INSERT INTO library_text_fts (book_id, chunk_id, title, text)
-VALUES (${sqlValue(bookId)}, ${sqlValue(Number(row.id))}, ${sqlString(row.title || '')}, ${sqlString(row.text || '')});`);
-    });
-    ftsStatements.push('COMMIT;');
-    runSqlite(ftsStatements.join('\n'), { maxBuffer: 128 * 1024 * 1024 });
-    runSqlite(`UPDATE library_books
-SET text_status = ${sqlString(chunks.length ? 'ready' : 'empty')},
-    text_error = '',
-    page_count = ${sqlValue(extracted.pageCount)},
-    chapter_count = ${sqlValue(extracted.chapterCount)},
-    updated_at = ${sqlString(nowISO())}
-WHERE id = ${sqlValue(bookId)};`);
-  } catch (error) {
-    runSqlite(`UPDATE library_books
-SET text_status = 'failed',
-    text_error = ${sqlString(error instanceof Error ? error.message : String(error))},
-    updated_at = ${sqlString(nowISO())}
-WHERE id = ${sqlValue(bookId)};`);
-  }
-}
-
-function getLibraryText(bookId, { offset = 0, limit = 80 } = {}) {
-  const rows = sqliteJson(`SELECT id, book_id AS bookId, chunk_index AS chunkIndex, locator, title, text, created_at AS createdAt
-FROM library_text_chunks
-WHERE book_id = ${sqlValue(Number(bookId))}
-ORDER BY chunk_index
-LIMIT ${Math.max(1, Math.min(300, Number(limit) || 80))} OFFSET ${Math.max(0, Number(offset) || 0)};`);
-  const total = Number(sqliteScalar(`SELECT COUNT(*) FROM library_text_chunks WHERE book_id = ${sqlValue(Number(bookId))};`) || 0);
-  return { chunks: rows, total, limit: Math.max(1, Math.min(300, Number(limit) || 80)), offset: Math.max(0, Number(offset) || 0) };
-}
-
-function saveLibraryMetadata(payload) {
-  const book = getLibraryBookById(payload.id);
-  if (!book) throw new Error('Library book not found');
-  const timestamp = nowISO();
-  runSqlite(`UPDATE library_books SET
-title = ${sqlString(String(payload.title || book.title).trim() || book.title)},
-author = ${sqlString(String(payload.author ?? book.author).trim())},
-category = ${sqlString(String(payload.category || book.category || '未分类').trim())},
-tags_json = ${sqlString(JSON.stringify(parseTags(payload.tags ?? book.tags)))},
-is_favorite = ${sqlValue(Boolean(payload.isFavorite))},
-is_archived = ${sqlValue(Boolean(payload.isArchived))},
-updated_at = ${sqlString(timestamp)}
-WHERE id = ${sqlValue(Number(payload.id))};`);
-  tableChanged();
-  return getLibraryBookById(payload.id);
-}
-
-function saveLibraryProgress(payload) {
-  const bookId = Number(payload.bookId || payload.id || 0);
-  if (!bookId) throw new Error('Missing book id');
-  const locator = String(payload.locator || '');
-  const percent = Math.max(0, Math.min(100, Number(payload.progressPercent || 0)));
-  const timestamp = nowISO();
-  runSqlite(`INSERT INTO library_reading_progress (book_id, locator, progress_percent, updated_at)
-VALUES (${sqlValue(bookId)}, ${sqlString(locator)}, ${sqlValue(percent)}, ${sqlString(timestamp)})
-ON CONFLICT(book_id) DO UPDATE SET locator = excluded.locator, progress_percent = excluded.progress_percent, updated_at = excluded.updated_at;
-UPDATE library_books
-SET last_locator = ${sqlString(locator)},
-    progress_percent = ${sqlValue(percent)},
-    last_opened_at = ${sqlString(timestamp)},
-    updated_at = ${sqlString(timestamp)}
-WHERE id = ${sqlValue(bookId)};`);
-  tableChanged();
-  return { ok: true, updatedAt: timestamp };
-}
-
-function saveLibraryNote(payload) {
-  const bookId = Number(payload.bookId || 0);
-  const content = String(payload.content || '').trim();
-  if (!bookId || !content) throw new Error('Missing note content');
-  const timestamp = nowISO();
-  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM library_notes WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
-    ? Number(payload.id)
-    : nextTableId('library_notes');
-  runSqlite(`INSERT INTO library_notes (id, book_id, locator, title, content, created_at, updated_at)
-VALUES (${sqlValue(id)}, ${sqlValue(bookId)}, ${sqlString(payload.locator || '')}, ${sqlString(payload.title || '')}, ${sqlString(content)}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
-ON CONFLICT(id) DO UPDATE SET
-locator = excluded.locator,
-title = excluded.title,
-content = excluded.content,
-updated_at = excluded.updated_at;`);
-  tableChanged();
-  return { ok: true, id };
-}
-
-function saveLibraryBookmark(payload) {
-  const bookId = Number(payload.bookId || 0);
-  const pageNumber = Math.max(1, Math.round(Number(payload.pageNumber || 1)));
-  if (!bookId) throw new Error('Missing book id');
-  if (!getLibraryBookById(bookId)) throw new Error('Book not found');
-  const timestamp = nowISO();
-  const id = payload.id && Number(sqliteScalar(`SELECT COUNT(*) FROM library_bookmarks WHERE id = ${sqlValue(Number(payload.id))};`) || 0)
-    ? Number(payload.id)
-    : nextTableId('library_bookmarks');
-  runSqlite(`INSERT INTO library_bookmarks (id, book_id, page_number, title, note, created_at, updated_at)
-VALUES (${sqlValue(id)}, ${sqlValue(bookId)}, ${sqlValue(pageNumber)}, ${sqlString(payload.title || '')}, ${sqlString(payload.note || '')}, ${sqlString(timestamp)}, ${sqlString(timestamp)})
-ON CONFLICT(id) DO UPDATE SET
-page_number = excluded.page_number,
-title = excluded.title,
-note = excluded.note,
-updated_at = excluded.updated_at;`);
-  tableChanged();
-  return { ok: true, id };
-}
-
-function deleteLibraryBookmark(id) {
-  runSqlite(`DELETE FROM library_bookmarks WHERE id = ${sqlValue(Number(id))};`);
-  tableChanged();
-  return { ok: true };
-}
-
-function deleteLibraryBook(id) {
-  const filePath = getLibraryStoragePath(id);
-  runSqlite(`BEGIN;
-DELETE FROM library_text_chunks WHERE book_id = ${sqlValue(Number(id))};
-DELETE FROM library_text_fts WHERE book_id = ${sqlValue(Number(id))};
-DELETE FROM library_notes WHERE book_id = ${sqlValue(Number(id))};
-DELETE FROM library_bookmarks WHERE book_id = ${sqlValue(Number(id))};
-DELETE FROM library_reading_progress WHERE book_id = ${sqlValue(Number(id))};
-DELETE FROM library_books WHERE id = ${sqlValue(Number(id))};
-COMMIT;`);
-  if (filePath && existsSync(filePath)) {
-    try { unlinkSync(filePath); } catch { /* keep DB delete from being blocked by file cleanup */ }
-  }
-  tableChanged();
-}
-
-function searchLibrary(query, sessionRole = 'write') {
-  const q = String(query || '').trim();
-  if (!q) return { results: [], readOnly: sessionRole === 'read' };
-  const like = `%${q.replace(/[%_]/g, '')}%`;
-  const byMeta = sqliteJson(`SELECT id, title, author, category, tags_json AS tagsJson, original_file_name AS originalFileName,
-file_type AS fileType, mime_type AS mimeType, file_size AS fileSize, text_status AS textStatus, text_error AS textError,
-page_count AS pageCount, chapter_count AS chapterCount, progress_percent AS progressPercent, last_locator AS lastLocator,
-last_opened_at AS lastOpenedAt, is_favorite AS isFavorite, is_archived AS isArchived, schema_version AS schemaVersion,
-created_at AS createdAt, updated_at AS updatedAt,
-'metadata' AS matchType, '' AS snippet, '' AS locator
-FROM library_books
-WHERE is_archived = 0 AND (title LIKE ${sqlString(like)} OR author LIKE ${sqlString(like)} OR original_file_name LIKE ${sqlString(like)} OR tags_json LIKE ${sqlString(like)})
-LIMIT 30;`);
-  const escapedFts = q.replace(/"/g, '""');
-  let byText = [];
-  try {
-    byText = sqliteJson(`SELECT b.id, b.title, b.author, b.category, b.tags_json AS tagsJson, b.original_file_name AS originalFileName,
-b.file_type AS fileType, b.mime_type AS mimeType, b.file_size AS fileSize, b.text_status AS textStatus, b.text_error AS textError,
-b.page_count AS pageCount, b.chapter_count AS chapterCount, b.progress_percent AS progressPercent, b.last_locator AS lastLocator,
-b.last_opened_at AS lastOpenedAt, b.is_favorite AS isFavorite, b.is_archived AS isArchived, b.schema_version AS schemaVersion,
-b.created_at AS createdAt, b.updated_at AS updatedAt,
-'text' AS matchType, snippet(library_text_fts, 3, '[', ']', '...', 24) AS snippet, c.locator
-FROM library_text_fts
-JOIN library_text_chunks c ON c.id = library_text_fts.chunk_id
-JOIN library_books b ON b.id = library_text_fts.book_id
-WHERE library_text_fts MATCH ${sqlString(`"${escapedFts}"`)} AND b.is_archived = 0
-LIMIT 50;`);
-  } catch {
-    byText = [];
-  }
-  const byNotes = sqliteJson(`SELECT b.id, b.title, b.author, b.category, b.tags_json AS tagsJson, b.original_file_name AS originalFileName,
-b.file_type AS fileType, b.mime_type AS mimeType, b.file_size AS fileSize, b.text_status AS textStatus, b.text_error AS textError,
-b.page_count AS pageCount, b.chapter_count AS chapterCount, b.progress_percent AS progressPercent, b.last_locator AS lastLocator,
-b.last_opened_at AS lastOpenedAt, b.is_favorite AS isFavorite, b.is_archived AS isArchived, b.schema_version AS schemaVersion,
-b.created_at AS createdAt, b.updated_at AS updatedAt,
-'note' AS matchType, n.content AS snippet, n.locator
-FROM library_notes n
-JOIN library_books b ON b.id = n.book_id
-WHERE b.is_archived = 0 AND (n.content LIKE ${sqlString(like)} OR n.title LIKE ${sqlString(like)})
-LIMIT 30;`);
-  const seen = new Set();
-  const results = [...byMeta, ...byText, ...byNotes].filter((row) => {
-    const key = `${row.id}-${row.matchType}-${row.locator}-${row.snippet}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).map((row) => ({ book: libraryBookRowToObject(row), matchType: row.matchType, snippet: row.snippet || '', locator: row.locator || '' }));
-  return { results, readOnly: sessionRole === 'read' };
-}
-
 function getStudyTargetMinutes() {
   return Math.max(0, Number(sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${sqlString(studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0);
 }
@@ -5878,6 +5572,7 @@ ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_da
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null;
   const todayBrief = getDailyBriefByDate(today) || getLatestDailyBriefSummary();
+  const englishWritingPlan = englishWritingPlanForDate(today, getDailyBriefSettings({ includeSecret: true }));
   const stage = countdownStage(activeGoal, today);
   const daysLeft = activeGoal ? Math.max(1, Math.ceil((parseDateString(activeGoal.deadline).getTime() - parseDateString(today).getTime()) / (24 * 60 * 60 * 1000))) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
@@ -5897,6 +5592,7 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
   const reminders = getDashboardReminders({ today, todayTotal, visibleTasks, waterRecord, todayReview: reviews.find((review) => review.date === today) || null });
   const activityCalendar = getActivityCalendar(84, today);
   const errorThemeWall = (getPrecomputedCache(`dashboard-error-wall:${today}`)?.items || getErrorThemeWall(10, 90, today)).slice(0, 10);
+  const breakGuard = getBreakGuardSummary(today);
 
   const payload = {
     activeGoal,
@@ -5910,10 +5606,12 @@ FROM water_intake_records WHERE date = ${sqlString(today)} LIMIT 1;`)[0] || null
     visibleTasks,
     todayWaterRecord: waterRecord,
     todayBrief,
+    englishWritingPlan,
     startupPlan,
     reminders,
     activityCalendar,
     errorThemeWall,
+    breakGuard,
   };
   dashboardPayloadCache = { revision: dataRevision, date: today, payload };
   return { ...payload, readOnly: sessionRole === 'read' };
@@ -6173,7 +5871,11 @@ function getOpsLogSummaryPayload(sessionRole = 'write') {
   const auditEvents = opsRepository.listAuditEvents(12);
   const slowApi = opsRepository.listSlowApi(12);
   const apiMetrics = opsRepository.getApiMetrics();
-  return { generatedAt: nowISO(), sources, auditEvents, slowApi, apiMetrics, readOnly: sessionRole === 'read' };
+  const clientErrors = {
+    metrics: opsRepository.getClientErrorMetrics(),
+    latest: opsRepository.listClientErrors(12),
+  };
+  return { generatedAt: nowISO(), sources, auditEvents, slowApi, apiMetrics, clientErrors, readOnly: sessionRole === 'read' };
 }
 
 function getGoalsList(sessionRole) {
@@ -6248,82 +5950,6 @@ function normalizeReview(review) {
   return { ...review, score: 6 };
 }
 
-function sign(value) {
-  return createHmac('sha256', cookieSecret).update(value).digest('hex');
-}
-
-function createSessionValue(role = 'write') {
-  const payload = `${role}.${Date.now()}`;
-  return `${payload}.${sign(payload)}`;
-}
-
-function getSessionRole(cookieHeader = '') {
-  const cookies = Object.fromEntries(cookieHeader.split(';').map((item) => {
-    const [key, ...rest] = item.trim().split('=');
-    return [key, decodeURIComponent(rest.join('='))];
-  }));
-  const value = cookies[cookieName];
-  if (!value) return null;
-  const parts = value.split('.');
-  if (parts.length !== 3) return null;
-  const payload = `${parts[0]}.${parts[1]}`;
-  const expected = sign(payload);
-  try {
-    if (!timingSafeEqual(Buffer.from(parts[2]), Buffer.from(expected))) return null;
-    return parts[0] === 'read' ? 'read' : 'write';
-  } catch {
-    return null;
-  }
-}
-
-function isValidSession(cookieHeader = '') {
-  return Boolean(getSessionRole(cookieHeader));
-}
-
-function loadLoginAttempts() {
-  try {
-    if (!existsSync(loginAttemptsFile)) return {};
-    const parsed = JSON.parse(readFileSync(loginAttemptsFile, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveLoginAttempts() {
-  try {
-    mkdirSync(dataDir, { recursive: true });
-    writeFileSync(loginAttemptsFile, JSON.stringify(loginAttempts, null, 2), 'utf8');
-  } catch {
-    // Login attempt persistence is defensive; a write failure should not block the app.
-  }
-}
-
-function pruneLoginAttempts(now = Date.now()) {
-  let changed = false;
-  for (const [ip, entry] of Object.entries(loginAttempts)) {
-    const lastFailedAt = Number(entry.lastFailedAt || 0);
-    const lockedUntil = Number(entry.lockedUntil || 0);
-    if (lockedUntil <= now && lastFailedAt && now - lastFailedAt > 24 * 60 * 60 * 1000) {
-      delete loginAttempts[ip];
-      changed = true;
-    }
-  }
-  if (changed) saveLoginAttempts();
-}
-
-function getClientIp(req) {
-  const realIp = Array.isArray(req.headers['x-real-ip']) ? req.headers['x-real-ip'][0] : req.headers['x-real-ip'];
-  const forwardedFor = Array.isArray(req.headers['x-forwarded-for']) ? req.headers['x-forwarded-for'][0] : req.headers['x-forwarded-for'];
-  const rawIp = String(realIp || forwardedFor?.split(',')[0] || req.socket.remoteAddress || 'unknown').trim();
-  return rawIp.replace(/^::ffff:/, '');
-}
-
-function clientHashForRequest(req) {
-  const userAgent = String(req.headers['user-agent'] || '').slice(0, 240);
-  return createHash('sha256').update(`${getClientIp(req)}|${userAgent}`).digest('hex').slice(0, 24);
-}
-
 function logStructured(level, event, fields = {}) {
   const payload = { level, event, at: nowISO(), ...fields };
   const line = JSON.stringify(payload);
@@ -6351,6 +5977,23 @@ function writeApiRequestLog({ req, statusCode, durationMs, role = '', error = ''
 VALUES (${sqlString(req.method || 'GET')}, ${sqlString(pathname)}, ${sqlValue(statusCode)}, ${sqlValue(Math.round(durationMs))}, ${sqlString(role || '')}, ${sqlString(redactSecretText(error))}, ${sqlString(nowISO())});`);
   } catch (logError) {
     logStructured('warn', 'api_request_log_failed', { error: redactSecretText(logError.message || String(logError)) });
+  }
+}
+
+function writeClientErrorLog({ req, role = '', body = {} }) {
+  try {
+    ensureSqliteStore();
+    const payload = sanitizeClientErrorPayload(body, {
+      userAgent: req.headers['user-agent'] || '',
+      createdAt: nowISO(),
+    });
+    const id = Number(sqliteScalar(`INSERT INTO client_error_log (source, path, message, stack, component_stack, role, client_hash, user_agent, created_at)
+VALUES (${sqlString(payload.source)}, ${sqlString(payload.path)}, ${sqlString(payload.message)}, ${sqlString(payload.stack)}, ${sqlString(payload.componentStack)}, ${sqlString(role || '')}, ${sqlString(clientHashForRequest(req))}, ${sqlString(payload.userAgent)}, ${sqlString(payload.createdAt)})
+RETURNING id;`) || 0);
+    return { id, ...payload };
+  } catch (error) {
+    logStructured('warn', 'client_error_log_failed', { error: redactSecretText(error.message || String(error)) });
+    return null;
   }
 }
 
@@ -6398,304 +6041,6 @@ WHERE id = ${sqlValue(taskId)};`);
   }
 }
 
-function getLoginLock(ip) {
-  const now = Date.now();
-  const entry = loginAttempts[ip];
-  if (!entry) return null;
-  const lockedUntil = Number(entry.lockedUntil || 0);
-  if (lockedUntil > now) {
-    return { lockedUntil, remainingMs: lockedUntil - now };
-  }
-  if (lockedUntil) {
-    delete loginAttempts[ip];
-    saveLoginAttempts();
-  }
-  return null;
-}
-
-function recordLoginSuccess(ip) {
-  if (loginAttempts[ip]) {
-    delete loginAttempts[ip];
-    saveLoginAttempts();
-  }
-}
-
-function recordLoginFailure(ip) {
-  pruneLoginAttempts();
-  const now = Date.now();
-  const entry = loginAttempts[ip] || { failures: 0, lastFailedAt: 0, lockedUntil: 0 };
-  const failures = Number(entry.failures || 0) + 1;
-  const lockedUntil = failures >= loginFailureLimit ? now + loginLockMs : 0;
-  loginAttempts[ip] = { failures, lastFailedAt: now, lockedUntil };
-  saveLoginAttempts();
-  return loginAttempts[ip];
-}
-
-function sleep(ms) {
-  return new Promise((resolveSleep) => {
-    setTimeout(resolveSleep, ms);
-  });
-}
-
-function loginFailureDelay() {
-  return sleep(loginFailureDelayMinMs + Math.floor(Math.random() * loginFailureDelaySpreadMs));
-}
-
-function lockMessage(remainingMs) {
-  const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
-  return `登录失败次数过多，已临时锁定。请 ${minutes} 分钟后再试。`;
-}
-
-function loginPage(error = '') {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>考研计划管理</title>
-  <style>
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fb;color:#111827;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    main{width:min(420px,calc(100vw - 32px));border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:28px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
-    h1{margin:0;font-size:22px}p{color:#64748b;line-height:1.7}label{display:block;margin:20px 0 8px;font-size:13px;font-weight:700;color:#475569}
-    input{width:100%;box-sizing:border-box;border:1px solid #d9dee8;border-radius:8px;padding:12px;font:inherit;outline:none}
-    input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
-    button{width:100%;margin-top:14px;border:0;border-radius:8px;background:#2563eb;color:white;padding:12px;font-weight:700;cursor:pointer}
-    .error{margin-top:12px;color:#be123c;background:#fff1f2;border:1px solid #fecaca;border-radius:8px;padding:10px;font-size:14px}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>考研计划管理</h1>
-    <p>请输入访问密码进入你的学习管理面板。</p>
-    <form method="post" action="/login">
-      <label for="password">访问密码</label>
-      <input id="password" name="password" type="password" autofocus autocomplete="current-password" />
-      <button type="submit">进入网站</button>
-    </form>
-    ${error ? `<div class="error">${error}</div>` : ''}
-  </main>
-</body>
-</html>`;
-}
-
-function readBody(req, maxBytes = 10 * 1024 * 1024) {
-  return new Promise((resolveBody, rejectBody) => {
-    let body = '';
-    let size = 0;
-    let rejected = false;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        if (!rejected) {
-          rejected = true;
-          const error = new Error('Request body is too large');
-          error.statusCode = 413;
-          rejectBody(error);
-        }
-        return;
-      }
-      if (!rejected) body += chunk.toString('utf8');
-    });
-    req.on('error', (error) => {
-      if (!rejected) {
-        rejected = true;
-        rejectBody(error);
-      }
-    });
-    req.on('end', () => {
-      if (!rejected) resolveBody(body);
-    });
-  });
-}
-
-async function readJsonBody(req) {
-  const body = await readBody(req, jsonBodyMaxBytes);
-  if (!body) return {};
-  let parsed;
-  try {
-    parsed = JSON.parse(body);
-  } catch {
-    const error = new Error('Invalid JSON body');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (parsed !== null && typeof parsed === 'object') return parsed;
-  const error = new Error('JSON body must be an object or array');
-  error.statusCode = 400;
-  throw error;
-}
-
-function readRawBody(req, maxBytes = libraryUploadMaxBytes) {
-  return new Promise((resolveBody, rejectBody) => {
-    const chunks = [];
-    let size = 0;
-    let rejected = false;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        rejected = true;
-        const error = new Error('Uploaded file is too large');
-        error.statusCode = 413;
-        rejectBody(error);
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on('error', (error) => {
-      if (!rejected) rejectBody(error);
-    });
-    req.on('end', () => {
-      if (!rejected) resolveBody(Buffer.concat(chunks, size));
-    });
-  });
-}
-
-function parseMultipartForm(buffer, contentType = '') {
-  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
-  if (!boundaryMatch) {
-    const error = new Error('Missing multipart boundary');
-    error.statusCode = 400;
-    throw error;
-  }
-  const boundary = Buffer.from(`--${boundaryMatch[1] || boundaryMatch[2]}`);
-  const fields = {};
-  const files = {};
-  let cursor = 0;
-
-  while (cursor < buffer.length) {
-    const boundaryIndex = buffer.indexOf(boundary, cursor);
-    if (boundaryIndex < 0) break;
-    cursor = boundaryIndex + boundary.length;
-    if (buffer[cursor] === 45 && buffer[cursor + 1] === 45) break;
-    if (buffer[cursor] === 13 && buffer[cursor + 1] === 10) cursor += 2;
-
-    const headerEnd = buffer.indexOf(Buffer.from('\r\n\r\n'), cursor);
-    if (headerEnd < 0) break;
-    const headerText = buffer.slice(cursor, headerEnd).toString('utf8');
-    const disposition = headerText.match(/content-disposition:\s*form-data;([^\r\n]+)/i)?.[1] || '';
-    const name = disposition.match(/name="([^"]+)"/i)?.[1] || '';
-    const filename = disposition.match(/filename="([^"]*)"/i)?.[1] || '';
-    const partContentType = headerText.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || 'application/octet-stream';
-    const partStart = headerEnd + 4;
-    const nextBoundary = buffer.indexOf(boundary, partStart);
-    if (!name || nextBoundary < 0) break;
-    let partEnd = nextBoundary;
-    if (buffer[partEnd - 2] === 13 && buffer[partEnd - 1] === 10) partEnd -= 2;
-    const data = buffer.slice(partStart, partEnd);
-    if (filename) {
-      files[name] = { filename, contentType: partContentType, data };
-    } else {
-      fields[name] = data.toString('utf8');
-    }
-    cursor = nextBoundary;
-  }
-
-  return { fields, files };
-}
-
-function uploadLibraryBookFromMultipart(fields, files) {
-  const file = files.file || files.book || Object.values(files)[0];
-  if (!file?.data?.length) {
-    const error = new Error('Missing upload file');
-    error.statusCode = 400;
-    throw error;
-  }
-  const fileType = libraryFileType(file.filename);
-  if (!fileType) {
-    const error = new Error('Only pdf, epub, txt and md files are supported');
-    error.statusCode = 400;
-    throw error;
-  }
-  ensureSqliteStore();
-  const timestamp = nowISO();
-  const id = nextTableId('library_books');
-  const originalFileName = safeFileName(file.filename || `book.${fileType}`);
-  const title = String(fields.title || originalFileName.replace(/\.[^.]+$/, '') || '未命名资料').trim();
-  const author = String(fields.author || '').trim();
-  const category = String(fields.category || '未分类').trim() || '未分类';
-  const tags = parseTags(fields.tags || '');
-  const mimeType = file.contentType && file.contentType !== 'application/octet-stream' ? file.contentType : libraryMimeType(fileType);
-  const bookDir = join(libraryFilesDir, `book-${id}`);
-  mkdirSync(bookDir, { recursive: true });
-  const storagePath = join(bookDir, `original.${fileType}`);
-  writeFileSync(storagePath, file.data);
-  runSqlite(`INSERT INTO library_books (
-  id, title, author, category, tags_json, original_file_name, file_type, mime_type, file_size, storage_path,
-  text_status, text_error, progress_percent, last_locator, is_favorite, is_archived, schema_version, created_at, updated_at
-) VALUES (
-  ${sqlValue(id)}, ${sqlString(title)}, ${sqlString(author)}, ${sqlString(category)}, ${sqlString(JSON.stringify(tags))},
-  ${sqlString(originalFileName)}, ${sqlString(fileType)}, ${sqlString(mimeType)}, ${sqlValue(file.data.length)},
-  ${sqlString(storagePath)}, 'pending', '', 0, '', 0, 0, ${sqlValue(entitySchemaVersion)}, ${sqlString(timestamp)}, ${sqlString(timestamp)}
-);`);
-  tableChanged();
-  const timer = setTimeout(() => indexLibraryBookText(id), 80);
-  if (typeof timer.unref === 'function') timer.unref();
-  return getLibraryBookDetail(id);
-}
-
-function serveLibraryFile(req, res, id, sessionRole = 'write') {
-  ensureSqliteStore();
-  const book = getLibraryBookById(id);
-  const filePath = getLibraryStoragePath(id);
-  if (!book || !filePath || !existsSync(filePath)) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
-  if (sessionRole !== 'read') {
-    saveLibraryProgress({ bookId: id, locator: book.lastLocator || '', progressPercent: book.progressPercent || 0 });
-  }
-  const stat = statSync(filePath);
-  const range = req.headers.range;
-  const headers = {
-    'content-type': book.mimeType || libraryMimeType(book.fileType),
-    'accept-ranges': 'bytes',
-    'cache-control': 'private, max-age=3600',
-  };
-  if (range) {
-    const match = String(range).match(/bytes=(\d*)-(\d*)/);
-    if (!match) {
-      res.writeHead(416, { ...headers, 'content-range': `bytes */${stat.size}` });
-      res.end();
-      return;
-    }
-    const start = match[1] ? Number(match[1]) : 0;
-    const end = match[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
-    if (start >= stat.size || end < start) {
-      res.writeHead(416, { ...headers, 'content-range': `bytes */${stat.size}` });
-      res.end();
-      return;
-    }
-    res.writeHead(206, {
-      ...headers,
-      'content-length': end - start + 1,
-      'content-range': `bytes ${start}-${end}/${stat.size}`,
-    });
-    createReadStream(filePath, { start, end }).pipe(res);
-    return;
-  }
-  res.writeHead(200, { ...headers, 'content-length': stat.size });
-  createReadStream(filePath).pipe(res);
-}
-
-function headerString(req, name) {
-  const value = req.headers[name];
-  if (Array.isArray(value)) return value[0] || '';
-  return value || '';
-}
-
-function isObjectPayload(value) {
-  return value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function safeSecretEqual(left, right) {
-  const leftBuffer = Buffer.from(String(left || ''), 'utf8');
-  const rightBuffer = Buffer.from(String(right || ''), 'utf8');
-  if (!leftBuffer.length || leftBuffer.length !== rightBuffer.length) return false;
-  return timingSafeEqual(leftBuffer, rightBuffer);
-}
-
 function clawbotRequestSecret(req, requestUrl, body = {}) {
   const auth = headerString(req, 'authorization');
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';
@@ -6716,26 +6061,6 @@ function validateClawbotAccess(req, requestUrl, body = {}) {
     return { ok: false, status: 401, error: 'Unauthorized' };
   }
   return { ok: true };
-}
-
-function bearerToken(req) {
-  const auth = headerString(req, 'authorization');
-  return auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || '';
-}
-
-function validateStudyPetAccess(req) {
-  if (!studyPetApiToken) {
-    return { ok: false, status: 503, error: 'Study pet API is disabled. Set STUDY_PET_API_TOKEN first.' };
-  }
-  if (!safeSecretEqual(bearerToken(req), studyPetApiToken)) {
-    return { ok: false, status: 401, error: 'Unauthorized' };
-  }
-  return { ok: true };
-}
-
-function normalizeStudyPetDate(value, fallback = shanghaiTodayISO()) {
-  const date = String(value || fallback).trim();
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : fallback;
 }
 
 function extractClawbotMessage(body, requestUrl) {
@@ -6883,6 +6208,8 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const learning = payload.learning || {};
   const markets = Array.isArray(payload.markets) ? payload.markets : [];
   const indexPurchaseAssessment = payload.indexPurchaseAssessment || {};
+  const customWeeklyPush = payload.customWeeklyPush || {};
+  const englishWritingPlan = payload.englishWritingPlan || {};
   const tasks = Array.isArray(learning.todayTasks) ? learning.todayTasks : [];
   const weatherLine = weather.ok
     ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
@@ -6909,6 +6236,14 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
   const notificationLines = notificationMetrics.open
     ? [`待处理 ${notificationMetrics.open} 条，其中 warning ${notificationMetrics.warnings}，critical ${notificationMetrics.critical}`]
     : ['暂无待处理通知。'];
+  const englishPlanLines = englishWritingPlan.enabled && englishWritingPlan.includeInBrief
+    ? [
+      englishWritingPlan.currentStage ? `阶段：${englishWritingPlan.currentStage.name}${englishWritingPlan.currentStage.weeks ? `（${englishWritingPlan.currentStage.weeks}）` : ''}` : '',
+      englishWritingPlan.currentStage?.focus ? `重点：${compactText(englishWritingPlan.currentStage.focus, 120)}` : '',
+      `${englishWritingPlan.weekdayLabel || '今日'}任务：${englishWritingPlan.todayTask || '未设置固定写作任务'}`,
+      `建议用时：${englishWritingPlan.dailyMinutes || '20-25 分钟'}`,
+    ]
+    : [];
   const lines = [
     `${payload.title}`,
     `生成时间：${new Date(payload.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
@@ -6917,6 +6252,10 @@ function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings
     '',
     ...clawbotSection('学习', learningLines),
     '',
+    ...clawbotSection('英语写作计划', englishPlanLines),
+    englishPlanLines.length ? '' : '',
+    ...clawbotSection(customWeeklyPush.weekdayLabel ? `${customWeeklyPush.weekdayLabel}自定义推送` : '自定义推送', customWeeklyPush.hasContent ? String(customWeeklyPush.content || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []),
+    customWeeklyPush.hasContent ? '' : '',
     ...clawbotSection('今日待办', taskLines),
     '',
     ...clawbotSection('指数', marketLines),
@@ -7374,17 +6713,34 @@ async function sendProactiveNotification(text, delivery) {
   const plan = resolveProactiveDispatch(delivery, notificationRepository.listChannels(), process.env);
   if (plan.kind === 'bark') return sendBarkNotification(text, delivery);
   if (plan.kind === 'telegram') return sendTelegramNotification(text, delivery);
-  if (plan.kind === 'clawbot_weixin') return sendProactiveClawbotText(text);
+  if (plan.kind === 'clawbot_weixin') {
+    if (isWechatQuietHours()) {
+      return { ok: false, deferred: true, nextAttemptAt: nextWechatActiveAt(), method: 'clawbot-weixin', channel: plan.channelKey, error: 'wechat quiet hours' };
+    }
+    return sendProactiveClawbotText(text);
+  }
   return { ok: false, method: plan.kind, channel: plan.channelKey, error: `Unsupported notification channel: ${plan.type || plan.channelKey}` };
 }
 
 function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
   const telegramReady = telegramConfigStatus(readTelegramConfig(telegramEnvFile)).configured;
+  const wechatAvailableNow = !isWechatQuietHours();
   const channels = channelKeys || [
-    'clawbot_weixin',
+    ...(wechatAvailableNow ? ['clawbot_weixin'] : []),
     ...(resolveBarkConfig().configured ? ['bark_default'] : []),
     ...(telegramReady ? ['telegram_default'] : []),
   ];
+  if (!channels.length) {
+    notifyEvent({
+      eventKey,
+      source,
+      severity,
+      title,
+      content,
+      payload: { ...payload, notificationMode: 'in_app_fallback', reason: 'wechat_quiet_hours' },
+    });
+    return { ok: true, queued: false, mode: 'in_app', deliveryId: null, deliveries: [], status: 'suppressed' };
+  }
   const deliveries = channels.map((channelKey) => notificationQueue.enqueueProactive({
     eventKey,
     source,
@@ -7550,12 +6906,15 @@ function scheduleTaskReminderScan() {
   if (taskReminderTimer) clearInterval(taskReminderTimer);
   const scan = () => {
     nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();
+    setRuntimeMetadata('worker_next_task_reminder_at', nextTaskReminderScanAt);
     processTaskReminders().catch((error) => {
       logStructured('error', 'task_reminder_scan_failed', { error: redactSecretText(error.message || String(error)) });
     });
   };
   nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();
-  setTimeout(scan, 5000).unref?.();
+  setRuntimeMetadata('worker_next_task_reminder_at', nextTaskReminderScanAt);
+  taskReminderInitialTimer = setTimeout(scan, 5000);
+  taskReminderInitialTimer.unref?.();
   taskReminderTimer = setInterval(scan, 60 * 1000);
   taskReminderTimer.unref?.();
 }
@@ -7620,67 +6979,6 @@ async function handleClawbotApi(req, res) {
   }
 
   sendJson(res, { ok: false, error: 'Not found' }, 404);
-}
-
-async function handleStudyPetApi(req, res) {
-  const requestUrl = new URL(req.url || '/', 'http://localhost');
-  const pathname = requestUrl.pathname;
-
-  if (pathname === '/api/study-pet/report' && req.method === 'POST') {
-    const access = validateStudyPetAccess(req);
-    if (!access.ok) {
-      sendJson(res, { ok: false, error: access.error }, access.status);
-      return;
-    }
-    ensureSqliteStore();
-    const report = studyPetRepository.saveDailyReport(await readJsonBody(req));
-    tableChanged();
-    sendJson(res, { ok: true, date: report.date, deviceId: report.deviceId });
-    return;
-  }
-
-  const sessionRole = getSessionRole(req.headers.cookie);
-  if (!sessionRole) {
-    sendJson(res, { error: 'Unauthorized' }, 401);
-    return;
-  }
-
-  if (req.method !== 'GET') {
-    sendJson(res, { error: 'Not found' }, 404);
-    return;
-  }
-
-  ensureSqliteStore();
-
-  if (pathname === '/api/study-pet/today') {
-    const date = normalizeStudyPetDate(requestUrl.searchParams.get('date'), shanghaiTodayISO());
-    sendJson(res, {
-      generatedAt: nowISO(),
-      date,
-      timezone: 'Asia/Shanghai',
-      ...studyPetRepository.getTodayReport(date),
-      readOnly: sessionRole === 'read',
-    });
-    return;
-  }
-
-  if (pathname === '/api/study-pet/stats') {
-    const endDate = normalizeStudyPetDate(requestUrl.searchParams.get('endDate'), shanghaiTodayISO());
-    const startDate = normalizeStudyPetDate(requestUrl.searchParams.get('startDate'), addDaysISO(endDate, -6));
-    const limit = Number(requestUrl.searchParams.get('limit') || 30);
-    sendJson(res, {
-      generatedAt: nowISO(),
-      timezone: 'Asia/Shanghai',
-      startDate,
-      endDate,
-      daily: studyPetRepository.getStats(startDate, endDate),
-      siteUsage: studyPetRepository.getSiteUsage(startDate, endDate, { limit }),
-      readOnly: sessionRole === 'read',
-    });
-    return;
-  }
-
-  sendJson(res, { error: 'Not found' }, 404);
 }
 
 function telegramHelpText() {
@@ -7840,429 +7138,111 @@ async function registerTelegramWebhook() {
   return { ...status, registered: true, bot: await telegramApi('getMe', {}, { config }) };
 }
 
-function sendHtml(res, html, status = 200) {
-  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' });
-  res.end(html);
-}
-
-function serveStatic(req, res) {
-  const requestUrl = new URL(req.url || '/', 'http://localhost');
-  const decodedPath = decodeURIComponent(requestUrl.pathname);
-  let filePath = normalize(join(root, decodedPath));
-  if (!filePath.startsWith(root)) {
-    res.writeHead(403);
-    res.end('Forbidden');
-    return;
-  }
-  if (!existsSync(filePath) || decodedPath.endsWith('/')) {
-    filePath = join(root, 'index.html');
-  }
-  if (!existsSync(filePath)) {
-    res.writeHead(404);
-    res.end('Not found');
-    return;
-  }
-  const fileName = filePath.split(/[\\/]/).pop() || '';
-  const shouldRevalidate = filePath.endsWith('index.html') || fileName === 'service-worker.js' || fileName.endsWith('.webmanifest');
-  res.writeHead(200, {
-    'content-type': mimeTypes[extname(filePath)] || 'application/octet-stream',
-    'cache-control': shouldRevalidate ? 'no-cache' : 'public, max-age=31536000, immutable',
-  });
-  createReadStream(filePath).pipe(res);
-}
-
 async function handleApi(req, res) {
   if (req.method === 'OPTIONS') {
     sendJson(res, { ok: true });
     return;
   }
 
-  if (req.url === '/api/import' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    if (body.password !== appPassword) {
-      sendJson(res, { error: 'Invalid password' }, 401);
-      return;
-    }
-    const imported = body.state || {};
-    const next = {
-      ...baseState(),
-      goals: Array.isArray(imported.goals) ? imported.goals : [],
-      dailyReviews: Array.isArray(imported.dailyReviews) ? imported.dailyReviews.map(normalizeReview) : [],
-      studyProjects: Array.isArray(imported.studyProjects) ? imported.studyProjects : [],
-      studyTimeRecords: Array.isArray(imported.studyTimeRecords) ? imported.studyTimeRecords : [],
-      subjects: Array.isArray(imported.subjects) ? imported.subjects : [],
-      mockExamRecords: Array.isArray(imported.mockExamRecords) ? imported.mockExamRecords : [],
-      shortTermTasks: Array.isArray(imported.shortTermTasks) ? imported.shortTermTasks : [],
-      waterIntakeRecords: Array.isArray(imported.waterIntakeRecords) ? imported.waterIntakeRecords : [],
-      confusingWordsBackup: imported.confusingWordsBackup || null,
-    };
-    writeState(next);
-    writeAuditEvent({ action: 'state_import', req, actorRole: 'password-import', detail: { goals: next.goals.length, reviews: next.dailyReviews.length } });
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/dictionary/lookup') && req.method === 'GET') {
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const word = requestUrl.searchParams.get('word')?.trim().toLowerCase() || '';
-    if (!word) {
-      sendJson(res, { error: 'Missing word' }, 400);
-      return;
-    }
-    const entry = findDictionaryEntry(word);
-    if (!entry) {
-      sendJson(res, { error: 'Not found' }, 404);
-      return;
-    }
-    sendJson(res, entry);
-    return;
-  }
-
-  if (req.url?.startsWith('/api/confusing-words/backup/versions')) {
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const body = req.method === 'POST' ? await readJsonBody(req) : {};
-    const sessionRole = getSessionRole(req.headers.cookie);
-    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
-    if (!hasBackupAccess) {
-      sendJson(res, { error: 'Unauthorized' }, 401);
-      return;
-    }
-    const parts = requestUrl.pathname.split('/').filter(Boolean);
-    const versionId = Number(parts[4] || 0);
-    if (req.method === 'GET' && versionId) {
-      const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
-      if (!rows[0]?.payloadJson) {
-        sendJson(res, { error: 'Version not found' }, 404);
-        return;
-      }
-      sendJson(res, JSON.parse(rows[0].payloadJson));
-      return;
-    }
-    if (req.method === 'GET') {
-      sendJson(res, { items: listConfusingWordsBackupVersions(Number(requestUrl.searchParams.get('limit') || 24)) });
-      return;
-    }
-  }
-
-  if (req.url === '/api/confusing-words/backup/restore' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    const sessionRole = getSessionRole(req.headers.cookie);
-    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
-    if (!hasBackupAccess) {
-      sendJson(res, { error: 'Unauthorized' }, 401);
-      return;
-    }
-    if (sessionRole === 'read') {
-      sendJson(res, { error: 'Read only mode' }, 403);
-      return;
-    }
-    const versionId = Number(body.versionId || 0);
-    const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
-    if (!rows[0]?.payloadJson) {
-      sendJson(res, { error: 'Version not found' }, 404);
-      return;
-    }
-    const restored = normalizeConfusingWordsPayload(JSON.parse(rows[0].payloadJson), nowISO());
-    const result = saveConfusingWordsBackupPayload({ ...restored, backedUpAt: nowISO() }, 'restore');
-    sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
-    return;
-  }
-
-  if (req.url === '/api/confusing-words/backup') {
-    const body = req.method === 'POST' ? await readJsonBody(req) : {};
-    const sessionRole = getSessionRole(req.headers.cookie);
-    const hasBackupAccess = sessionRole || body.password === appPassword || req.headers['x-backup-password'] === appPassword;
-    if (!hasBackupAccess) {
-      sendJson(res, { error: 'Unauthorized' }, 401);
-      return;
-    }
-    const state = readState();
-    if (req.method === 'GET') {
-      sendJson(res, state.confusingWordsBackup || null);
-      return;
-    }
-    if (sessionRole === 'read') {
-      sendJson(res, { error: 'Read only mode' }, 403);
-      return;
-    }
-    if (req.method === 'POST') {
-      const timestamp = nowISO();
-      const currentSummary = summarizeConfusingWordsPayload(state.confusingWordsBackup || {});
-      const nextPayload = normalizeConfusingWordsPayload({ ...body, backedUpAt: timestamp }, timestamp);
-      const nextSummary = summarizeConfusingWordsPayload(nextPayload);
-      if (!body.force && currentSummary.wordCount > nextSummary.wordCount && currentSummary.wordCount - nextSummary.wordCount >= 3) {
-        sendJson(res, {
-          error: 'Refusing to overwrite larger server backup without force',
-          conflict: true,
-          server: currentSummary,
-          incoming: nextSummary,
-        }, 409);
-        return;
-      }
-      const result = saveConfusingWordsBackupPayload(nextPayload, body.source || 'sync');
-      sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
-      return;
-    }
-  }
-
-  if (req.url?.startsWith('/api/study-pet/')) {
-    await handleStudyPetApi(req, res);
-    return;
-  }
-
-  if (req.url?.startsWith('/api/clawbot/')) {
-    await handleClawbotApi(req, res);
-    return;
-  }
-
-  if (req.url === '/api/telegram/webhook' && req.method === 'POST') {
-    await handleTelegramWebhook(req, res);
-    return;
-  }
+  if (await handlePublicApiRoutes(req, res, {
+    dataImportToken,
+    backupSyncToken,
+    safeSecretEqual,
+    sendJson,
+    readJsonBody,
+    getSessionRole,
+    baseState,
+    normalizeReview,
+    writeState,
+    writeAuditEvent,
+    requireBreakGuardToken,
+    recordBreakGuardEvent,
+    queueBreakGuardNotification,
+    getBreakGuardSummary,
+    todayISO,
+    findDictionaryEntry,
+    sqliteJson,
+    listConfusingWordsBackupVersions,
+    normalizeConfusingWordsPayload,
+    nowISO,
+    saveConfusingWordsBackupPayload,
+    readState,
+    summarizeConfusingWordsPayload,
+    handleClawbotApi,
+    handleTelegramWebhook,
+  })) return;
 
   const sessionRole = getSessionRole(req.headers.cookie);
   if (!sessionRole) {
     sendJson(res, { error: 'Unauthorized' }, 401);
     return;
   }
+
+  if (req.url === '/api/client-errors' && req.method === 'POST') {
+    const body = await readJsonBody(req);
+    const record = writeClientErrorLog({ req, role: sessionRole, body });
+    sendJson(res, { ok: true, id: record?.id || 0 });
+    return;
+  }
+
   if (req.method !== 'GET' && sessionRole === 'read') {
     sendJson(res, { error: 'Read only mode' }, 403);
     return;
   }
 
-  if (req.url === '/api/settings/mihomo' && req.method === 'GET') {
-    if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
-      return;
-    }
-    sendJson(res, await getMihomoSettings());
-    return;
-  }
+  if (await handleProxySettingsRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    readJsonBody,
+    writeAuditEvent,
+    getMihomoSettings,
+    saveMihomoSubscriptionSettings,
+    importMihomoProviderSettings,
+    selectMihomoProxy,
+    testMihomoProxy,
+  })) return;
 
-  if (req.url === '/api/settings/mihomo/subscription' && req.method === 'POST') {
-    if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const result = await saveMihomoSubscriptionSettings(body);
-    writeAuditEvent({
-      action: 'mihomo_subscription_save',
-      req,
-      actorRole: sessionRole,
-      detail: { subscriptionConfigured: result.subscriptionConfigured, nodeCount: result.nodes.length, restarted: result.restarted },
-    });
-    sendJson(res, result);
-    return;
-  }
+  if (await handleOpsRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    readJsonBody,
+    runExclusiveTask,
+    createBackupFile,
+    restoreBackupFile,
+    writeAuditEvent,
+    getBackupStatus,
+    collectOperationalNotifications,
+    getTaskCenterStatus,
+    getLearningProgressPayload,
+    getProjectProgressPayload,
+    getVisitStatsPayload,
+    getOpsLogSummaryPayload,
+    runSqliteMaintenance,
+    precomputeNightlyArtifacts,
+  })) return;
 
-  if (req.url === '/api/settings/mihomo/import' && req.method === 'POST') {
-    if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const result = await importMihomoProviderSettings(body);
-    writeAuditEvent({
-      action: 'mihomo_provider_import',
-      req,
-      actorRole: sessionRole,
-      detail: { nodeCount: result.nodes.length, restarted: result.restarted },
-    });
-    sendJson(res, result);
-    return;
-  }
-
-  if (req.url === '/api/settings/mihomo/select' && req.method === 'POST') {
-    if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const result = await selectMihomoProxy(body);
-    writeAuditEvent({ action: 'mihomo_proxy_select', req, actorRole: sessionRole, detail: { selected: result.selected } });
-    sendJson(res, result);
-    return;
-  }
-
-  if (req.url === '/api/settings/mihomo/test' && req.method === 'POST') {
-    if (sessionRole !== 'write') {
-      sendJson(res, { error: 'Mihomo settings require write session' }, 403);
-      return;
-    }
-    const result = await testMihomoProxy();
-    writeAuditEvent({ action: 'mihomo_proxy_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
-    sendJson(res, result);
-    return;
-  }
-
-  if (req.url === '/api/backups/status' && req.method === 'GET') {
-    sendJson(res, getBackupStatus({ verifyLatest: true }));
-    return;
-  }
-
-  if (req.url === '/api/backups/run' && req.method === 'POST') {
-    const task = await runExclusiveTask('manual-backup', 'manual', () => createBackupFile('manual', 'manual backup from settings page'), { timeoutMs: 10 * 60 * 1000 });
-    writeAuditEvent({ action: 'backup_create', req, actorRole: sessionRole, detail: { filePath: task.result?.filePath, kind: task.result?.kind } });
-    sendJson(res, { ok: true, backup: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
-    return;
-  }
-
-  if (req.url === '/api/backups/restore' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    const result = restoreBackupFile(body.fileName);
-    writeAuditEvent({ action: 'backup_restore', req, actorRole: sessionRole, detail: { fileName: body.fileName, safetyBackup: result.safetyBackup?.filePath } });
-    sendJson(res, { ok: true, ...result });
-    return;
-  }
-
-  if (req.url === '/api/tasks/status' && req.method === 'GET') {
-    collectOperationalNotifications();
-    sendJson(res, { ...getTaskCenterStatus(), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url === '/api/learning-progress' && req.method === 'GET') {
-    sendJson(res, getLearningProgressPayload(sessionRole));
-    return;
-  }
-
-  if (req.url === '/api/project-progress' && req.method === 'GET') {
-    sendJson(res, getProjectProgressPayload(sessionRole));
-    return;
-  }
-
-  if (req.url === '/api/visits/summary' && req.method === 'GET') {
-    sendJson(res, getVisitStatsPayload(sessionRole));
-    return;
-  }
-
-  if (req.url === '/api/ops/logs/summary' && req.method === 'GET') {
-    collectOperationalNotifications();
-    sendJson(res, getOpsLogSummaryPayload(sessionRole));
-    return;
-  }
-
-  if (req.url?.startsWith('/api/notifications') && req.method === 'GET') {
-    const requestUrl = new URL(req.url, 'http://localhost');
-    if (requestUrl.pathname === '/api/notifications/center') {
-      sendJson(res, getNotificationCenterPayload(sessionRole, { status: requestUrl.searchParams.get('status') || 'all' }));
-      return;
-    }
-  }
-
-  if (req.url === '/api/notifications/ack' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    notificationRepository.acknowledge(body.id);
-    sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
-    return;
-  }
-
-  if (req.url === '/api/notifications/retry-delivery' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    notificationRepository.requeueDelivery(body.id);
-    setImmediate(() => notificationQueue.processDue().catch((error) => {
-      logStructured('warn', 'notification_retry_kick_failed', { error: redactSecretText(error.message || String(error)) });
-    }));
-    writeAuditEvent({ action: 'notification_delivery_retry', req, actorRole: sessionRole, detail: { id: Number(body.id || 0) } });
-    sendJson(res, { ok: true, center: getNotificationCenterPayload(sessionRole) });
-    return;
-  }
-
-  if (req.url === '/api/notifications/wechat/test' && req.method === 'POST') {
-    if (sessionRole === 'read') {
-      sendJson(res, { error: 'Read-only mode' }, 403);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const digest = buildClawbotDailyDigest(todayISO());
-    const message = String(body.message || digest.text);
-    const delivery = queueProactiveNotification({
-      eventKey: `clawbot:test:${Date.now()}`,
-      source: 'clawbot',
-      title: '微信 ClawBot 测试推送',
-      content: '测试消息已进入主动推送队列。',
-      text: message,
-      payload: { requestedBy: sessionRole },
-      channelKeys: ['clawbot_weixin'],
-    });
-    notifyEvent({
-      eventKey: `clawbot:test:${todayISO()}`,
-      source: 'clawbot',
-      severity: 'info',
-      title: '微信 ClawBot 测试推送',
-      content: '测试消息已进入主动推送队列；发送失败时将自动重试并在站内兜底。',
-      payload: { ok: true, queued: true, deliveryId: delivery.deliveryId, notificationMode: 'proactive' },
-    });
-    writeAuditEvent({ action: 'notifications_wechat_test', req, actorRole: sessionRole, detail: { ok: true, queued: true, deliveryId: delivery.deliveryId } });
-    sendJson(res, { ok: true, digest, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
-    return;
-  }
-
-  if (req.url === '/api/notifications/bark/test' && req.method === 'POST') {
-    if (sessionRole === 'read') {
-      sendJson(res, { error: 'Read-only mode' }, 403);
-      return;
-    }
-    if (!resolveBarkConfig().configured) {
-      sendJson(res, { error: 'Bark is not configured' }, 409);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const message = String(body.message || 'Bark 通知通道已接入 Exam Planner。');
-    const delivery = queueProactiveNotification({
-      eventKey: `bark:test:${Date.now()}`,
-      source: 'test',
-      title: 'Exam Planner Bark 测试',
-      content: 'Bark 测试消息已进入主动推送队列。',
-      text: message,
-      payload: { requestedBy: sessionRole },
-      channelKeys: ['bark_default'],
-    });
-    writeAuditEvent({ action: 'notifications_bark_test', req, actorRole: sessionRole, detail: { queued: true, deliveryId: delivery.deliveryId } });
-    sendJson(res, { ok: true, delivery, center: getNotificationCenterPayload(sessionRole) }, 202);
-    return;
-  }
-
-  if (req.url === '/api/notifications/telegram/settings' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    const telegram = saveTelegramSettings(body);
-    writeAuditEvent({ action: 'notifications_telegram_settings', req, actorRole: sessionRole, detail: { configured: telegram.configured, webhookConfigured: telegram.webhookConfigured } });
-    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
-    return;
-  }
-
-  if (req.url === '/api/notifications/telegram/register' && req.method === 'POST') {
-    const telegram = await registerTelegramWebhook();
-    writeAuditEvent({ action: 'notifications_telegram_register', req, actorRole: sessionRole, detail: { registered: true } });
-    sendJson(res, { ok: true, telegram, center: getNotificationCenterPayload(sessionRole) });
-    return;
-  }
-
-  if (req.url === '/api/notifications/telegram/test' && req.method === 'POST') {
-    const result = await sendTelegramNotification('Telegram 通知通道已接入 Exam Planner。', { payload: { severity: 'info' } });
-    writeAuditEvent({ action: 'notifications_telegram_test', req, actorRole: sessionRole, detail: { ok: result.ok } });
-    sendJson(res, { ok: result.ok, result, center: getNotificationCenterPayload(sessionRole) }, result.ok ? 200 : 502);
-    return;
-  }
-
-  if (req.url === '/api/notifications/wechat/settings' && req.method === 'POST') {
-    if (sessionRole === 'read') {
-      sendJson(res, { error: 'Read-only mode' }, 403);
-      return;
-    }
-    const body = await readJsonBody(req);
-    const current = getDailyBriefSettings({ includeSecret: true });
-    const generateTime = /^\d{2}:\d{2}$/.test(body.generateTime || '') ? body.generateTime : current.generateTime;
-    const settings = saveDailyBriefSettings({
-      ...current,
-      generateTime,
-      wechat: { enabled: body.enabled !== false },
-    });
-    writeAuditEvent({ action: 'notifications_wechat_settings', req, actorRole: sessionRole, detail: { enabled: settings.wechat.enabled, generateTime: settings.generateTime } });
-    sendJson(res, { ok: true, settings, center: getNotificationCenterPayload(sessionRole) });
-    return;
-  }
+  if (await handleNotificationRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    readJsonBody,
+    todayISO,
+    collectOperationalNotifications,
+    getNotificationCenterPayload,
+    notificationRepository,
+    notificationQueue,
+    logStructured,
+    redactSecretText,
+    writeAuditEvent,
+    buildClawbotDailyDigest,
+    queueProactiveNotification,
+    notifyEvent,
+    resolveBarkConfig,
+    saveTelegramSettings,
+    registerTelegramWebhook,
+    sendTelegramNotification,
+    getDailyBriefSettings,
+    saveDailyBriefSettings,
+  })) return;
 
   if (req.url?.startsWith('/api/calendar') && req.method === 'GET') {
     const requestUrl = new URL(req.url, 'http://localhost');
@@ -8273,457 +7253,118 @@ async function handleApi(req, res) {
     return;
   }
 
-  if (req.url?.startsWith('/api/briefs') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    if (requestUrl.pathname === '/api/briefs/settings') {
-      sendJson(res, { settings: getDailyBriefSettings(), readOnly: sessionRole === 'read' });
-      return;
-    }
-    if (requestUrl.pathname === '/api/briefs/today') {
-      sendJson(res, { brief: getDailyBriefByDate(todayISO()), latest: getLatestDailyBriefSummary(), readOnly: sessionRole === 'read' });
-      return;
-    }
-    if (requestUrl.pathname === '/api/briefs') {
-      sendJson(res, { briefs: listDailyBriefs(queryLimit(requestUrl.searchParams, 30, 100) ?? 30), readOnly: sessionRole === 'read' });
-      return;
-    }
-  }
+  if (await handleBriefRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    readJsonBody,
+    ensureSqliteStore,
+    queryLimit,
+    todayISO,
+    nowISO,
+    sqlString,
+    sqlValue,
+    runSqlite,
+    tableChanged,
+    runExclusiveTask,
+    getDailyBriefSettings,
+    saveDailyBriefSettings,
+    getDailyBriefByDate,
+    getLatestDailyBriefSummary,
+    listDailyBriefs,
+    generateDailyBrief,
+    sendDailyBriefEmail,
+  })) return;
 
-  if (req.url === '/api/goals' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getGoalsList(sessionRole));
+  if (await handleLearningReadRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    ensureSqliteStore,
+    getGoalsList,
+    getProjectsList,
+    getSubjectsList,
+    getStudyTargetMinutes,
+    getDashboardChartsPayload,
+    getDashboardPayload,
+    queryLimit,
+    queryOffset,
+    listProblemInboxItems,
+    todayISO,
+    getReviewPrefill,
+    getCachedReviewTrend,
+    sqliteScalar,
+    sqliteJson,
+    sqlString,
+    normalizeReview,
+    getMockExamList,
+    getStatisticsSummary,
+    getEmbeddingStatus,
+    getErrorThemeOptions,
+    getCachedErrorThemeAnalysis,
+    getErrorThemeDetail,
+    currentErrorThemeJobSnapshot,
+    listLearningReports,
+    readState,
+  })) return;
+
+
+  const apiPathname = new URL(req.url || '/', 'http://localhost').pathname;
+  if (apiPathname.startsWith('/api/library')) {
+    sendJson(res, { error: 'This module has been retired' }, 410);
     return;
   }
 
-  if (req.url === '/api/projects' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getProjectsList(sessionRole));
+  if (apiPathname.startsWith('/api/market-copilot')) {
+    sendJson(res, { error: 'This module has been retired' }, 410);
     return;
   }
 
-  if (req.url === '/api/subjects' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getSubjectsList(sessionRole));
-    return;
-  }
-
-  if (req.url === '/api/settings/study-target' && req.method === 'GET') {
-    ensureSqliteStore();
-    const targetMinutes = getStudyTargetMinutes();
-    sendJson(res, { targetMinutes, targetHours: Math.round((targetMinutes / 60) * 10) / 10, readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url === '/api/dashboard/charts' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getDashboardChartsPayload());
-    return;
-  }
-
-  if (req.url === '/api/dashboard' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getDashboardPayload(sessionRole));
-    return;
-  }
-
-  if (req.url?.startsWith('/api/problem-inbox') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const status = requestUrl.searchParams.get('status') || 'open';
-    const from = requestUrl.searchParams.get('from') || '1900-01-01';
-    const to = requestUrl.searchParams.get('to') || '2999-12-31';
-    const limit = queryLimit(requestUrl.searchParams, 12, 100) ?? 12;
-    sendJson(res, { items: listProblemInboxItems({ limit, status, from, to }), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/reviews/prefill') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    sendJson(res, getReviewPrefill(requestUrl.searchParams.get('date') || todayISO(), sessionRole));
-    return;
-  }
-
-  if (req.url?.startsWith('/api/reviews/trend') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const days = Math.max(7, Math.min(120, Number(requestUrl.searchParams.get('days') || 30)));
-    sendJson(res, { ...getCachedReviewTrend(days, todayISO()), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/reviews') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const from = requestUrl.searchParams.get('from') || '1900-01-01';
-    const to = requestUrl.searchParams.get('to') || '2999-12-31';
-    const limit = queryLimit(requestUrl.searchParams, 20, 100);
-    const offset = queryOffset(requestUrl.searchParams);
-    const total = Number(sqliteScalar(`SELECT COUNT(*) FROM daily_reviews
-WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`) || 0);
-    const paging = limit ? `LIMIT ${limit} OFFSET ${offset}` : '';
-    const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
-schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM daily_reviews
-WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
-ORDER BY date DESC
-${paging};`).map(normalizeReview);
-    sendJson(res, { reviews, total, limit, offset, readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/study-records') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const date = requestUrl.searchParams.get('date') || todayISO();
-    const records = sqliteJson(`SELECT id, date, project_id AS projectId, project_name_snapshot AS projectNameSnapshot, minutes, note,
-schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM study_time_records
-WHERE date = ${sqlString(date)}
-ORDER BY project_id;`);
-    sendJson(res, { records, readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/mock-exams') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    sendJson(res, getMockExamList(requestUrl, sessionRole));
-    return;
-  }
-
-  if (req.url === '/api/statistics/summary' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, getStatisticsSummary());
-    return;
-  }
-
-  if (req.url === '/api/error-themes/embedding/status' && req.method === 'GET') {
-    ensureSqliteStore();
-    const embeddingRows = Number(sqliteScalar('SELECT COUNT(*) FROM review_sentence_embeddings;') || 0);
-    sendJson(res, { ...getEmbeddingStatus(), embeddingRows, readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url === '/api/error-themes/options' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, { themes: getErrorThemeOptions(), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/error-themes/analysis') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const from = requestUrl.searchParams.get('from') || '1900-01-01';
-    const to = requestUrl.searchParams.get('to') || todayISO();
-    sendJson(res, { ...getCachedErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/error-themes/detail') && req.method === 'GET') {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const themeId = requestUrl.searchParams.get('themeId');
-    const from = requestUrl.searchParams.get('from') || '1900-01-01';
-    const to = requestUrl.searchParams.get('to') || todayISO();
-    const detail = getErrorThemeDetail(themeId, from, to);
-    if (!detail) {
-      sendJson(res, { error: 'Not found' }, 404);
-      return;
-    }
-    sendJson(res, { ...detail, readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url === '/api/error-themes/batch/status' && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, { job: currentErrorThemeJobSnapshot(), readOnly: sessionRole === 'read' });
-    return;
-  }
-
-  if (req.url === '/api/error-themes/batch/run' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    const periodStart = body.from || '1900-01-01';
-    const periodEnd = body.to || todayISO();
-    const result = startErrorThemeBatchJob({
-      periodStart,
-      periodEnd,
-      mode: body.mode === 'embedding' ? 'embedding' : 'rules',
-      trigger: 'manual',
-      modelProfile: body.modelProfile === 'small' ? 'small' : 'large',
-    });
-    sendJson(res, { ok: true, ...result });
-    return;
-  }
-
-  if (req.url === '/api/error-themes/corrections/save' && req.method === 'POST') {
-    const body = await readJsonBody(req);
-    const result = saveErrorThemeCorrection(body);
-    sendJson(res, { ...result, analysis: getErrorThemeAnalysis(body.from || '1900-01-01', body.to || todayISO()) });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/reports') && req.method === 'GET') {
-    ensureSqliteStore();
-    sendJson(res, { reports: listLearningReports() });
-    return;
-  }
-
-  if (req.url?.startsWith('/api/library')) {
-    ensureSqliteStore();
-    const requestUrl = new URL(req.url, 'http://localhost');
-    const pathname = requestUrl.pathname;
-
-    if (pathname === '/api/library/books' && req.method === 'GET') {
-      sendJson(res, listLibraryBooks({
-        search: requestUrl.searchParams.get('search') || '',
-        category: requestUrl.searchParams.get('category') || '',
-        sort: requestUrl.searchParams.get('sort') || 'recent',
-        includeArchived: requestUrl.searchParams.get('archived') === '1',
-      }, sessionRole));
-      return;
-    }
-
-    if (pathname === '/api/library/search' && req.method === 'GET') {
-      sendJson(res, searchLibrary(requestUrl.searchParams.get('q') || '', sessionRole));
-      return;
-    }
-
-    const textMatch = pathname.match(/^\/api\/library\/books\/(\d+)\/text$/);
-    if (textMatch && req.method === 'GET') {
-      sendJson(res, getLibraryText(Number(textMatch[1]), {
-        offset: requestUrl.searchParams.get('offset') || 0,
-        limit: requestUrl.searchParams.get('limit') || 80,
-      }));
-      return;
-    }
-
-    const fileMatch = pathname.match(/^\/api\/library\/books\/(\d+)\/file$/);
-    if (fileMatch && req.method === 'GET') {
-      serveLibraryFile(req, res, Number(fileMatch[1]), sessionRole);
-      return;
-    }
-
-    const detailMatch = pathname.match(/^\/api\/library\/books\/(\d+)$/);
-    if (detailMatch && req.method === 'GET') {
-      const detail = getLibraryBookDetail(Number(detailMatch[1]), sessionRole);
-      if (!detail) {
-        sendJson(res, { error: 'Not found' }, 404);
-        return;
-      }
-      sendJson(res, detail);
-      return;
-    }
-
-    if (pathname === '/api/library/upload' && req.method === 'POST') {
-      assertDiskSpace();
-      const rawBody = await readRawBody(req);
-      const form = parseMultipartForm(rawBody, String(req.headers['content-type'] || ''));
-      sendJson(res, { ok: true, detail: uploadLibraryBookFromMultipart(form.fields, form.files) });
-      return;
-    }
-
-    if (pathname === '/api/library/books/save' && req.method === 'POST') {
-      sendJson(res, { ok: true, book: saveLibraryMetadata(await readJsonBody(req)) });
-      return;
-    }
-
-    if (pathname === '/api/library/books/remove' && req.method === 'POST') {
-      const body = await readJsonBody(req);
-      deleteLibraryBook(body.id);
-      sendJson(res, { ok: true });
-      return;
-    }
-
-    if (pathname === '/api/library/progress' && req.method === 'POST') {
-      sendJson(res, saveLibraryProgress(await readJsonBody(req)));
-      return;
-    }
-
-    if (pathname === '/api/library/notes/save' && req.method === 'POST') {
-      sendJson(res, saveLibraryNote(await readJsonBody(req)));
-      return;
-    }
-
-    if (pathname === '/api/library/bookmarks/save' && req.method === 'POST') {
-      sendJson(res, saveLibraryBookmark(await readJsonBody(req)));
-      return;
-    }
-
-    if (pathname === '/api/library/bookmarks/remove' && req.method === 'POST') {
-      const body = await readJsonBody(req);
-      sendJson(res, deleteLibraryBookmark(body.id));
-      return;
-    }
-  }
-
-  if (req.url === '/api/reports/generate' && req.method === 'POST') {
-    ensureSqliteStore();
-    const body = await readJsonBody(req);
-    const kind = body.kind === 'monthly' ? 'monthly' : 'weekly';
-    const period = body.period === 'previous' ? previousPeriod(kind) : currentPeriod(kind);
-    const task = await runExclusiveTask(`report-${kind}-${body.periodStart || period.periodStart}-${body.periodEnd || period.periodEnd}`, 'manual', () =>
-      generateLearningReport(kind, body.periodStart || period.periodStart, body.periodEnd || period.periodEnd, 'manual'), { timeoutMs: 3 * 60 * 1000 });
-    sendJson(res, { ok: true, report: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
-    return;
-  }
-
-  if (req.url === '/api/briefs/settings' && req.method === 'POST') {
-    ensureSqliteStore();
-    const body = await readJsonBody(req);
-    sendJson(res, { settings: saveDailyBriefSettings(body), readOnly: false });
-    return;
-  }
-
-  if (req.url === '/api/briefs/generate' && req.method === 'POST') {
-    ensureSqliteStore();
-    const body = await readJsonBody(req);
-    const task = await runExclusiveTask('daily-brief', 'manual', () => generateDailyBrief({
-      date: body.date || todayISO(),
-      trigger: 'manual',
-      sendEmail: Boolean(body.sendEmail),
-      sendWechat: Boolean(body.sendWechat),
-    }), { timeoutMs: 4 * 60 * 1000 });
-    sendJson(res, { ok: true, brief: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
-    return;
-  }
-
-  if (req.url === '/api/briefs/send-latest' && req.method === 'POST') {
-    ensureSqliteStore();
-    const settings = getDailyBriefSettings({ includeSecret: true });
-    const latest = getLatestDailyBriefSummary();
-    if (!latest) {
-      sendJson(res, { error: 'No daily brief to send' }, 404);
-      return;
-    }
-    await sendDailyBriefEmail(latest.payload, settings.email);
-    const timestamp = nowISO();
-    runSqlite(`UPDATE daily_briefs SET emailed_at = ${sqlString(timestamp)}, email_error = '', updated_at = ${sqlString(timestamp)} WHERE id = ${sqlValue(latest.id)};`);
-    tableChanged();
-    sendJson(res, { ok: true, brief: getDailyBriefByDate(latest.date) });
-    return;
-  }
-
-  const body = req.method === 'POST' ? await readJsonBody(req) : {};
-  const timestamp = nowISO();
-
-  if (req.url === '/api/maintenance/sqlite' && req.method === 'POST') {
-    const task = await runExclusiveTask('sqlite-maintenance', 'manual', () => runSqliteMaintenance('manual'), { timeoutMs: 10 * 60 * 1000 });
-    sendJson(res, task.result);
-    return;
-  }
-
-  if (req.url === '/api/maintenance/precompute' && req.method === 'POST') {
-    const task = await runExclusiveTask('precompute', 'manual', () => precomputeNightlyArtifacts('manual'), { timeoutMs: 30 * 60 * 1000 });
-    sendJson(res, task.result);
-    return;
-  }
-
-  if (req.url === '/api/reset' && req.method === 'POST') {
-    writeState(baseState());
-    writeAuditEvent({ action: 'state_reset', req, actorRole: sessionRole });
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  const directRoutes = {
-    '/api/goals/save': () => saveGoalSql(body),
-    '/api/projects/save': () => saveProjectSql(body),
-    '/api/subjects/save': () => saveSubjectSql(body),
-    '/api/exams/save': () => saveExamSql(body),
-    '/api/tasks/save': () => saveTaskSql(body),
-  };
-
-  if (req.method === 'POST' && directRoutes[req.url]) {
-    sendJson(res, directRoutes[req.url]());
-    return;
-  }
-
-  if (req.url === '/api/goals/activate' && req.method === 'POST') {
-    runSqlite(`UPDATE goals SET is_active = CASE WHEN id = ${sqlValue(Number(body.id))} THEN 1 ELSE 0 END, updated_at = ${sqlValue(timestamp)};`);
-    tableChanged();
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/water/save' && req.method === 'POST') {
-    saveWaterSql(body);
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/settings/study-target' && req.method === 'POST') {
-    sendJson(res, saveStudyTargetMinutes(body));
-    return;
-  }
-
-  if (req.url === '/api/problem-inbox/save' && req.method === 'POST') {
-    const id = saveProblemInboxItem(body);
-    sendJson(res, { ok: true, id, item: listProblemInboxItems({ status: 'all', limit: 1, from: body.date || '1900-01-01', to: body.date || '2999-12-31' }).find((item) => item.id === id) || null });
-    return;
-  }
-
-  if (req.url === '/api/problem-inbox/status' && req.method === 'POST') {
-    setProblemInboxStatus(body.id, body.status);
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/problem-inbox/remove' && req.method === 'POST') {
-    deleteProblemInboxItem(body.id);
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  if (req.url === '/api/problem-inbox/resolve-date' && req.method === 'POST') {
-    sendJson(res, resolveProblemInboxForDate(body.date || todayISO()));
-    return;
-  }
-
-  if (req.url === '/api/goals/remove' && req.method === 'POST') runSqlite(`DELETE FROM goals WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/projects/remove' && req.method === 'POST') runSqlite(`UPDATE study_projects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/subjects/remove' && req.method === 'POST') runSqlite(`UPDATE subjects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/exams/remove' && req.method === 'POST') runSqlite(`DELETE FROM mock_exam_records WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/tasks/remove' && req.method === 'POST') runSqlite(`DELETE FROM short_term_tasks WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/tasks/toggle' && req.method === 'POST') runSqlite(`UPDATE short_term_tasks SET is_completed = ${sqlValue(Boolean(body.completed))}, completed_at = ${sqlValue(body.completed ? timestamp : null)}, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`);
-  else if (req.url === '/api/reviews/upsert' && req.method === 'POST') {
-    sendJson(res, upsertReviewSql(body));
-    return;
-  } else if (req.url === '/api/study-records/save-day' && req.method === 'POST') {
-    saveDayRecordsSql(body.date || todayISO(), body.records || []);
-    sendJson(res, { ok: true });
-    return;
-  } else if (req.method === 'POST' && req.url !== '/api/reset') {
-    sendJson(res, { error: 'Not found' }, 404);
-    return;
-  }
-
-  if (req.method === 'POST') {
-    tableChanged();
-    sendJson(res, { ok: true });
-    return;
-  }
-
-  const state = readState();
-
-  if (req.url === '/api/state' && req.method === 'GET') {
-    const normalized = {
-      ...state,
-      dailyReviews: state.dailyReviews.map(normalizeReview),
-      waterIntakeRecords: Array.isArray(state.waterIntakeRecords) ? state.waterIntakeRecords : [],
-      readOnly: sessionRole === 'read',
-    };
-    sendJson(res, normalized);
-    return;
-  }
+  if (await handleLearningWriteRoutes(req, res, {
+    sessionRole,
+    sendJson,
+    readJsonBody,
+    ensureSqliteStore,
+    currentPeriod,
+    previousPeriod,
+    runExclusiveTask,
+    generateLearningReport,
+    writeState,
+    baseState,
+    writeAuditEvent,
+    saveGoalSql,
+    saveProjectSql,
+    saveSubjectSql,
+    saveExamSql,
+    saveTaskSql,
+    runSqlite,
+    sqlValue,
+    nowISO,
+    saveWaterSql,
+    saveStudyTargetMinutes,
+    saveProblemInboxItem,
+    listProblemInboxItems,
+    setProblemInboxStatus,
+    deleteProblemInboxItem,
+    resolveProblemInboxForDate,
+    todayISO,
+    upsertReviewSql,
+    saveDayRecordsSql,
+    tableChanged,
+  })) return;
 
   sendJson(res, { error: 'Not found' }, 404);
 }
 
 validateStartupConfig();
+try {
+  ensureSqliteStore();
+  startupReady = true;
+} catch (error) {
+  startupError = redactSecretText(error.message || String(error));
+  logStructured('error', 'startup_store_initialization_failed', { error: startupError });
+  throw error;
+}
 
-const httpServer = createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   if (shuttingDown) {
     res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'connection': 'close' });
     res.end('server shutting down');
@@ -8740,7 +7381,7 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
     const password = params.get('password');
-    const role = password === appPassword ? 'write' : password === readOnlyPassword ? 'read' : '';
+    const role = password === appPassword ? 'write' : readOnlyPassword && password === readOnlyPassword ? 'read' : '';
     if (role) {
       recordLoginSuccess(clientIp);
       res.writeHead(302, {
@@ -8773,6 +7414,12 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  if (req.url?.startsWith('/ready')) {
+    const payload = getReadinessPayload();
+    sendJson(res, payload, payload.ok ? 200 : 503);
+    return;
+  }
+
   if (req.url?.startsWith('/api/')) {
     const startedAt = Date.now();
     const sessionRole = getSessionRole(req.headers.cookie) || '';
@@ -8792,7 +7439,8 @@ const httpServer = createServer(async (req, res) => {
       });
       if (!res.headersSent) {
         statusCode = error.statusCode || 500;
-        sendJson(res, { error: error.message || 'Server error' }, error.statusCode || 500);
+        const responseStatus = error.statusCode || 500;
+        sendJson(res, { error: responseStatus >= 500 ? 'Server error' : error.message || 'Request failed' }, responseStatus);
       } else {
         res.end();
       }
@@ -8825,25 +7473,52 @@ const httpServer = createServer(async (req, res) => {
 
   recordVisitEvent(req, pageSessionRole);
   serveStatic(req, res);
-}).listen(port, '127.0.0.1', () => {
-  try {
-    ensureSqliteStore();
-  } catch (error) {
-    logStructured('error', 'startup_store_initialization_failed', { error: redactSecretText(error.message || String(error)) });
-  }
-  logStructured('info', 'server_started', { url: `http://127.0.0.1:${port}`, config: getAppConfigSnapshot() });
-});
+};
+
+const safeRequestHandler = (req, res) => {
+  void requestHandler(req, res).catch((error) => {
+    logStructured('error', 'request_handler_failed', {
+      method: req.method,
+      path: (() => {
+        try { return new URL(req.url || '/', 'http://localhost').pathname; } catch { return '/'; }
+      })(),
+      error: redactSecretText(error.message || String(error)),
+    });
+    if (!res.headersSent) sendJson(res, { error: 'Server error' }, 500);
+    else res.end();
+  });
+};
+
+const httpServer = httpEnabled
+  ? createServer(safeRequestHandler).listen(port, '127.0.0.1', () => {
+      logStructured('info', 'server_started', { url: `http://127.0.0.1:${port}`, config: getAppConfigSnapshot() });
+    })
+  : null;
+
+if (!httpEnabled) {
+  workerKeepAliveTimer = setInterval(() => {}, 60 * 1000);
+  logStructured('info', 'background_worker_started', { config: getAppConfigSnapshot() });
+}
 
 function shutdown(signal) {
+  if (shuttingDown) return;
   shuttingDown = true;
   logStructured('info', 'server_shutdown_started', { signal });
   if (dailyBriefTimer) clearTimeout(dailyBriefTimer);
+  if (reportTimer) clearTimeout(reportTimer);
+  if (nightlyErrorThemeTimer) clearTimeout(nightlyErrorThemeTimer);
+  if (maintenanceTimer) clearTimeout(maintenanceTimer);
   if (taskReminderTimer) clearInterval(taskReminderTimer);
+  if (taskReminderInitialTimer) clearTimeout(taskReminderInitialTimer);
   if (notificationQueueTimer) clearInterval(notificationQueueTimer);
-  httpServer.close(() => {
+  if (workerKeepAliveTimer) clearInterval(workerKeepAliveTimer);
+  if (workerHeartbeatTimer) clearInterval(workerHeartbeatTimer);
+  const finish = () => {
     logStructured('info', 'server_shutdown_completed', { signal });
     process.exit(0);
-  });
+  };
+  if (httpServer) httpServer.close(finish);
+  else finish();
   setTimeout(() => {
     logStructured('error', 'server_shutdown_forced', { signal });
     process.exit(1);
@@ -8852,3 +7527,11 @@ function shutdown(signal) {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('uncaughtException', (error) => {
+  logStructured('error', 'uncaught_exception', { error: redactSecretText(error?.stack || error?.message || String(error)) });
+  process.exit(1);
+});
+process.on('unhandledRejection', (error) => {
+  logStructured('error', 'unhandled_rejection', { error: redactSecretText(error?.stack || error?.message || String(error)) });
+  process.exit(1);
+});

@@ -11,15 +11,11 @@ const StudyTimePage = lazy(() => routeLoaders.studyTime().then((module) => ({ de
 const ReviewsPage = lazy(() => routeLoaders.reviews().then((module) => ({ default: module.ReviewsPage })));
 const ReviewInsightsPage = lazy(() => routeLoaders.reviewInsights().then((module) => ({ default: module.ReviewInsightsPage })));
 const LearningProgressPage = lazy(() => routeLoaders.progress().then((module) => ({ default: module.LearningProgressPage })));
-const StudyPetStatsPage = lazy(() => routeLoaders.studyPetStats().then((module) => ({ default: module.StudyPetStatsPage })));
-const ProjectProgressPage = lazy(() => routeLoaders.projectProgress().then((module) => ({ default: module.ProjectProgressPage })));
 const GoalReviewPage = lazy(() => routeLoaders.goalReview().then((module) => ({ default: module.GoalReviewPage })));
-const NotificationsPage = lazy(() => routeLoaders.notifications().then((module) => ({ default: module.NotificationsPage })));
+const CalendarPage = lazy(() => routeLoaders.calendar().then((module) => ({ default: module.CalendarPage })));
 const OperationsPage = lazy(() => routeLoaders.operations().then((module) => ({ default: module.OperationsPage })));
 const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ default: module.MockExamsPage })));
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
-const LibraryPage = lazy(() => routeLoaders.library().then((module) => ({ default: module.LibraryPage })));
-const LibraryReaderPage = lazy(() => routeLoaders.libraryReader().then((module) => ({ default: module.LibraryReaderPage })));
 const SettingsPage = lazy(() => routeLoaders.settings().then((module) => ({ default: module.SettingsPage })));
 const MigrateLocalDataPage = lazy(() => routeLoaders.migrateLocalData().then((module) => ({ default: module.MigrateLocalDataPage })));
 
@@ -46,18 +42,20 @@ export const router = createBrowserRouter([
       { path: 'reviews', element: lazyElement(<ReviewsPage />) },
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'progress', element: lazyElement(<LearningProgressPage />) },
-      { path: 'study-pet-stats', element: lazyElement(<StudyPetStatsPage />) },
-      { path: 'project-progress', element: lazyElement(<ProjectProgressPage />) },
+      { path: 'project-progress', element: <Navigate to="/" replace /> },
       { path: 'goal-review', element: lazyElement(<GoalReviewPage />) },
-      { path: 'notifications', element: lazyElement(<NotificationsPage />) },
+      { path: 'calendar', element: lazyElement(<CalendarPage />) },
+      { path: 'notifications', element: <Navigate to="/" replace /> },
+      { path: 'market-copilot', element: <Navigate to="/" replace /> },
       { path: 'task-center', element: <Navigate to="/operations" replace /> },
       { path: 'operations', element: lazyElement(<OperationsPage />) },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
       { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },
-      { path: 'library', element: lazyElement(<LibraryPage />) },
-      { path: 'library/:id/read', element: lazyElement(<LibraryReaderPage />) },
+      { path: 'library', element: <Navigate to="/" replace /> },
+      { path: 'library/:id/read', element: <Navigate to="/" replace /> },
       { path: 'settings', element: lazyElement(<SettingsPage />) },
       { path: 'migrate-local-data', element: lazyElement(<MigrateLocalDataPage />) },
+      { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
 ]);

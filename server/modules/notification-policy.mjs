@@ -8,3 +8,26 @@ export function classifyNotificationFailure(error = '') {
   }
   return { retryable: true, status: 'failed', action: '检查通知通道配置与服务日志。' };
 }
+
+export function isWechatQuietHours(date = new Date()) {
+  const hour = Number(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    hour12: false,
+  }).format(date));
+  return hour >= 3 && hour < 7;
+}
+
+export function nextWechatActiveAt(date = new Date()) {
+  const china = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  const targetUtcMs = Date.UTC(
+    china.getUTCFullYear(),
+    china.getUTCMonth(),
+    china.getUTCDate(),
+    7 - 8,
+    0,
+    0,
+    0,
+  );
+  return new Date(targetUtcMs <= date.getTime() ? targetUtcMs + 24 * 60 * 60 * 1000 : targetUtcMs).toISOString();
+}

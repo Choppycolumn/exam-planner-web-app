@@ -1,0 +1,31 @@
+param(
+  [string]$HostName = "8.130.68.9",
+  [string]$UserName = "root",
+  [string]$Password = $env:EXAM_PLANNER_SSH_PASSWORD
+)
+
+$ErrorActionPreference = "Stop"
+if (-not $Password) { throw "Set EXAM_PLANNER_SSH_PASSWORD or pass -Password." }
+$root = Split-Path -Parent $PSScriptRoot
+$tools = Join-Path (Split-Path -Parent $root) ".codex-tools"
+$plink = Join-Path $tools "plink.exe"
+$pscp = Join-Path $tools "pscp.exe"
+$stamp = Get-Date -Format "yyyyMMddHHmmss"
+$package = Join-Path ([IO.Path]::GetTempPath()) "exam-planner-$stamp.tgz"
+$remotePackage = "/tmp/exam-planner-$stamp.tgz"
+$remoteScript = "/tmp/exam-planner-remote-deploy-$stamp.sh"
+$hostKey = "SHA256:eSJBs+4ykcbdr6Mr36OB3ia486CDfyOGeY/ggSGp2v8"
+
+Push-Location $root
+try {
+  tar -czf $package dist server public package.json package-lock.json docs scripts infra README.md
+  & $pscp -batch -hostkey $hostKey -pw $Password $package "${UserName}@${HostName}:$remotePackage"
+  if ($LASTEXITCODE -ne 0) { throw "Upload failed." }
+  & $pscp -batch -hostkey $hostKey -pw $Password (Join-Path $root "scripts\remote-deploy.sh") "${UserName}@${HostName}:$remoteScript"
+  if ($LASTEXITCODE -ne 0) { throw "Deployment script upload failed." }
+  & $plink -batch -ssh -hostkey $hostKey -pw $Password "${UserName}@${HostName}" "bash '$remoteScript' '$remotePackage'; status=`$?; rm -f '$remoteScript'; exit `$status"
+  if ($LASTEXITCODE -ne 0) { throw "Remote deployment failed and rollback was attempted." }
+} finally {
+  Pop-Location
+  Remove-Item -LiteralPath $package -Force -ErrorAction SilentlyContinue
+}
