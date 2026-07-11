@@ -1,4 +1,4 @@
-import { Bell, Cloud, Download, Hourglass, Mail, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
+import { Cloud, Download, Hourglass, RotateCcw, ShieldCheck, Trash2, UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
@@ -18,126 +18,9 @@ import {
 import { buildExport, loadGroups, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordGroup } from '../features/confusing-words/types';
 
-const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
-const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
-const LEGACY_BACKUP_PASSWORD_KEY = 'examPlanner.confusingWords.backupPassword';
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-const backupKindLabel: Record<string, string> = {
-  manual: '手动',
-  weekly: '每周',
-  'pre-tables': '拆表前',
-  'pre-restore': '恢复前',
-  restore: '恢复记录',
-};
-
-type SettingsTab = 'all' | 'general' | 'briefs' | 'backups' | 'goals' | 'dictionary' | 'danger';
-
-const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
-  { id: 'all', label: '全部', description: '显示所有设置块' },
-  { id: 'general', label: '基础', description: '数据说明与学习目标' },
-  { id: 'briefs', label: '通知', description: '晨间简报与邮件' },
-  { id: 'backups', label: '备份', description: '服务器快照与恢复' },
-  { id: 'goals', label: '目标', description: '长期目标管理' },
-  { id: 'dictionary', label: '词典', description: '易混词数据同步' },
-  { id: 'danger', label: '危险区', description: '重置与清空' },
-];
-
-const weeklyPushDays = [
-  { key: 'monday', label: '周一' },
-  { key: 'tuesday', label: '周二' },
-  { key: 'wednesday', label: '周三' },
-  { key: 'thursday', label: '周四' },
-  { key: 'friday', label: '周五' },
-  { key: 'saturday', label: '周六' },
-  { key: 'sunday', label: '周日' },
-] as const;
-
-function defaultEnglishWritingPlan() {
-  return {
-    enabled: true,
-    showOnDashboard: true,
-    includeInBrief: true,
-    dailyMinutes: '20-25 分钟',
-    currentStageId: 'foundation',
-    stages: [
-      { id: 'foundation', name: '基础修复期', weeks: '第 1-4 周', focus: '把中文想法变成正确英文；修拼写、语法、搭配' },
-      { id: 'past-paper', name: '真题强化期', weeks: '第 5-10 周', focus: '开始稳定写真题小作文和大作文，形成解题流程' },
-      { id: 'sprint', name: '高分冲刺期', weeks: '第 11-19 周', focus: '限时写作、整卷训练、减少低级错误' },
-      { id: 'stabilize', name: '考前稳定期', weeks: '第 20-24 周', focus: '固化自己的表达库，减少分数波动' },
-    ],
-    weeklyTasks: {
-      monday: '6 句应用文功能句：邀请、建议、感谢、投诉等',
-      tuesday: '真题或模拟题小作文：只写开头 + 主体段',
-      wednesday: '修改周二作文，整理错误表达',
-      thursday: '大作文：英文提纲 + 图画描述段',
-      friday: '大作文：写一个主体分析段',
-      saturday: '完整小作文一篇，限时 15 分钟',
-      sunday: '闭卷重写本周小作文 + 复盘错句',
-    },
-  };
-}
-
-function defaultBriefSettings(): DailyBriefSettings {
-  const englishWritingPlan = defaultEnglishWritingPlan();
-  return {
-    enabled: true,
-    generateTime: '08:00',
-    cityName: '北京',
-    latitude: 39.9042,
-    longitude: 116.4074,
-    marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
-    wechat: {
-      enabled: true,
-    },
-    taskReminders: {
-      enabled: true,
-      count: 1,
-      offsetsMinutes: [60],
-    },
-    customWeeklyPush: {
-      enabled: true,
-      days: {
-        monday: '',
-        tuesday: '',
-        wednesday: '',
-        thursday: '',
-        friday: '',
-        saturday: '',
-        sunday: '',
-      },
-    },
-    englishWritingPlan,
-    email: {
-      enabled: false,
-      host: '',
-      port: 465,
-      secureMode: 'ssl',
-      username: '',
-      password: '',
-      from: '',
-      to: '',
-      subjectPrefix: 'Exam Planner 今日简报',
-    },
-  };
-}
-
-function parseReminderOffsets(value: string) {
-  const offsets = value
-    .split(/[,\s，、]+/)
-    .map((item) => Math.round(Number(item.trim())))
-    .filter((item) => Number.isInteger(item) && item >= 0 && item <= 30 * 24 * 60);
-  return Array.from(new Set(offsets)).sort((a, b) => b - a).slice(0, 5);
-}
-
-function reminderOffsetsText(settings: DailyBriefSettings) {
-  return (settings.taskReminders?.offsetsMinutes?.length ? settings.taskReminders.offsetsMinutes : [60]).join(', ');
-}
+import { BACKUP_BASE_URL_KEY, BACKUP_META_KEY, LEGACY_BACKUP_PASSWORD_KEY, backupKindLabel, defaultBriefSettings, formatBytes, parseReminderOffsets, reminderOffsetsText, type SettingsTab } from '../features/settings/settingsModel';
+import { SettingsNavigation } from '../features/settings/SettingsNavigation';
+import { BriefSettingsSection } from '../features/settings/BriefSettingsSection';
 
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
@@ -428,26 +311,7 @@ export function SettingsPage() {
 
   const confusingLocalWordCount = confusingGroups.reduce((sum, group) => sum + group.words.length, 0);
   const confusingServerWordCount = confusingServerBackup?.groups.reduce((sum, group) => sum + group.words.length, 0) ?? 0;
-  const englishPlanDefaults = defaultBriefSettings().englishWritingPlan;
-  const englishPlan = {
-    ...englishPlanDefaults,
-    ...(briefSettings.englishWritingPlan ?? {}),
-    stages: briefSettings.englishWritingPlan?.stages?.length ? briefSettings.englishWritingPlan.stages : englishPlanDefaults.stages,
-    weeklyTasks: {
-      ...englishPlanDefaults.weeklyTasks,
-      ...(briefSettings.englishWritingPlan?.weeklyTasks ?? {}),
-    },
-  };
-  const updateEnglishPlan = (patch: Partial<DailyBriefSettings['englishWritingPlan']>) => {
-    setBriefSettings({ ...briefSettings, englishWritingPlan: { ...englishPlan, ...patch } });
-  };
-  const updateEnglishStage = (index: number, patch: Partial<DailyBriefSettings['englishWritingPlan']['stages'][number]>) => {
-    const stages = englishPlan.stages.map((stage, stageIndex) => (stageIndex === index ? { ...stage, ...patch } : stage));
-    updateEnglishPlan({ stages });
-  };
-  const updateEnglishWeeklyTask = (key: keyof DailyBriefSettings['englishWritingPlan']['weeklyTasks'], value: string) => {
-    updateEnglishPlan({ weeklyTasks: { ...englishPlan.weeklyTasks, [key]: value } });
-  };
+
 
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
@@ -456,30 +320,7 @@ export function SettingsPage() {
         <MetricCard label="学习记录" value={`${studyRecords.length} 条`} />
         <MetricCard label="模考记录" value={`${exams.length} 条`} />
       </div>
-      <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">系统设置中心</h2>
-            <p className="mt-1 text-sm text-slate-500">按基础配置、通知、备份、目标、词典和危险操作分组，减少长页面滚动成本。</p>
-          </div>
-          <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
-            当前：{settingsTabs.find((tab) => tab.id === settingsTab)?.label}
-          </span>
-        </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
-          {settingsTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`rounded-lg border px-3 py-2 text-left transition ${settingsTab === tab.id ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}
-              onClick={() => setSettingsTab(tab.id)}
-            >
-              <span className="block text-sm font-semibold">{tab.label}</span>
-              <span className="mt-1 block text-xs opacity-75">{tab.description}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <SettingsNavigation current={settingsTab} onChange={setSettingsTab} />
       <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">数据保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
@@ -506,225 +347,17 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
-      <div className={showSection('briefs') ? 'mt-5 card p-5' : 'hidden'}>
-        <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
-            <input
-              type="checkbox"
-              checked={briefSettings.enabled}
-              onChange={(event) => setBriefSettings({ ...briefSettings, enabled: event.target.checked })}
-            />
-            自动生成简报
-          </label>
-          <label>
-            <span className="label">生成时间</span>
-            <input className="field" type="time" value={briefSettings.generateTime} onChange={(event) => setBriefSettings({ ...briefSettings, generateTime: event.target.value })} />
-          </label>
-          <label>
-            <span className="label">城市名称</span>
-            <input className="field" value={briefSettings.cityName} onChange={(event) => setBriefSettings({ ...briefSettings, cityName: event.target.value })} />
-          </label>
-          <label>
-            <span className="label">下一次自动生成</span>
-            <input className="field" readOnly value={briefSettings.nextDailyBriefAt ? new Date(briefSettings.nextDailyBriefAt).toLocaleString() : '保存后计算'} />
-          </label>
-          <label>
-            <span className="label">纬度</span>
-            <input className="field" type="number" step="0.0001" value={briefSettings.latitude} onChange={(event) => setBriefSettings({ ...briefSettings, latitude: Number(event.target.value) })} />
-          </label>
-          <label>
-            <span className="label">经度</span>
-            <input className="field" type="number" step="0.0001" value={briefSettings.longitude} onChange={(event) => setBriefSettings({ ...briefSettings, longitude: Number(event.target.value) })} />
-          </label>
-        </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <label>
-            <span className="label">指数/资产（名称|代码，每行一个）</span>
-            <textarea className="field min-h-32" value={briefSettings.marketSymbolsText} onChange={(event) => setBriefSettings({ ...briefSettings, marketSymbolsText: event.target.value })} />
-            <p className="mt-1 text-xs leading-5 text-slate-500">直接在这里加一行即可，例如“纳斯达克|^IXIC”“BNB|BNB-USD”“苹果|AAPL”。支持常见美股、A 股、部分指数和主流加密资产。</p>
-          </label>
-        </div>
-        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-800">
-            <input
-              type="checkbox"
-              checked={briefSettings.wechat?.enabled ?? false}
-              onChange={(event) => setBriefSettings({ ...briefSettings, wechat: { ...briefSettings.wechat, enabled: event.target.checked } })}
-            />
-            <Bell size={16} />启用微信每日推送
-          </label>
-          <div className="mb-4 rounded-lg border border-blue-100 bg-white p-4">
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <input
-                type="checkbox"
-                checked={briefSettings.taskReminders?.enabled ?? true}
-                onChange={(event) => setBriefSettings({
-                  ...briefSettings,
-                  taskReminders: { ...(briefSettings.taskReminders ?? defaultBriefSettings().taskReminders), enabled: event.target.checked },
-                })}
-              />
-              <Bell size={16} />启用定时待办微信提醒
-            </label>
-            <div className="mt-3 grid gap-3 md:grid-cols-[160px_1fr]">
-              <label>
-                <span className="label">提醒次数</span>
-                <input
-                  className="field"
-                  type="number"
-                  min={1}
-                  max={5}
-                  value={briefSettings.taskReminders?.count ?? 1}
-                  onChange={(event) => setBriefSettings({
-                    ...briefSettings,
-                    taskReminders: {
-                      ...(briefSettings.taskReminders ?? defaultBriefSettings().taskReminders),
-                      count: Math.max(1, Math.min(5, Number(event.target.value) || 1)),
-                    },
-                  })}
-                />
-              </label>
-              <label>
-                <span className="label">每次提前分钟</span>
-                <input
-                  className="field"
-                  placeholder="60 或 120, 60, 15"
-                  value={taskReminderOffsetsText}
-                  onChange={(event) => setTaskReminderOffsetsText(event.target.value)}
-                />
-                <p className="mt-1 text-xs leading-5 text-slate-500">多个提醒用逗号分隔；例如 120, 60, 15 表示提前 2 小时、1 小时、15 分钟各提醒一次。</p>
-              </label>
-            </div>
-          </div>
-          <div className="mb-4 rounded-lg border border-emerald-100 bg-white p-4">
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <input
-                type="checkbox"
-                checked={briefSettings.customWeeklyPush?.enabled ?? true}
-                onChange={(event) => setBriefSettings({
-                  ...briefSettings,
-                  customWeeklyPush: { ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush), enabled: event.target.checked },
-                })}
-              />
-              <Bell size={16} />启用每周自定义推送栏目
-            </label>
-            <p className="mt-2 text-xs leading-5 text-slate-500">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              {weeklyPushDays.map((day) => (
-                <label key={day.key}>
-                  <span className="label">{day.label}推送内容</span>
-                  <textarea
-                    className="field min-h-24"
-                    placeholder={`${day.label}要推送给自己的固定提醒`}
-                    value={briefSettings.customWeeklyPush?.days?.[day.key] ?? ''}
-                    onChange={(event) => setBriefSettings({
-                      ...briefSettings,
-                      customWeeklyPush: {
-                        ...(briefSettings.customWeeklyPush ?? defaultBriefSettings().customWeeklyPush),
-                        days: {
-                          ...(briefSettings.customWeeklyPush?.days ?? defaultBriefSettings().customWeeklyPush.days),
-                          [day.key]: event.target.value,
-                        },
-                      },
-                    })}
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="mb-4 rounded-lg border border-indigo-100 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">英语写作计划</h3>
-                <p className="mt-1 text-xs leading-5 text-slate-500">主页展示当前阶段和今日任务；每日简报会按当天星期自动带上对应写作安排。</p>
-              </div>
-              <div className="flex flex-wrap gap-3 text-sm font-semibold text-slate-700">
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={englishPlan.enabled} onChange={(event) => updateEnglishPlan({ enabled: event.target.checked })} />
-                  启用
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={englishPlan.showOnDashboard} onChange={(event) => updateEnglishPlan({ showOnDashboard: event.target.checked })} />
-                  主页显示
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={englishPlan.includeInBrief} onChange={(event) => updateEnglishPlan({ includeInBrief: event.target.checked })} />
-                  写入简报
-                </label>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr]">
-              <label>
-                <span className="label">每日用时</span>
-                <input className="field" value={englishPlan.dailyMinutes} onChange={(event) => updateEnglishPlan({ dailyMinutes: event.target.value })} />
-              </label>
-              <label>
-                <span className="label">当前阶段</span>
-                <select className="field" value={englishPlan.currentStageId} onChange={(event) => updateEnglishPlan({ currentStageId: event.target.value })}>
-                  {englishPlan.stages.map((stage) => (
-                    <option key={stage.id} value={stage.id}>{stage.name}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {englishPlan.stages.map((stage, index) => (
-                <div key={stage.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <div className="grid gap-2 md:grid-cols-[1fr_120px]">
-                    <label>
-                      <span className="label">阶段名称</span>
-                      <input className="field" value={stage.name} onChange={(event) => updateEnglishStage(index, { name: event.target.value })} />
-                    </label>
-                    <label>
-                      <span className="label">时间</span>
-                      <input className="field" value={stage.weeks} onChange={(event) => updateEnglishStage(index, { weeks: event.target.value })} />
-                    </label>
-                  </div>
-                  <label className="mt-2 block">
-                    <span className="label">这一阶段要解决什么</span>
-                    <textarea className="field min-h-20" value={stage.focus} onChange={(event) => updateEnglishStage(index, { focus: event.target.value })} />
-                  </label>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {weeklyPushDays.map((day) => (
-                <label key={day.key}>
-                  <span className="label">{day.label}写作任务</span>
-                  <textarea
-                    className="field min-h-20"
-                    value={englishPlan.weeklyTasks[day.key]}
-                    onChange={(event) => updateEnglishWeeklyTask(day.key, event.target.value)}
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-            <input
-              type="checkbox"
-              checked={briefSettings.email.enabled}
-              onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, enabled: event.target.checked } })}
-            />
-            <Mail size={16} />启用邮件推送
-          </label>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <label><span className="label">SMTP Host</span><input className="field" placeholder="smtp.example.com" value={briefSettings.email.host} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, host: event.target.value } })} /></label>
-            <label><span className="label">端口</span><input className="field" type="number" value={briefSettings.email.port} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, port: Number(event.target.value) } })} /></label>
-            <label><span className="label">加密方式</span><select className="field" value={briefSettings.email.secureMode} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, secureMode: event.target.value as DailyBriefSettings['email']['secureMode'] } })}><option value="ssl">SSL</option><option value="starttls">STARTTLS</option><option value="none">无</option></select></label>
-            <label><span className="label">账号</span><input className="field" value={briefSettings.email.username} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, username: event.target.value } })} /></label>
-            <label><span className="label">密码 / 授权码</span><input className="field" type="password" placeholder={briefSettings.email.hasPassword ? '已保存，留空则不修改' : ''} value={briefSettings.email.password} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, password: event.target.value } })} /></label>
-            <label><span className="label">邮件标题前缀</span><input className="field" value={briefSettings.email.subjectPrefix} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, subjectPrefix: event.target.value } })} /></label>
-            <label><span className="label">发件人</span><input className="field" placeholder="me@example.com" value={briefSettings.email.from} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, from: event.target.value } })} /></label>
-            <label className="md:col-span-2"><span className="label">收件人（多个用逗号分隔）</span><input className="field" placeholder="me@example.com" value={briefSettings.email.to} onChange={(event) => setBriefSettings({ ...briefSettings, email: { ...briefSettings.email, to: event.target.value } })} /></label>
-          </div>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button className="btn btn-primary" disabled={readOnly || briefLoading} onClick={() => void saveBriefSettings()}><Bell size={16} />保存简报设置</button>
-          <button className="btn btn-soft" disabled={readOnly || briefLoading} onClick={() => void generateBriefNow()}><Cloud size={16} />立即生成今日简报</button>
-        </div>
-      </div>
+      <BriefSettingsSection
+        visible={showSection('briefs')}
+        settings={briefSettings}
+        onChange={setBriefSettings}
+        reminderOffsets={taskReminderOffsetsText}
+        onReminderOffsetsChange={setTaskReminderOffsetsText}
+        readOnly={readOnly}
+        loading={briefLoading}
+        onSave={saveBriefSettings}
+        onGenerate={generateBriefNow}
+      />
       <div className={showSection('backups') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">服务器备份系统</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">服务器会每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。词典已建立本地 SQLite 索引，查询时不依赖外部 API。</p>

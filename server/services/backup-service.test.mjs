@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { resolveBackupPath } from '../modules/backup-validation.mjs';
 import { createSqliteRepository, sqliteIntegrityCheck } from '../modules/sqlite-repository.mjs';
-import { sqlitePath } from '../core/sqlite-cli.mjs';
+import { createBackupRepository } from '../repositories/backup-repository.mjs';
 import { createBackupService } from './backup-service.mjs';
 
 const directories = [];
@@ -17,6 +17,7 @@ describe('backup service with persistent sqlite', () => {
     const sqliteFile = join(dataDir, 'app.sqlite');
     const backupsDir = join(dataDir, 'backups');
     const repository = createSqliteRepository({ sqliteFile, dataDir });
+    const backupRepository = createBackupRepository(repository);
     repository.run(`CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);
 CREATE TABLE backup_log(id INTEGER PRIMARY KEY,kind TEXT,file_path TEXT,created_at TEXT,note TEXT);
 CREATE TABLE dictionary_entries(word TEXT PRIMARY KEY);
@@ -24,8 +25,7 @@ CREATE TABLE sample(value TEXT);
 INSERT INTO sample VALUES ('before');`);
     const service = createBackupService({
       backupsDir, sqliteFile, libraryDir: '', libraryFilesDir: '', assertDiskSpace: () => {},
-      runSqlite: repository.run, sqliteIntegrityCheck, sqlitePath,
-      sqlString: repository.sqlString, sqliteScalar: repository.scalar, sqliteJson: repository.json,
+      repository: backupRepository, sqliteIntegrityCheck,
       nowISO: () => new Date().toISOString(), resolveBackupPath, redactSecretText: String,
       ensureSqliteStore: () => repository.open(), resetSqliteRuntime: repository.close,
     });

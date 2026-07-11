@@ -6,9 +6,7 @@ export async function handleBriefRoutes(req, res, {
   queryLimit,
   todayISO,
   nowISO,
-  sqlString,
-  sqlValue,
-  runSqlite,
+  dailyBriefRepository,
   tableChanged,
   runExclusiveTask,
   getDailyBriefSettings,
@@ -65,7 +63,7 @@ export async function handleBriefRoutes(req, res, {
     }
     await sendDailyBriefEmail(latest.payload, settings.email);
     const timestamp = nowISO();
-    runSqlite(`UPDATE daily_briefs SET emailed_at = ${sqlString(timestamp)}, email_error = '', updated_at = ${sqlString(timestamp)} WHERE id = ${sqlValue(latest.id)};`);
+    dailyBriefRepository.markEmailed(latest.id, timestamp);
     tableChanged();
     sendJson(res, { ok: true, brief: getDailyBriefByDate(latest.date) });
     return true;

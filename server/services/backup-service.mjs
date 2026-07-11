@@ -7,12 +7,8 @@ export function createBackupService({
   libraryDir,
   libraryFilesDir,
   assertDiskSpace,
-  runSqlite,
+  repository,
   sqliteIntegrityCheck,
-  sqlitePath,
-  sqlString,
-  sqliteScalar,
-  sqliteJson,
   nowISO,
   resolveBackupPath,
   redactSecretText,
@@ -23,16 +19,14 @@ export function createBackupService({
 
   function persistBackupVerification(result) {
     backupVerificationCache = result;
-    runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('last_backup_verification_json', ${sqlString(JSON.stringify(result))}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    repository.setMetadata('last_backup_verification_json', JSON.stringify(result));
     return result;
   }
 
   function storedBackupVerification() {
     if (backupVerificationCache) return backupVerificationCache;
     try {
-      const raw = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_backup_verification_json' LIMIT 1;");
+      const raw = repository.getMetadata('last_backup_verification_json');
       backupVerificationCache = raw ? JSON.parse(raw) : null;
     } catch {
       backupVerificationCache = null;
@@ -46,9 +40,9 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     const timestamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, `-${Date.now() % 1000}Z`);
     const filePath = join(backupsDir, `exam-planner-${kind}-${timestamp}.sqlite`);
     let libraryArchivePath = null;
-    runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
+    repository.checkpoint();
     if (existsSync(filePath)) unlinkSync(filePath);
-    runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
+    repository.vacuumInto(filePath);
     const integrity = sqliteIntegrityCheck(filePath);
     if (integrity !== 'ok') {
       try {
@@ -58,18 +52,13 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
       }
       throw new Error(`Backup integrity check failed: ${integrity}`);
     }
-    runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
-VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
+    repository.recordBackup(kind, filePath, note);
     persistBackupVerification({ ok: true, checkedAt: nowISO(), fileName: filePath.split(/[\\/]/).pop() || '', integrity: 'ok' });
     if (kind === 'weekly') {
-      runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('last_weekly_backup_at', ${sqlString(nowISO())}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+      repository.setMetadata('last_weekly_backup_at', nowISO());
     }
     if (kind === 'daily') {
-      runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES ('last_daily_backup_at', ${sqlString(nowISO())}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+      repository.setMetadata('last_daily_backup_at', nowISO());
     }
     return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
   }
@@ -105,7 +94,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     }
 
     const safetyBackup = createBackupFile('pre-restore', `automatic safety backup before restoring ${fileName}`);
-    runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
+    repository.checkpoint();
     resetSqliteRuntime?.();
     copyFileSync(sourceFile, sqliteFile);
     for (const suffix of ['-wal', '-shm']) {
@@ -113,8 +102,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
       if (existsSync(sidecar)) unlinkSync(sidecar);
     }
     ensureSqliteStore();
-    runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
-VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`restored from ${fileName}; safety backup ${safetyBackup.filePath}`)});`);
+    repository.recordBackup('restore', sourceFile, `restored from ${fileName}; safety backup ${safetyBackup.filePath}`);
     return { restoredFrom: fileName, safetyBackup };
   }
 
@@ -149,7 +137,7 @@ VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`resto
   }
 
   function ensureDailyBackup() {
-    const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+    const lastBackupAt = repository.getMetadata('last_daily_backup_at');
     const oneDayMs = 24 * 60 * 60 * 1000;
     if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneDayMs) {
       createBackupFile('daily', 'automatic daily backup');
@@ -158,7 +146,7 @@ VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`resto
   }
 
   function ensureWeeklyBackup() {
-    const lastBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+    const lastBackupAt = repository.getMetadata('last_weekly_backup_at');
     const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
     if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneWeekMs) {
       createBackupFile('weekly', 'automatic weekly backup');
@@ -186,21 +174,18 @@ VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`resto
   function getBackupStatus({ verifyLatest = false } = {}) {
     ensureSqliteStore();
     const backups = listBackupFiles();
-    const backupRows = sqliteJson(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
-FROM backup_log
-ORDER BY datetime(created_at) DESC
-LIMIT 1;`);
-    const dictionaryCount = Number(sqliteScalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
-    const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
-    const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
-    const dictionaryIndexedAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'dictionary_indexed_at' LIMIT 1;");
+    const lastBackup = repository.latestBackup();
+    const dictionaryCount = repository.dictionaryCount();
+    const lastWeeklyBackupAt = repository.getMetadata('last_weekly_backup_at');
+    const lastDailyBackupAt = repository.getMetadata('last_daily_backup_at');
+    const dictionaryIndexedAt = repository.getMetadata('dictionary_indexed_at');
     return {
       storage: 'sqlite-tables',
       sqliteFile,
       sqliteSizeBytes: existsSync(sqliteFile) ? statSync(sqliteFile).size : 0,
       backupCount: backups.length,
       backups,
-      lastBackup: backupRows[0] || null,
+      lastBackup,
       latestVerification: latestBackupVerification(backups, { force: verifyLatest }),
       lastDailyBackupAt: lastDailyBackupAt || null,
       lastWeeklyBackupAt: lastWeeklyBackupAt || null,
@@ -210,14 +195,14 @@ LIMIT 1;`);
   }
 
   function nextWeeklyBackupAt() {
-    const lastWeeklyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_weekly_backup_at' LIMIT 1;");
+    const lastWeeklyBackupAt = repository.getMetadata('last_weekly_backup_at');
     if (!lastWeeklyBackupAt) return nowISO();
     const next = new Date(new Date(lastWeeklyBackupAt).getTime() + 7 * 24 * 60 * 60 * 1000);
     return next.toISOString();
   }
 
   function nextDailyBackupAt() {
-    const lastDailyBackupAt = sqliteScalar("SELECT value FROM app_metadata WHERE key = 'last_daily_backup_at' LIMIT 1;");
+    const lastDailyBackupAt = repository.getMetadata('last_daily_backup_at');
     if (!lastDailyBackupAt) return nowISO();
     const next = new Date(new Date(lastDailyBackupAt).getTime() + 24 * 60 * 60 * 1000);
     return next.toISOString();

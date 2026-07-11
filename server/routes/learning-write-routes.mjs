@@ -18,8 +18,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
     saveSubjectSql,
     saveExamSql,
     saveTaskSql,
-    runSqlite,
-    sqlValue,
+    learningRepository,
     nowISO,
     saveWaterSql,
     saveStudyTargetMinutes,
@@ -74,7 +73,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/goals/activate') {
-    runSqlite(`UPDATE goals SET is_active = CASE WHEN id = ${sqlValue(Number(body.id))} THEN 1 ELSE 0 END, updated_at = ${sqlValue(timestamp)};`);
+    learningRepository.activateGoal(Number(body.id), timestamp);
     tableChanged();
     sendJson(res, { ok: true });
     return true;
@@ -131,17 +130,17 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
     return true;
   }
 
-  const statementBuilders = {
-    '/api/goals/remove': () => `DELETE FROM goals WHERE id = ${sqlValue(Number(body.id))};`,
-    '/api/projects/remove': () => `UPDATE study_projects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`,
-    '/api/subjects/remove': () => `UPDATE subjects SET is_active = 0, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`,
-    '/api/exams/remove': () => `DELETE FROM mock_exam_records WHERE id = ${sqlValue(Number(body.id))};`,
-    '/api/tasks/remove': () => `DELETE FROM short_term_tasks WHERE id = ${sqlValue(Number(body.id))};`,
-    '/api/tasks/toggle': () => `UPDATE short_term_tasks SET is_completed = ${sqlValue(Boolean(body.completed))}, completed_at = ${sqlValue(body.completed ? timestamp : null)}, updated_at = ${sqlValue(timestamp)} WHERE id = ${sqlValue(Number(body.id))};`,
+  const mutations = {
+    '/api/goals/remove': () => learningRepository.removeGoal(Number(body.id)),
+    '/api/projects/remove': () => learningRepository.removeProject(Number(body.id), timestamp),
+    '/api/subjects/remove': () => learningRepository.removeSubject(Number(body.id), timestamp),
+    '/api/exams/remove': () => learningRepository.removeExam(Number(body.id)),
+    '/api/tasks/remove': () => learningRepository.removeTask(Number(body.id)),
+    '/api/tasks/toggle': () => learningRepository.toggleTask(Number(body.id), Boolean(body.completed), timestamp),
   };
 
-  if (statementBuilders[req.url]) {
-    runSqlite(statementBuilders[req.url]());
+  if (mutations[req.url]) {
+    mutations[req.url]();
     tableChanged();
     sendJson(res, { ok: true });
     return true;

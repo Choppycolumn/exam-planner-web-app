@@ -9,17 +9,15 @@ function fixture() {
     safeSecretEqual: (left, right) => left === right,
     nowISO: () => '2026-07-10T04:00:00.000Z',
     todayISO: () => '2026-07-10',
-    runSqlite: vi.fn((sql) => {
-      const eventId = /VALUES \('([^']+)'/.exec(sql)?.[1];
-      if (eventId) rows.set(eventId, { eventId, eventType: 'unfocused', overdueSeconds: 300, createdAt: '2026-07-10T04:00:00.000Z' });
-    }),
-    sqliteJson: vi.fn((sql) => {
-      const eventId = /WHERE event_id = '([^']+)'/.exec(sql)?.[1];
-      if (eventId) return rows.has(eventId) ? [rows.get(eventId)] : [];
-      return [];
-    }),
-    sqlString: (value) => `'${String(value).replaceAll("'", "''")}'`,
-    sqlValue: (value) => value == null ? 'NULL' : typeof value === 'number' ? String(value) : `'${String(value)}'`,
+    repository: {
+      findEvent: vi.fn((eventId) => rows.get(eventId) || null),
+      insertEvent: vi.fn((event, createdAt) => rows.set(event.eventId, {
+        ...event,
+        createdAt,
+      })),
+      summaryByType: vi.fn(() => []),
+      latestEvents: vi.fn(() => []),
+    },
     tableChanged: vi.fn(),
     queueProactiveNotification: (event) => { queued.push(event); return event; },
   });

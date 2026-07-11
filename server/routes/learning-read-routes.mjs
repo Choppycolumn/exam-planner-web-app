@@ -17,9 +17,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     todayISO,
     getReviewPrefill,
     getCachedReviewTrend,
-    sqliteScalar,
-    sqliteJson,
-    sqlString,
+    learningRepository,
     normalizeReview,
     getMockExamList,
     getStatisticsSummary,
@@ -102,15 +100,9 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
     const limit = queryLimit(requestUrl.searchParams, 20, 100);
     const offset = queryOffset(requestUrl.searchParams);
-    const total = Number(sqliteScalar(`SELECT COUNT(*) FROM daily_reviews
-WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)};`) || 0);
-    const paging = limit ? `LIMIT ${limit} OFFSET ${offset}` : '';
-    const reviews = sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
-schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM daily_reviews
-WHERE date BETWEEN ${sqlString(from)} AND ${sqlString(to)}
-ORDER BY date DESC
-${paging};`).map(normalizeReview);
+    const result = learningRepository.listReviews({ from, to, limit, offset });
+    const reviews = result.reviews.map(normalizeReview);
+    const total = result.total;
     sendJson(res, { reviews, total, limit, offset, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -119,11 +111,7 @@ ${paging};`).map(normalizeReview);
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
     const date = requestUrl.searchParams.get('date') || todayISO();
-    const records = sqliteJson(`SELECT id, date, project_id AS projectId, project_name_snapshot AS projectNameSnapshot, minutes, note,
-schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM study_time_records
-WHERE date = ${sqlString(date)}
-ORDER BY project_id;`);
+    const records = learningRepository.listStudyRecords(date);
     sendJson(res, { records, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -142,7 +130,7 @@ ORDER BY project_id;`);
 
   if (req.url === '/api/error-themes/embedding/status') {
     ensureSqliteStore();
-    const embeddingRows = Number(sqliteScalar('SELECT COUNT(*) FROM review_sentence_embeddings;') || 0);
+    const embeddingRows = learningRepository.embeddingCount();
     sendJson(res, { ...getEmbeddingStatus(), embeddingRows, readOnly: sessionRole === 'read' });
     return true;
   }

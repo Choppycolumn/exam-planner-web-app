@@ -15,7 +15,7 @@ export async function handlePublicApiRoutes(req, res, {
   getBreakGuardSummary,
   todayISO,
   findDictionaryEntry,
-  sqliteJson,
+  confusingWordsRepository,
   listConfusingWordsBackupVersions,
   normalizeConfusingWordsPayload,
   nowISO,
@@ -97,12 +97,12 @@ export async function handlePublicApiRoutes(req, res, {
     const parts = requestUrl.pathname.split('/').filter(Boolean);
     const versionId = Number(parts[4] || 0);
     if (req.method === 'GET' && versionId) {
-      const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
-      if (!rows[0]?.payloadJson) {
+      const payloadJson = confusingWordsRepository.findVersionPayload(versionId);
+      if (!payloadJson) {
         sendJson(res, { error: 'Version not found' }, 404);
         return true;
       }
-      sendJson(res, JSON.parse(rows[0].payloadJson));
+      sendJson(res, JSON.parse(payloadJson));
       return true;
     }
     if (req.method === 'GET') {
@@ -127,12 +127,12 @@ export async function handlePublicApiRoutes(req, res, {
       return true;
     }
     const versionId = Number(body.versionId || 0);
-    const rows = sqliteJson(`SELECT payload_json AS payloadJson FROM confusing_words_backup_versions WHERE id = ${versionId} LIMIT 1;`);
-    if (!rows[0]?.payloadJson) {
+    const payloadJson = confusingWordsRepository.findVersionPayload(versionId);
+    if (!payloadJson) {
       sendJson(res, { error: 'Version not found' }, 404);
       return true;
     }
-    const restored = normalizeConfusingWordsPayload(JSON.parse(rows[0].payloadJson), nowISO());
+    const restored = normalizeConfusingWordsPayload(JSON.parse(payloadJson), nowISO());
     const result = saveConfusingWordsBackupPayload({ ...restored, backedUpAt: nowISO() }, 'restore');
     sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
     return true;

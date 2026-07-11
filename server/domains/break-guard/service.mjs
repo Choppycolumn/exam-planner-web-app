@@ -13,10 +13,7 @@ export function createBreakGuardService({
   safeSecretEqual,
   nowISO,
   todayISO,
-  runSqlite,
-  sqliteJson,
-  sqlString,
-  sqlValue,
+  repository,
   tableChanged,
   queueProactiveNotification,
 }) {
@@ -57,23 +54,19 @@ export function createBreakGuardService({
   function recordEvent(body = {}) {
     const event = normalizeEvent(body);
     if (event.eventId) {
-      const existing = sqliteJson(`SELECT event_id AS eventId, event_type AS eventType, status, source, note, started_at AS startedAt, ended_at AS endedAt, overdue_seconds AS overdueSeconds, created_at AS createdAt
-FROM break_guard_events WHERE event_id = ${sqlString(event.eventId)} LIMIT 1;`)[0];
+      const existing = repository.findEvent(event.eventId);
       if (existing) return { ...existing, overdueSeconds: Number(existing.overdueSeconds || 0), label: EVENT_LABELS[existing.eventType] || existing.eventType, duplicate: true };
     }
     const createdAt = nowISO();
-    runSqlite(`INSERT INTO break_guard_events (event_id, event_type, status, source, note, started_at, ended_at, overdue_seconds, payload_json, created_at)
-VALUES (${sqlValue(event.eventId)}, ${sqlString(event.eventType)}, ${sqlString(event.status)}, ${sqlString(event.source)}, ${sqlString(event.note)}, ${sqlValue(event.startedAt)}, ${sqlValue(event.endedAt)}, ${sqlValue(event.overdueSeconds)}, ${sqlString(JSON.stringify(event.payload))}, ${sqlString(createdAt)});`);
+    repository.insertEvent(event, createdAt);
     tableChanged();
     return { ...event, label: EVENT_LABELS[event.eventType], createdAt, duplicate: false };
   }
 
   function getSummary(date = todayISO()) {
-    const rows = sqliteJson(`SELECT event_type AS eventType, COUNT(*) AS count, MAX(created_at) AS latestAt
-FROM break_guard_events WHERE date(created_at, 'localtime') = date(${sqlString(date)}) GROUP BY event_type;`);
+    const rows = repository.summaryByType(date);
     const byType = Object.fromEntries(rows.map((row) => [row.eventType, { count: Number(row.count || 0), latestAt: row.latestAt || null }]));
-    const latest = sqliteJson(`SELECT id, event_type AS eventType, status, note, overdue_seconds AS overdueSeconds, created_at AS createdAt
-FROM break_guard_events ORDER BY created_at DESC, id DESC LIMIT 5;`).map((row) => ({
+    const latest = repository.latestEvents(5).map((row) => ({
       id: Number(row.id), eventType: row.eventType, label: EVENT_LABELS[row.eventType] || row.eventType,
       status: row.status || '', note: row.note || '', overdueSeconds: Number(row.overdueSeconds || 0), createdAt: row.createdAt,
     }));
