@@ -1,6 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 export function createBackupService({
   backupsDir,
@@ -9,7 +8,7 @@ export function createBackupService({
   libraryFilesDir,
   assertDiskSpace,
   runSqlite,
-  runSqliteFile,
+  sqliteIntegrityCheck,
   sqlitePath,
   sqlString,
   sqliteScalar,
@@ -50,7 +49,7 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
     if (existsSync(filePath)) unlinkSync(filePath);
     runSqlite(`VACUUM INTO ${sqlitePath(filePath)};`);
-    const integrity = runSqliteFile(filePath, 'PRAGMA integrity_check;').trim();
+    const integrity = sqliteIntegrityCheck(filePath);
     if (integrity !== 'ok') {
       try {
         unlinkSync(filePath);
@@ -58,13 +57,6 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
         // Ignore cleanup failure; the integrity error below is the useful signal.
       }
       throw new Error(`Backup integrity check failed: ${integrity}`);
-    }
-    if (existsSync(libraryFilesDir)) {
-      libraryArchivePath = join(backupsDir, `exam-planner-${kind}-${timestamp}-library.tar.gz`);
-      const archiveResult = spawnSync('tar', ['-czf', libraryArchivePath, '-C', libraryDir, 'files'], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
-      if (archiveResult.status !== 0) {
-        libraryArchivePath = null;
-      }
     }
     runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES (${sqlString(kind)}, ${sqlString(filePath)}, datetime('now'), ${sqlString(note)});`);
@@ -107,28 +99,19 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
     if (!existsSync(sourceFile)) {
       throw new Error('Backup file not found');
     }
-    const integrity = runSqliteFile(sourceFile, 'PRAGMA integrity_check;').trim();
+    const integrity = sqliteIntegrityCheck(sourceFile);
     if (integrity !== 'ok') {
       throw new Error(`Backup integrity check failed: ${integrity}`);
     }
 
     const safetyBackup = createBackupFile('pre-restore', `automatic safety backup before restoring ${fileName}`);
     runSqlite('PRAGMA wal_checkpoint(TRUNCATE);');
+    resetSqliteRuntime?.();
     copyFileSync(sourceFile, sqliteFile);
-    const libraryArchivePath = join(backupsDir, fileName.replace(/\.sqlite$/, '-library.tar.gz'));
-    if (existsSync(libraryArchivePath) && libraryArchivePath.startsWith(backupsDir)) {
-      if (existsSync(libraryFilesDir)) rmSync(libraryFilesDir, { recursive: true, force: true });
-      mkdirSync(libraryDir, { recursive: true });
-      const restoreArchive = spawnSync('tar', ['-xzf', libraryArchivePath, '-C', libraryDir], { encoding: 'utf8', timeout: 5 * 60 * 1000 });
-      if (restoreArchive.status !== 0) {
-        throw new Error(`Library archive restore failed: ${restoreArchive.stderr || restoreArchive.stdout}`);
-      }
-    }
     for (const suffix of ['-wal', '-shm']) {
       const sidecar = `${sqliteFile}${suffix}`;
       if (existsSync(sidecar)) unlinkSync(sidecar);
     }
-    resetSqliteRuntime?.();
     ensureSqliteStore();
     runSqlite(`INSERT INTO backup_log (kind, file_path, created_at, note)
 VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`restored from ${fileName}; safety backup ${safetyBackup.filePath}`)});`);
@@ -193,7 +176,7 @@ VALUES ('restore', ${sqlString(sourceFile)}, datetime('now'), ${sqlString(`resto
     }
     if (!force) return cached?.fileName === latest.fileName ? cached : { ok: null, checkedAt: '', fileName: latest.fileName, integrity: 'not_checked' };
     try {
-      const integrity = runSqliteFile(join(backupsDir, latest.fileName), 'PRAGMA integrity_check;').trim();
+      const integrity = sqliteIntegrityCheck(join(backupsDir, latest.fileName));
       return persistBackupVerification({ ok: integrity === 'ok', checkedAt: nowISO(), fileName: latest.fileName, integrity });
     } catch (error) {
       return persistBackupVerification({ ok: false, checkedAt: nowISO(), fileName: latest.fileName, integrity: redactSecretText(error.message || String(error)) });

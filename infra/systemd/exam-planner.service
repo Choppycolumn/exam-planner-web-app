@@ -1,20 +1,29 @@
 [Unit]
 Description=Exam Planner Web
-After=network-online.target
+After=network-online.target exam-planner-privileged.service
 Wants=network-online.target
+Requires=exam-planner-privileged.service
 
 [Service]
 Type=simple
+User=examplanner
+Group=examplanner
+SupplementaryGroups=adm systemd-journal
 WorkingDirectory=/opt/exam-planner
 Environment=NODE_ENV=production
-Environment=SERVICE_ROLE=web
 Environment=COOKIE_SECURE=1
-ExecStart=/usr/bin/node /opt/exam-planner/server/auth-static-server.mjs
+Environment=TELEGRAM_ENV_FILE=/opt/exam-planner/data/telegram.env
+Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
+EnvironmentFile=-/etc/exam-planner/runtime.env
+ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/server/web.mjs
 Restart=always
 RestartSec=5
 TimeoutStopSec=15
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/exam-planner/data
 
 [Install]
 WantedBy=multi-user.target

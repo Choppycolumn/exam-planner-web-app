@@ -59,7 +59,7 @@ export async function handleOpsRoutes(req, res, {
 
   if (req.url === '/api/ops/logs/summary' && req.method === 'GET') {
     collectOperationalNotifications();
-    sendJson(res, getOpsLogSummaryPayload(sessionRole));
+    sendJson(res, await getOpsLogSummaryPayload(sessionRole));
     return true;
   }
 

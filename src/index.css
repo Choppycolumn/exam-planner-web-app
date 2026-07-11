@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.page-enter { animation: page-enter 220ms ease-out both; }
+.toast-enter { animation: page-enter 180ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .toast-enter { animation: none; }
+}
+
 :root {
   color: #1f2937;
   background: #f7f8fb;

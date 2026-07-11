@@ -1,9 +1,8 @@
-import { motion } from 'framer-motion';
 import type { ReactNode } from 'react';
 
 export function MetricCard({ label, value, hint, icon }: { label: string; value: ReactNode; hint?: string; icon?: ReactNode }) {
   return (
-    <motion.div className="card p-5" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22 }}>
+    <div className="card p-5">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-slate-500">{label}</p>
@@ -12,6 +11,6 @@ export function MetricCard({ label, value, hint, icon }: { label: string; value:
         </div>
         {icon ? <div className="rounded-lg bg-slate-100 p-2 text-slate-600">{icon}</div> : null}
       </div>
-    </motion.div>
+    </div>
   );
 }

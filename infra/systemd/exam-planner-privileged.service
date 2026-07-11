@@ -1,0 +1,25 @@
+[Unit]
+Description=Exam Planner Privileged Helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=examplanner
+WorkingDirectory=/opt/exam-planner
+Environment=NODE_ENV=production
+Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
+ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/server/privileged-helper.mjs
+Restart=always
+RestartSec=5
+RuntimeDirectory=exam-planner
+RuntimeDirectoryMode=0750
+UMask=0007
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/etc/exam-planner /etc/mihomo /run/exam-planner
+
+[Install]
+WantedBy=multi-user.target

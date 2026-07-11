@@ -1,13 +1,14 @@
-import { mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { sqlString, sqlValue } from '../modules/sqlite-repository.mjs';
+import { sqlString, sqlValue, sqliteIntegrityCheck } from '../modules/sqlite-repository.mjs';
 
-export { sqlString, sqlValue };
+export { sqlString, sqlValue, sqliteIntegrityCheck };
 
 export function sqlitePath(value) {
   return `'${String(value || '').replace(/\\/g, '/').replace(/'/g, "''")}'`;
 }
 
+// Reserved for offline backup validation and the one-time dictionary CSV import.
+// Request-path queries use the persistent DatabaseSync repository instead.
 export function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1024 } = {}) {
   const result = spawnSync('sqlite3', [databaseFile], {
     input: script,
@@ -19,21 +20,14 @@ export function runSqliteFile(databaseFile, script, { maxBuffer = 128 * 1024 * 1
   return result.stdout;
 }
 
-export function createSqliteCli({ sqliteFile, dataDir }) {
-  const runSqlite = (script, { maxBuffer = 128 * 1024 * 1024 } = {}) => {
-    mkdirSync(dataDir, { recursive: true });
-    return runSqliteFile(sqliteFile, script, { maxBuffer });
+export function createSqliteCli({ repository }) {
+  if (!repository) throw new Error('persistent sqlite repository is required');
+  return {
+    runSqlite: repository.run,
+    sqliteExecute: repository.execute,
+    sqliteScalar: repository.scalar,
+    sqliteJson: repository.json,
+    runSqliteTransaction: repository.transaction,
+    closeSqlite: repository.close,
   };
-
-  const sqliteScalar = (sql) => runSqlite(`.headers off\n.mode list\n${sql}\n`).trim();
-  const sqliteJson = (sql) => {
-    const output = runSqlite(`.mode json\n${sql}\n`).trim();
-    return output ? JSON.parse(output) : [];
-  };
-  const runSqliteTransaction = (statements = []) => {
-    const body = Array.isArray(statements) ? statements.join('\n') : String(statements || '');
-    return runSqlite(`BEGIN IMMEDIATE;\n${body}\nCOMMIT;`);
-  };
-
-  return { runSqlite, sqliteScalar, sqliteJson, runSqliteTransaction };
 }

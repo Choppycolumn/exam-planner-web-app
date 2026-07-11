@@ -1,14 +1,13 @@
-import { motion } from 'framer-motion';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 const palette = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
 
 export function ChartBox({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <motion.div className="card p-5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.25 }}>
+    <div className="card p-5">
       <h2 className="mb-4 text-base font-semibold text-slate-900">{title}</h2>
       <div className="h-72">{children}</div>
-    </motion.div>
+    </div>
   );
 }
 

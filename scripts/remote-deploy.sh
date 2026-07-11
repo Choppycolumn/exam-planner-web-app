@@ -2,36 +2,57 @@
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/exam-planner}"
+APP_NODE_BIN="${APP_NODE_BIN:-/opt/node-v22.22.3-linux-x64/bin/node}"
 PACKAGE_FILE="${1:?deployment package path is required}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/exam-planner-deploy-backups}"
 STAMP="$(date +%Y%m%d%H%M%S)"
 BACKUP_FILE="$BACKUP_DIR/code-pre-$STAMP.tgz"
+UNIT_BACKUP_DIR="$BACKUP_DIR/units-pre-$STAMP"
 STAGE_DIR="$(mktemp -d /opt/exam-planner-stage.XXXXXX)"
 TEST_DATA_DIR="$(mktemp -d /tmp/exam-planner-smoke-data.XXXXXX)"
 TEST_PID=""
+HELPER_PID=""
 
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
+  if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" >/dev/null 2>&1 || true; fi
   [[ "$STAGE_DIR" == /opt/exam-planner-stage.* ]] && rm -r -- "$STAGE_DIR" 2>/dev/null || true
   [[ "$TEST_DATA_DIR" == /tmp/exam-planner-smoke-data.* ]] && rm -r -- "$TEST_DATA_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 mkdir -p "$APP_DIR" "$BACKUP_DIR"
+mkdir -p "$UNIT_BACKUP_DIR"
+for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service; do
+  [[ -e "$unit_item" ]] && cp -a "$unit_item" "$UNIT_BACKUP_DIR/"
+done
 tar -xzf "$PACKAGE_FILE" -C "$STAGE_DIR"
-node --check "$STAGE_DIR/server/auth-static-server.mjs"
+[[ -x "$APP_NODE_BIN" ]] || { echo "Node 22 runtime is missing: $APP_NODE_BIN" >&2; exit 1; }
+"$APP_NODE_BIN" --check "$STAGE_DIR/server/auth-static-server.mjs"
+"$APP_NODE_BIN" --check "$STAGE_DIR/server/web.mjs"
+"$APP_NODE_BIN" --check "$STAGE_DIR/server/worker.mjs"
+"$APP_NODE_BIN" --check "$STAGE_DIR/server/privileged-helper.mjs"
 
-PORT=18080 DATA_DIR="$TEST_DATA_DIR" STATIC_ROOT="$STAGE_DIR/dist" APP_PASSWORD='deployment-smoke-only' COOKIE_SECRET='deployment-smoke-cookie-secret-000000000000' BREAK_GUARD_TOKEN='deployment-smoke-break-guard' SERVICE_ROLE=web node "$STAGE_DIR/server/auth-static-server.mjs" >"$TEST_DATA_DIR/server.log" 2>&1 &
+PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" "$APP_NODE_BIN" "$STAGE_DIR/server/privileged-helper.mjs" >"$TEST_DATA_DIR/helper.log" 2>&1 &
+HELPER_PID="$!"
+for _ in $(seq 1 20); do [[ -S "$TEST_DATA_DIR/privileged.sock" ]] && break; sleep 0.2; done
+[[ -S "$TEST_DATA_DIR/privileged.sock" ]] || { cat "$TEST_DATA_DIR/helper.log" >&2; exit 1; }
+curl --unix-socket "$TEST_DATA_DIR/privileged.sock" -fsS http://localhost/health >/dev/null
+
+PORT=18080 DATA_DIR="$TEST_DATA_DIR" STATIC_ROOT="$STAGE_DIR/dist" PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" APP_PASSWORD='deployment-smoke-only' COOKIE_SECRET='deployment-smoke-cookie-secret-000000000000' BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/server/web.mjs" >"$TEST_DATA_DIR/server.log" 2>&1 &
 TEST_PID="$!"
 for _ in $(seq 1 20); do
-  if node "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080 >/dev/null 2>&1; then break; fi
+  if "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080 >/dev/null 2>&1; then break; fi
   sleep 1
 done
-CHECK_EMPTY_LOGIN=1 node "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080
-SMOKE_APP_PASSWORD='deployment-smoke-only' SMOKE_BREAK_GUARD_TOKEN='deployment-smoke-break-guard' node "$STAGE_DIR/scripts/production-integration.mjs" http://127.0.0.1:18080
+CHECK_EMPTY_LOGIN=1 "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080
+SMOKE_APP_PASSWORD='deployment-smoke-only' SMOKE_BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-integration.mjs" http://127.0.0.1:18080
 kill "$TEST_PID" >/dev/null 2>&1 || true
 wait "$TEST_PID" 2>/dev/null || true
 TEST_PID=""
+kill "$HELPER_PID" >/dev/null 2>&1 || true
+wait "$HELPER_PID" 2>/dev/null || true
+HELPER_PID=""
 
 backup_items=()
 for item in dist server public package.json package-lock.json docs scripts infra README.md; do
@@ -96,7 +117,8 @@ with open(temporary, 'w', encoding='utf-8', newline='\n') as stream:
 os.chmod(temporary, 0o600)
 os.replace(temporary, target)
 PY
-  chmod 0600 "$runtime_file"
+  chown root:examplanner "$runtime_file"
+  chmod 0640 "$runtime_file"
   sed -i '/^Environment=APP_PASSWORD=/d; /^Environment=COOKIE_SECRET=/d' "$fragment"
   rm -f /etc/systemd/system/exam-planner.service.d/break-guard.conf \
     /etc/systemd/system/exam-planner.service.d/clawbot.conf \
@@ -106,43 +128,59 @@ PY
 }
 
 configure_service_roles() {
-  mkdir -p /etc/systemd/system/exam-planner.service.d
-  printf '[Service]\nEnvironment=NODE_ENV=production\nEnvironment=SERVICE_ROLE=web\nEnvironment=COOKIE_SECURE=1\nEnvironment=NODE_OPTIONS=--max-old-space-size=192\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n' > /etc/systemd/system/exam-planner.service.d/20-runtime-role.conf
+  install -m 0644 "$APP_DIR/infra/systemd/exam-planner.service" /etc/systemd/system/exam-planner.service
+  install -m 0644 "$APP_DIR/infra/systemd/exam-planner-worker.service" /etc/systemd/system/exam-planner-worker.service
+  install -m 0644 "$APP_DIR/infra/systemd/exam-planner-privileged.service" /etc/systemd/system/exam-planner-privileged.service
+  rm -rf /etc/systemd/system/exam-planner.service.d
   systemctl daemon-reload
-  systemctl cat exam-planner > /tmp/exam-planner-worker.service
-  sed -i '0,/^Description=.*/s//Description=Exam Planner Background Worker/' /tmp/exam-planner-worker.service
-  sed -i '0,/^After=.*/s//& exam-planner.service/' /tmp/exam-planner-worker.service
-  printf '\n[Service]\nEnvironment=SERVICE_ROLE=worker\nEnvironment=COOKIE_SECURE=1\nEnvironment=NODE_OPTIONS=--max-old-space-size=192\nRestartSec=10\nOOMScoreAdjust=200\n' >> /tmp/exam-planner-worker.service
-  install -m 0644 /tmp/exam-planner-worker.service /etc/systemd/system/exam-planner-worker.service
-  rm -f /tmp/exam-planner-worker.service
-  systemctl daemon-reload
-  systemctl enable exam-planner-worker >/dev/null
+  systemctl enable exam-planner exam-planner-worker exam-planner-privileged >/dev/null
+}
+
+ensure_runtime_user() {
+  getent group examplanner >/dev/null || groupadd --system examplanner
+  id -u examplanner >/dev/null 2>&1 || useradd --system --gid examplanner --home-dir "$APP_DIR" --shell /usr/sbin/nologin examplanner
+  install -d -o examplanner -g examplanner -m 0700 "$APP_DIR/data" "$APP_DIR/data/backups"
+  if [[ -f /etc/exam-planner/telegram.env && ! -f "$APP_DIR/data/telegram.env" ]]; then
+    cp /etc/exam-planner/telegram.env "$APP_DIR/data/telegram.env"
+  fi
+  [[ -f "$APP_DIR/data/telegram.env" ]] && chown examplanner:examplanner "$APP_DIR/data/telegram.env" && chmod 0600 "$APP_DIR/data/telegram.env" || true
+  chown -R examplanner:examplanner "$APP_DIR/data"
+  find "$APP_DIR/data" -type d -exec chmod 0700 {} +
+  find "$APP_DIR/data" -type f -exec chmod 0600 {} +
 }
 
 deploy_and_verify() {
+  ensure_runtime_user || return 1
   migrate_inline_secrets || return 1
   systemctl stop exam-planner-worker 2>/dev/null || true
   systemctl stop exam-planner || return 1
+  systemctl stop exam-planner-privileged 2>/dev/null || true
   tar -xzf "$PACKAGE_FILE" -C "$APP_DIR" || return 1
+  ensure_runtime_user || return 1
   configure_service_roles || return 1
+  systemctl start exam-planner-privileged || return 1
+  for _ in $(seq 1 20); do [[ -S /run/exam-planner/privileged.sock ]] && break; sleep 0.2; done
+  [[ -S /run/exam-planner/privileged.sock ]] || return 1
   systemctl start exam-planner || return 1
   for _ in $(seq 1 20); do
-    if node "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null 2>&1; then break; fi
+    if "$APP_NODE_BIN" "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null 2>&1; then break; fi
     sleep 1
   done
-  node "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null || return 1
+  "$APP_NODE_BIN" "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null || return 1
   systemctl start exam-planner-worker || return 1
   systemctl is-active --quiet exam-planner-worker || return 1
 }
 
 if ! deploy_and_verify; then
+  systemctl stop exam-planner-privileged 2>/dev/null || true
   systemctl stop exam-planner-worker 2>/dev/null || true
-  systemctl disable exam-planner-worker >/dev/null 2>&1 || true
-  rm -f /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner.service.d/20-runtime-role.conf
+  systemctl stop exam-planner 2>/dev/null || true
+  rm -rf /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service
+  cp -a "$UNIT_BACKUP_DIR"/* /etc/systemd/system/ 2>/dev/null || true
   systemctl daemon-reload
   tar -xzf "$BACKUP_FILE" -C "$APP_DIR"
   systemctl restart exam-planner
-  node "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null
+  "$APP_NODE_BIN" "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null
   echo "deployment failed; previous release restored" >&2
   exit 1
 fi

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
@@ -26,7 +25,6 @@ export function Layout() {
   const { activeGoal, readOnly } = useDashboardData();
   const { online } = useNetworkStatus();
   const { canInstall, installed, install } = usePwaInstall();
-  const location = useLocation();
   const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
 
   useEffect(() => preloadSecondaryRoutes(), []);
@@ -100,9 +98,7 @@ export function Layout() {
               当前处于离线状态。已打开的页面可以继续查看，保存、同步和行情更新会在恢复网络后再操作。
             </div>
           ) : null}
-          <AnimatePresence mode="wait">
-            <Outlet key={location.pathname} />
-          </AnimatePresence>
+          <Outlet />
         </div>
       </main>
     </div>

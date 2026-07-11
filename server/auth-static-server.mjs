@@ -1,5 +1,5 @@
 ﻿import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statfsSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createCipheriv, createDecipheriv } from 'node:crypto';
 import { dirname, extname, join, resolve } from 'node:path';
 import { createServer } from 'node:http';
@@ -52,9 +52,11 @@ import {
   startOfWeekISO,
   todayISO,
 } from './core/date-time.mjs';
-import { createSqliteCli, runSqliteFile, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
+import { createSqliteCli, runSqliteFile, sqliteIntegrityCheck, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
 import { createHttpUtils, headerString, isObjectPayload } from './http/http-utils.mjs';
 import { createStaticAssetServer, defaultMimeTypes } from './http/static-assets.mjs';
+import { runProcess } from './core/process-runner.mjs';
+import { createPrivilegedClient } from './privileged/client.mjs';
 import {
   clientHashForRequest,
   createSessionAuth,
@@ -108,6 +110,8 @@ const openClawCli = process.env.OPENCLAW_CLI || (existsSync('/opt/node22/bin/ope
 const requestLogSlowMs = Number(process.env.REQUEST_LOG_SLOW_MS || 1500);
 const jsonBodyMaxBytes = Number(process.env.JSON_BODY_MAX_BYTES || 10 * 1024 * 1024);
 const minFreeDiskBytes = Number(process.env.MIN_FREE_DISK_BYTES || 512 * 1024 * 1024);
+const privilegedHelperSocket = process.env.PRIVILEGED_HELPER_SOCKET || (process.platform === 'win32' ? '' : '/run/exam-planner/privileged.sock');
+const privilegedClient = privilegedHelperSocket ? createPrivilegedClient({ socketPath: privilegedHelperSocket }) : null;
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
@@ -129,7 +133,7 @@ const notificationQueue = createNotificationQueue({
 });
 const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
-const { runSqlite, sqliteScalar, sqliteJson, runSqliteTransaction } = createSqliteCli({ sqliteFile, dataDir });
+const { runSqlite, sqliteExecute, sqliteScalar, sqliteJson, runSqliteTransaction, closeSqlite } = createSqliteCli({ repository: sqliteRepository });
 const { sendJson, sendHtml, readBody, readJsonBody } = createHttpUtils({ corsOrigin, jsonBodyMaxBytes });
 const serveStatic = createStaticAssetServer({ root, mimeTypes: defaultMimeTypes });
 const sessionAuth = createSessionAuth({
@@ -160,7 +164,7 @@ const backupService = createBackupService({
   libraryFilesDir,
   assertDiskSpace,
   runSqlite,
-  runSqliteFile,
+  sqliteIntegrityCheck,
   sqlitePath,
   sqlString,
   sqliteScalar,
@@ -170,6 +174,7 @@ const backupService = createBackupService({
   redactSecretText,
   ensureSqliteStore: () => ensureSqliteStore(),
   resetSqliteRuntime: () => {
+    closeSqlite();
     sqliteReady = false;
     dictionaryIndexChecked = false;
   },
@@ -444,17 +449,11 @@ function redactSecretText(value = '') {
 }
 
 function writeStateToSqlite(state) {
-  const tempFile = join(dataDir, `.state-write-${process.pid}-${Date.now()}.json`);
-  writeFileSync(tempFile, JSON.stringify(normalizeState(state), null, 2), 'utf8');
-  try {
-    runSqlite(`BEGIN;
-INSERT INTO app_state (id, state_json, updated_at)
-VALUES (1, CAST(readfile(${sqlitePath(tempFile)}) AS TEXT), datetime('now'))
-ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;
-COMMIT;`);
-  } finally {
-    if (existsSync(tempFile)) unlinkSync(tempFile);
-  }
+  sqliteExecute(`INSERT INTO app_state (id, state_json, updated_at)
+VALUES (1, ?, datetime('now'))
+ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at;`, [
+    JSON.stringify(normalizeState(state), null, 2),
+  ]);
 }
 
 function readStateFromSqlite() {
@@ -2252,13 +2251,12 @@ async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
   }
 }
 
-function fetchJsonWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '2', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
-    encoding: 'utf8',
+async function fetchJsonWithCurl(url, timeoutSeconds = 9) {
+  const result = await runProcess('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '2', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    timeoutMs: (timeoutSeconds + 3) * 1000,
     maxBuffer: 1024 * 1024,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
+  if (!result.ok) throw result.error || new Error(result.stderr || `curl exited ${result.code}`);
   return JSON.parse(result.stdout);
 }
 
@@ -2276,7 +2274,7 @@ async function fetchJsonWithFallback(url, timeoutMs = 9000) {
   }
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      return fetchJsonWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
+      return await fetchJsonWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
     } catch (error) {
       errors.push(`curl fallback: ${error instanceof Error ? error.message : String(error)}`);
       if (attempt === 0) await wait(600);
@@ -2300,23 +2298,21 @@ async function fetchTextWithTimeout(url, timeoutMs = 9000, headers = {}) {
   }
 }
 
-function fetchTextWithCurl(url, timeoutSeconds = 9) {
-  const result = spawnSync('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
-    encoding: 'utf8',
+async function fetchTextWithCurl(url, timeoutSeconds = 9) {
+  const result = await runProcess('curl', ['-4', '-fsSL', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    timeoutMs: (timeoutSeconds + 3) * 1000,
     maxBuffer: 2 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(result.stderr || `curl exited ${result.status}`);
+  if (!result.ok) throw result.error || new Error(result.stderr || `curl exited ${result.code}`);
   return result.stdout;
 }
 
-function fetchTextWithProxyCurl(url, timeoutSeconds = 45) {
-  const result = spawnSync('curl', ['-4', '-fsSL', '--compressed', '--proxy', 'http://127.0.0.1:7890', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
-    encoding: 'utf8',
+async function fetchTextWithProxyCurl(url, timeoutSeconds = 45) {
+  const result = await runProcess('curl', ['-4', '-fsSL', '--compressed', '--proxy', 'http://127.0.0.1:7890', '-A', 'exam-planner-brief/1.0', '--retry', '1', '--retry-delay', '1', '--retry-all-errors', '--max-time', String(timeoutSeconds), url], {
+    timeoutMs: (timeoutSeconds + 3) * 1000,
     maxBuffer: 4 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(result.stderr || `proxy curl exited ${result.status}`);
+  if (!result.ok) throw result.error || new Error(result.stderr || `proxy curl exited ${result.code}`);
   return result.stdout;
 }
 
@@ -2328,7 +2324,7 @@ async function fetchTextWithFallback(url, timeoutMs = 9000, headers = {}) {
     errors.push(error instanceof Error ? error.message : String(error));
   }
   try {
-    return fetchTextWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
+    return await fetchTextWithCurl(url, Math.max(5, Math.ceil(timeoutMs / 1000)));
   } catch (error) {
     errors.push(`curl fallback: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -2764,21 +2760,21 @@ function removeMihomoProviderContent() {
   }
 }
 
-function runCommand(command, args = [], timeout = 15_000) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout });
+async function runCommand(command, args = [], timeout = 15_000) {
+  const result = await runProcess(command, args, { timeoutMs: timeout });
   return {
-    ok: result.status === 0,
-    code: result.status ?? -1,
+    ok: result.ok,
+    code: result.code,
     stdout: String(result.stdout || '').trim(),
     stderr: redactSecretText(String(result.stderr || '').trim()),
   };
 }
 
-function restartMihomoService() {
+async function restartMihomoService() {
   if (process.platform === 'win32') return { ok: false, message: '本地 Windows 环境未安装 mihomo systemd 服务' };
-  const result = runCommand('systemctl', ['restart', 'mihomo.service'], 30_000);
+  const result = await runCommand('systemctl', ['restart', 'mihomo.service'], 30_000);
   if (!result.ok) return { ok: false, message: result.stderr || result.stdout || 'mihomo 重启失败' };
-  const active = runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
+  const active = await runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
   return { ok: active.ok, message: active.stdout || active.stderr || 'mihomo 状态未知' };
 }
 
@@ -2805,10 +2801,10 @@ async function mihomoControllerRequest(pathname, options = {}) {
   }
 }
 
-function mihomoServiceStatus() {
+async function mihomoServiceStatus() {
   const installed = Boolean(mihomoBinary && existsSync(mihomoBinary));
-  const activeResult = process.platform === 'win32' ? { ok: false, stdout: '' } : runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
-  const versionResult = installed ? runCommand(mihomoBinary, ['-v'], 10_000) : { ok: false, stdout: '' };
+  const activeResult = process.platform === 'win32' ? { ok: false, stdout: '' } : await runCommand('systemctl', ['is-active', 'mihomo.service'], 10_000);
+  const versionResult = installed ? await runCommand(mihomoBinary, ['-v'], 10_000) : { ok: false, stdout: '' };
   return {
     installed,
     active: activeResult.stdout === 'active',
@@ -2819,7 +2815,7 @@ function mihomoServiceStatus() {
 async function getMihomoSettings() {
   const values = proxySettingsCurrentValues();
   const subscription = maskMihomoSubscriptionUrl(values.MIHOMO_SUBSCRIPTION_URL);
-  const service = mihomoServiceStatus();
+  const service = await mihomoServiceStatus();
   let controllerOk = false;
   let current = '';
   let nodes = [];
@@ -2878,7 +2874,7 @@ async function saveMihomoSubscriptionSettings(input = {}) {
   writeMihomoConfig(values);
   writeProxySettingsEnvValues(values);
   applyProxySettingsProcessEnvValues(values);
-  const restart = restartMihomoService();
+  const restart = await restartMihomoService();
   await wait(800);
   const status = await getMihomoSettings();
   return { ...status, restarted: restart.ok, message: restart.message, updatedAt: nowISO() };
@@ -2893,7 +2889,7 @@ async function importMihomoProviderSettings(input = {}) {
   writeMihomoConfig(values);
   writeProxySettingsEnvValues(values);
   applyProxySettingsProcessEnvValues(values);
-  const restart = restartMihomoService();
+  const restart = await restartMihomoService();
   await wait(800);
   const status = await getMihomoSettings();
   return { ...status, restarted: restart.ok, message: restart.message, imported: true, updatedAt: nowISO() };
@@ -2916,8 +2912,6 @@ async function selectMihomoProxy(input = {}) {
 }
 
 async function testMihomoProxy() {
-  const { ProxyAgent } = require('undici');
-  const dispatcher = new ProxyAgent(mihomoProxyUrl);
   const targets = [
     { id: 'brief-pe', label: '简报 PE 数据源', url: 'https://www.worldperatio.com/' },
     { id: 'telegram', label: 'Telegram API', url: 'https://api.telegram.org/' },
@@ -2926,19 +2920,14 @@ async function testMihomoProxy() {
   for (const target of targets) {
     const startedAt = Date.now();
     try {
-      const response = await fetch(target.url, {
-        dispatcher,
-        signal: AbortSignal.timeout(15_000),
-        headers: { 'user-agent': 'exam-planner-mihomo-test/1.0' },
-      });
-      const text = await response.text();
+      const processResult = await runProcess('curl', ['-4', '-fsSL', '--proxy', mihomoProxyUrl, '-A', 'exam-planner-mihomo-test/1.0', '--max-time', '15', '-o', process.platform === 'win32' ? 'NUL' : '/dev/null', '-w', '%{http_code}', target.url], { timeoutMs: 18_000, maxBuffer: 64 * 1024 });
+      const status = Number(processResult.stdout.trim() || 0);
       results.push({
         id: target.id,
         label: target.label,
-        ok: response.ok,
-        status: response.status,
+        ok: processResult.ok && status >= 200 && status < 500,
+        status,
         durationMs: Date.now() - startedAt,
-        sample: text.slice(0, 120),
       });
     } catch (error) {
       results.push({
@@ -3090,7 +3079,7 @@ async function getIndexPurchaseAssessment({ name, symbol, slug }) {
         cacheKey: `pe:${slug}`,
       });
     } catch {
-      result = { value: fetchTextWithProxyCurl(url, 45), cacheStatus: 'proxy', fetchedAt: nowISO() };
+      result = { value: await fetchTextWithProxyCurl(url, 45), cacheStatus: 'proxy', fetchedAt: nowISO() };
     }
     const metrics = parseWorldPeRatio(result.value);
     return {
@@ -3193,7 +3182,7 @@ async function getCryptoCompareMarket(symbolItem, key) {
     };
   } catch {
     try {
-      const data = fetchJsonWithCurl(`https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(key)}&tsyms=USD`, 9);
+      const data = await fetchJsonWithCurl(`https://min-api.cryptocompare.com/data/pricemultifull?fsyms=${encodeURIComponent(key)}&tsyms=USD`, 9);
       const quote = data.RAW?.[key]?.USD;
       const price = Number(quote?.PRICE || 0);
       if (!Number.isFinite(price) || !price) return null;
@@ -3327,7 +3316,7 @@ async function getEastMoneyMarket(symbolItem) {
     try {
       data = await fetchJsonWithTimeout(url, 9000);
     } catch {
-      data = fetchJsonWithCurl(url, 9);
+      data = await fetchJsonWithCurl(url, 9);
     }
     const quote = data.data || {};
     const current = Number(quote.f43 || 0) / 100;
@@ -4205,21 +4194,23 @@ function scheduleDailyMaintenance() {
 }
 
 function getDiskStatus() {
-  const result = spawnSync('df', ['-k', dataDir], { encoding: 'utf8', timeout: 3000 });
-  if (result.status !== 0 || !result.stdout) return null;
-  const lines = result.stdout.trim().split('\n');
-  const row = lines[lines.length - 1]?.split(/\s+/);
-  if (!row || row.length < 6) return null;
-  const totalKb = Number(row[1] || 0);
-  const usedKb = Number(row[2] || 0);
-  const availableKb = Number(row[3] || 0);
-  return {
-    totalBytes: totalKb * 1024,
-    usedBytes: usedKb * 1024,
-    availableBytes: availableKb * 1024,
-    usedPercent: row[4] || '',
-    mount: row.slice(5).join(' '),
-  };
+  try {
+    const stats = statfsSync(dataDir);
+    const blockSize = Number(stats.bsize || 0);
+    const totalBytes = Number(stats.blocks || 0) * blockSize;
+    const availableBytes = Number(stats.bavail || 0) * blockSize;
+    const freeBytes = Number(stats.bfree || 0) * blockSize;
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    return {
+      totalBytes,
+      usedBytes,
+      availableBytes,
+      usedPercent: totalBytes ? `${Math.round((usedBytes / totalBytes) * 100)}%` : '',
+      mount: dataDir,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function getRuntimeStatus() {
@@ -4237,6 +4228,7 @@ function getRuntimeStatus() {
       heapTotalBytes: memory.heapTotal,
     },
     disk: getDiskStatus(),
+    database: sqliteRepository.metrics(),
     nodeVersion: process.version,
   };
 }
@@ -4601,11 +4593,6 @@ function ensureSqliteStore() {
   if (sqliteReady) return;
   mkdirSync(dataDir, { recursive: true });
   mkdirSync(backupsDir, { recursive: true });
-  const versionCheck = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' });
-  if (versionCheck.error || versionCheck.status !== 0) {
-    throw new Error('sqlite3 is required on the server. Install it with: apt install sqlite3');
-  }
-
   runSqlite(`PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS app_metadata (
   key TEXT PRIMARY KEY,
@@ -4931,7 +4918,7 @@ function ensureDictionaryIndex() {
   if (indexedSignature === signature && indexedCount > 0) return;
 
   dictionaryCache.clear();
-  runSqlite(`DROP TABLE IF EXISTS dictionary_import;
+  runSqliteFile(sqliteFile, `DROP TABLE IF EXISTS dictionary_import;
 CREATE TABLE dictionary_import (
   word TEXT,
   phonetic TEXT,
@@ -5851,11 +5838,11 @@ function readTailFile(filePath, maxLines = 80) {
   return { lines: text.split(/\r?\n/).slice(-maxLines), error: '' };
 }
 
-function getOpsLogSummaryPayload(sessionRole = 'write') {
+async function getOpsLogSummaryPayload(sessionRole = 'write') {
   ensureSqliteStore();
   const sources = [];
-  const journal = spawnSync('journalctl', ['-u', 'exam-planner', '-n', '120', '--no-pager'], { encoding: 'utf8', timeout: 5000, maxBuffer: 512 * 1024 });
-  if (journal.error || journal.status !== 0) {
+  const journal = await runProcess('journalctl', ['-u', 'exam-planner', '-n', '120', '--no-pager'], { timeoutMs: 5000, maxBuffer: 512 * 1024 });
+  if (!journal.ok) {
     sources.push(summarizeLogLines('systemd:exam-planner', [], journal.error?.message || journal.stderr || 'journalctl unavailable'));
   } else {
     sources.push(summarizeLogLines('systemd:exam-planner', journal.stdout.split(/\r?\n/)));
@@ -6401,6 +6388,22 @@ function detectOpenClawAccountId() {
 }
 
 function resolveOpenClawWechatConfig({ includeSecret = false } = {}) {
+  if (privilegedClient && existsSync(privilegedHelperSocket)) {
+    return {
+      enabled: Boolean(getDailyBriefSettings({ includeSecret: true }).wechat.enabled),
+      configured: true,
+      channel: openClawChannel,
+      accountId: 'managed-by-helper',
+      accountDirExists: true,
+      accountFileExists: true,
+      targetConfigured: true,
+      hasContextToken: true,
+      cli: 'privileged-helper',
+      nextPushAt: nextDailyBriefAt,
+      scheduleTime: getDailyBriefSettings({ includeSecret: true }).generateTime,
+      ...(includeSecret ? { target: '', contextToken: '', accountToken: '', baseUrl: '' } : {}),
+    };
+  }
   const accountId = detectOpenClawAccountId();
   const accountPath = accountId ? join(openClawAccountDir, `${accountId}.json`) : '';
   const contextPath = accountId ? join(openClawAccountDir, `${accountId}.context-tokens.json`) : '';
@@ -6555,6 +6558,13 @@ function runOpenClawCli(args, { timeoutMs = 15000 } = {}) {
 }
 
 async function sendOpenClawWechatMessage(text) {
+  if (privilegedClient && existsSync(privilegedHelperSocket)) {
+    try {
+      return await privilegedClient.wechatSend(text);
+    } catch (error) {
+      return { ok: false, method: 'openclaw-weixin-privileged', error: redactSecretText(error.message || String(error)) };
+    }
+  }
   const config = resolveOpenClawWechatConfig({ includeSecret: true });
   if (!config.configured) {
     return {
@@ -7195,11 +7205,11 @@ async function handleApi(req, res) {
     sendJson,
     readJsonBody,
     writeAuditEvent,
-    getMihomoSettings,
-    saveMihomoSubscriptionSettings,
-    importMihomoProviderSettings,
-    selectMihomoProxy,
-    testMihomoProxy,
+    getMihomoSettings: privilegedClient ? () => privilegedClient.proxyStatus() : getMihomoSettings,
+    saveMihomoSubscriptionSettings: privilegedClient ? (body) => privilegedClient.proxySave(body) : saveMihomoSubscriptionSettings,
+    importMihomoProviderSettings: privilegedClient ? (body) => privilegedClient.proxyImport(body) : importMihomoProviderSettings,
+    selectMihomoProxy: privilegedClient ? (body) => privilegedClient.proxySelect(body) : selectMihomoProxy,
+    testMihomoProxy: privilegedClient ? () => privilegedClient.proxyTest() : testMihomoProxy,
   })) return;
 
   if (await handleOpsRoutes(req, res, {
