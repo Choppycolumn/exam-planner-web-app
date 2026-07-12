@@ -89,6 +89,26 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertEqual((slots[0]["start_text"], slots[0]["end_text"]), ("08:00", "08:50"))
         self.assertEqual((slots[1]["start_text"], slots[1]["end_text"]), ("09:00", "09:50"))
 
+    def test_user_can_select_and_complete_any_lesson(self):
+        start = datetime(2026, 7, 12, 10, 0).timestamp()
+        planner = self.planner()
+        planner.select_lesson(3, start)
+        session = planner.start_course(start, project_id=19, project_name="信号与系统")
+        self.assertEqual(session.lesson_number, 3)
+        planner.complete_course(start + 50 * 60)
+
+        slots = planner.schedule_slots(start + 51 * 60)
+        self.assertEqual(slots[2]["status"], "done")
+        self.assertEqual(planner.summary(start + 51 * 60)["next_lesson"], 1)
+        self.assertEqual(planner.summary(start + 51 * 60)["completed_lessons"], 1)
+
+    def test_selected_lesson_survives_restart(self):
+        now = datetime(2026, 7, 12, 8, 0).timestamp()
+        self.planner().select_lesson(4, now)
+        restored = CoursePlanner(BreakGuardStore(self.database), 4, 50, 10, "08:00", 20, 30)
+        self.assertEqual(restored.summary(now)["next_lesson"], 4)
+        self.assertTrue(restored.schedule_slots(now)[3]["selected"])
+
     def test_lag_reminder_repeats_only_after_cooldown(self):
         due = datetime(2026, 7, 12, 9, 11).timestamp()
         planner = self.planner()

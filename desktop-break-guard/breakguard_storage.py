@@ -65,11 +65,15 @@ class BreakGuardStore:
                 CREATE TABLE IF NOT EXISTS daily_schedule_state (
                     lesson_date TEXT PRIMARY KEY,
                     paused_label TEXT NOT NULL DEFAULT '',
+                    selected_lesson INTEGER NOT NULL DEFAULT 1,
                     last_lag_lesson INTEGER NOT NULL DEFAULT 0,
                     last_lag_at REAL,
                     updated_at REAL NOT NULL
                 );
             """)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_schedule_state)")}
+            if "selected_lesson" not in columns:
+                connection.execute("ALTER TABLE daily_schedule_state ADD COLUMN selected_lesson INTEGER NOT NULL DEFAULT 1")
 
     def load_runtime_state(self, key: str) -> dict | None:
         with self.lock, self._connection() as connection:
@@ -118,10 +122,18 @@ class BreakGuardStore:
     def daily_lesson_summary(self, lesson_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(
-                "SELECT COUNT(*) AS completed_lessons, COALESCE(SUM(duration_seconds),0) AS study_seconds FROM lesson_records WHERE lesson_date = ?",
+                "SELECT COUNT(DISTINCT lesson_number) AS completed_lessons, COALESCE(SUM(duration_seconds),0) AS study_seconds FROM lesson_records WHERE lesson_date = ?",
                 (lesson_date,),
             ).fetchone()
         return {"completed_lessons": int(row[0]), "study_seconds": int(row[1])}
+
+    def completed_lesson_numbers(self, lesson_date: str) -> set[int]:
+        with self.lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT lesson_number FROM lesson_records WHERE lesson_date = ?",
+                (lesson_date,),
+            ).fetchall()
+        return {int(row[0]) for row in rows}
 
     def list_daily_lessons(self, lesson_date: str) -> list[dict]:
         with self.lock, self._connection() as connection:
@@ -134,17 +146,17 @@ class BreakGuardStore:
     def daily_schedule_state(self, lesson_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(
-                "SELECT paused_label,last_lag_lesson,last_lag_at FROM daily_schedule_state WHERE lesson_date = ?",
+                "SELECT paused_label,selected_lesson,last_lag_lesson,last_lag_at FROM daily_schedule_state WHERE lesson_date = ?",
                 (lesson_date,),
             ).fetchone()
-        return dict(row) if row else {"paused_label": "", "last_lag_lesson": 0, "last_lag_at": None}
+        return dict(row) if row else {"paused_label": "", "selected_lesson": 1, "last_lag_lesson": 0, "last_lag_at": None}
 
     def update_daily_schedule_state(self, lesson_date: str, **changes) -> None:
         current = {**self.daily_schedule_state(lesson_date), **changes}
         with self.lock, self._connection() as connection:
             connection.execute(
-                "INSERT INTO daily_schedule_state(lesson_date,paused_label,last_lag_lesson,last_lag_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,updated_at=excluded.updated_at",
-                (lesson_date, current["paused_label"], current["last_lag_lesson"], current["last_lag_at"], time.time()),
+                "INSERT INTO daily_schedule_state(lesson_date,paused_label,selected_lesson,last_lag_lesson,last_lag_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,selected_lesson=excluded.selected_lesson,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,updated_at=excluded.updated_at",
+                (lesson_date, current["paused_label"], current["selected_lesson"], current["last_lag_lesson"], current["last_lag_at"], time.time()),
             )
 
     def enqueue_event(self, event_type: str, payload: dict, event_id: str | None = None) -> str:

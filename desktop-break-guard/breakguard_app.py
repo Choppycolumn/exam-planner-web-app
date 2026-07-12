@@ -227,7 +227,7 @@ class BreakGuardApp:
         self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
         self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         canvas.create_text(28, 210, anchor="w", text="课程安排", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        canvas.create_text(400, 210, anchor="e", text="点击课程格切换网站科目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
+        canvas.create_text(400, 210, anchor="e", text="点击课程格选择当前课程", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
         self.draw_schedule()
 
         vertical_offset = (self.schedule_rows - 2) * 44
@@ -253,7 +253,7 @@ class BreakGuardApp:
         return max(1, (max(1, min(12, int(self.config.daily_lessons))) + 3) // 4)
 
     def preferred_height(self) -> int:
-        return 628 + (self.schedule_rows - 2) * 44
+        return 640 + (self.schedule_rows - 2) * 44
 
     def draw_schedule(self) -> None:
         if self.canvas is None:
@@ -269,15 +269,23 @@ class BreakGuardApp:
                 "pending": (LIQUID.control_bg, LIQUID.text_secondary, str(slot["lesson_number"])),
             }
             fill, foreground, marker = colors[slot["status"]]
+            if slot["selected"] and slot["status"] != "active":
+                fill, foreground, marker = LIQUID.accent_soft, LIQUID.accent, "▶"
             lesson_tag = f"lesson_slot_{slot['lesson_number']}"
             tags = ("schedule_dynamic", lesson_tag)
             project = self.project_for_lesson(slot["lesson_number"])
             project_name = (project.get("name") or "待分配")[:5]
-            rounded_rect(self.canvas, x, y, x + 82, y + 38, 13, fill=fill, outline=LIQUID.panel_border_soft, width=1, tags=tags)
+            rounded_rect(
+                self.canvas, x, y, x + 82, y + 38, 13,
+                fill=fill,
+                outline=LIQUID.accent if slot["selected"] else LIQUID.panel_border_soft,
+                width=2 if slot["selected"] else 1,
+                tags=tags,
+            )
             self.canvas.create_text(x + 14, y + 19, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
             self.canvas.create_text(x + 50, y + 13, text=project_name, fill=foreground, font=("Microsoft YaHei UI", 8, "bold"), tags=tags)
             self.canvas.create_text(x + 50, y + 27, text=f"{slot['lesson_number']} · {slot['start_text']}", fill=LIQUID.text_tertiary, font=("Segoe UI Variable Display", 7), tags=tags)
-            self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=slot["lesson_number"]: self.cycle_lesson_project(number))
+            self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=slot["lesson_number"]: self.select_current_lesson(number))
             self.canvas.tag_bind(lesson_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
             self.canvas.tag_bind(lesson_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
 
@@ -380,6 +388,15 @@ class BreakGuardApp:
         self.set_status(f"第 {lesson_number} 节已设为：{selected['name']}")
         self.draw_schedule()
 
+    def select_current_lesson(self, lesson_number: int) -> None:
+        if self.planner.session:
+            self.set_status("课程进行中，结束后再切换当前课程")
+            return
+        selected = self.planner.select_lesson(lesson_number)
+        project = self.project_for_lesson(selected)
+        self.set_status(f"已选择第 {selected} 节：{project['name']}")
+        self.refresh_view_state()
+
     def schedule_config_payload(self) -> dict:
         self.normalize_lesson_projects()
         return {
@@ -430,7 +447,11 @@ class BreakGuardApp:
             return
         next_lesson = self.planner.summary()["next_lesson"]
         project = self.project_for_lesson(next_lesson)
-        session = self.planner.start_course(project_id=project["id"], project_name=project["name"])
+        session = self.planner.start_course(
+            project_id=project["id"],
+            project_name=project["name"],
+            lesson_number=next_lesson,
+        )
         self.hide_fullscreen()
         self.client.post_event(
             "class_started",

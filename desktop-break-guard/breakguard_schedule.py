@@ -64,17 +64,37 @@ class CoursePlanner:
         self.lag_grace_minutes = max(0, min(180, int(lag_grace_minutes)))
         self.lag_repeat_minutes = max(5, min(180, int(lag_repeat_minutes)))
 
-    def start_course(self, now: float | None = None, project_id: int = 0, project_name: str = "") -> CourseSession:
+    def _default_lesson(self, day: str) -> int:
+        completed = self.store.completed_lesson_numbers(day)
+        return next((number for number in range(1, self.daily_lessons + 1) if number not in completed), self.daily_lessons)
+
+    def selected_lesson(self, now: float | None = None) -> int:
+        day = local_date(now)
+        selected = int(self.store.daily_schedule_state(day).get("selected_lesson") or 0)
+        return selected if 1 <= selected <= self.daily_lessons else self._default_lesson(day)
+
+    def select_lesson(self, lesson_number: int, now: float | None = None) -> int:
+        selected = max(1, min(self.daily_lessons, int(lesson_number)))
+        self.store.update_daily_schedule_state(local_date(now), selected_lesson=selected, paused_label="")
+        return selected
+
+    def start_course(
+        self,
+        now: float | None = None,
+        project_id: int = 0,
+        project_name: str = "",
+        lesson_number: int | None = None,
+    ) -> CourseSession:
         if self.session:
             return self.session
         now = now if now is not None else time.time()
         day = local_date(now)
-        summary = self.store.daily_lesson_summary(day)
+        selected = self.select_lesson(lesson_number or self.selected_lesson(now), now)
         self.store.update_daily_schedule_state(day, paused_label="")
         self.session = CourseSession(
             session_id=uuid.uuid4().hex,
             lesson_date=day,
-            lesson_number=int(summary["completed_lessons"]) + 1,
+            lesson_number=selected,
             started_at=now,
             started_iso=utc_iso(now),
             project_id=int(project_id or 0),
@@ -97,6 +117,9 @@ class CoursePlanner:
             "ended_at": now,
             "duration_seconds": duration,
         })
+        completed = self.store.completed_lesson_numbers(current.lesson_date)
+        next_lesson = next((number for number in range(1, self.daily_lessons + 1) if number not in completed), current.lesson_number)
+        self.store.update_daily_schedule_state(current.lesson_date, selected_lesson=next_lesson)
         self.session = None
         self.store.clear_course_session()
         return current, duration
@@ -120,6 +143,7 @@ class CoursePlanner:
         day = local_date(now)
         stored = self.store.daily_lesson_summary(day)
         completed = int(stored["completed_lessons"])
+        selected = self.session.lesson_number if self.session else self.selected_lesson(now)
         study_seconds = int(stored["study_seconds"])
         target_seconds = self.daily_lessons * self.lesson_minutes * 60
         return {
@@ -129,7 +153,7 @@ class CoursePlanner:
             "study_seconds": study_seconds,
             "target_seconds": target_seconds,
             "progress": min(1.0, completed / self.daily_lessons),
-            "next_lesson": completed + 1,
+            "next_lesson": selected,
             "paused_label": self.store.daily_schedule_state(day)["paused_label"],
         }
 
@@ -138,11 +162,12 @@ class CoursePlanner:
         day = datetime.fromtimestamp(now)
         hour, minute = parse_clock(self.day_start)
         cursor = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        completed = self.store.daily_lesson_summary(local_date(now))["completed_lessons"]
+        completed_numbers = self.store.completed_lesson_numbers(local_date(now))
+        selected = self.selected_lesson(now)
         slots = []
         for index in range(1, self.daily_lessons + 1):
             end = cursor + timedelta(minutes=self.lesson_minutes)
-            status = "done" if index <= completed else "active" if self.session and self.session.lesson_number == index else "pending"
+            status = "active" if self.session and self.session.lesson_number == index else "done" if index in completed_numbers else "pending"
             slots.append({
                 "lesson_number": index,
                 "start_at": cursor.timestamp(),
@@ -150,6 +175,7 @@ class CoursePlanner:
                 "start_text": cursor.strftime("%H:%M"),
                 "end_text": end.strftime("%H:%M"),
                 "status": status,
+                "selected": index == selected,
             })
             cursor = end + timedelta(minutes=self.break_minutes)
         return slots
@@ -159,7 +185,8 @@ class CoursePlanner:
         summary = self.summary(now)
         if self.session or summary["paused_label"] or summary["completed_lessons"] >= self.daily_lessons:
             return {"due": False}
-        lesson_number = summary["completed_lessons"] + 1
+        completed_numbers = self.store.completed_lesson_numbers(summary["date"])
+        lesson_number = next((number for number in range(1, self.daily_lessons + 1) if number not in completed_numbers), self.daily_lessons)
         slot = self.schedule_slots(now)[lesson_number - 1]
         due_at = slot["end_at"] + self.lag_grace_minutes * 60
         if now < due_at:
