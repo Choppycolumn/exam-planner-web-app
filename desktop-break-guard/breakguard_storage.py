@@ -52,20 +52,100 @@ class BreakGuardStore:
                     sent_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_event_outbox_due ON event_outbox(status, next_attempt_at);
+                CREATE TABLE IF NOT EXISTS lesson_records (
+                    session_id TEXT PRIMARY KEY,
+                    lesson_date TEXT NOT NULL,
+                    lesson_number INTEGER NOT NULL,
+                    started_at REAL NOT NULL,
+                    ended_at REAL NOT NULL,
+                    duration_seconds INTEGER NOT NULL,
+                    created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_lesson_records_date ON lesson_records(lesson_date, lesson_number);
+                CREATE TABLE IF NOT EXISTS daily_schedule_state (
+                    lesson_date TEXT PRIMARY KEY,
+                    paused_label TEXT NOT NULL DEFAULT '',
+                    last_lag_lesson INTEGER NOT NULL DEFAULT 0,
+                    last_lag_at REAL,
+                    updated_at REAL NOT NULL
+                );
             """)
 
-    def load_session(self) -> dict | None:
+    def load_runtime_state(self, key: str) -> dict | None:
         with self.lock, self._connection() as connection:
-            row = connection.execute("SELECT value_json FROM runtime_state WHERE key = 'active_session'").fetchone()
+            row = connection.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def save_session(self, payload: dict) -> None:
+    def save_runtime_state(self, key: str, payload: dict) -> None:
         with self.lock, self._connection() as connection:
-            connection.execute("INSERT INTO runtime_state(key,value_json,updated_at) VALUES('active_session',?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at", (json.dumps(payload, ensure_ascii=False), time.time()))
+            connection.execute(
+                "INSERT INTO runtime_state(key,value_json,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at",
+                (key, json.dumps(payload, ensure_ascii=False), time.time()),
+            )
+
+    def clear_runtime_state(self, key: str) -> None:
+        with self.lock, self._connection() as connection:
+            connection.execute("DELETE FROM runtime_state WHERE key = ?", (key,))
+
+    def load_session(self) -> dict | None:
+        return self.load_runtime_state("active_session")
+
+    def save_session(self, payload: dict) -> None:
+        self.save_runtime_state("active_session", payload)
 
     def clear_session(self) -> None:
+        self.clear_runtime_state("active_session")
+
+    def load_course_session(self) -> dict | None:
+        return self.load_runtime_state("active_course")
+
+    def save_course_session(self, payload: dict) -> None:
+        self.save_runtime_state("active_course", payload)
+
+    def clear_course_session(self) -> None:
+        self.clear_runtime_state("active_course")
+
+    def add_lesson_record(self, payload: dict) -> None:
         with self.lock, self._connection() as connection:
-            connection.execute("DELETE FROM runtime_state WHERE key = 'active_session'")
+            connection.execute(
+                "INSERT OR IGNORE INTO lesson_records(session_id,lesson_date,lesson_number,started_at,ended_at,duration_seconds,created_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    payload["session_id"], payload["lesson_date"], payload["lesson_number"],
+                    payload["started_at"], payload["ended_at"], payload["duration_seconds"], time.time(),
+                ),
+            )
+
+    def daily_lesson_summary(self, lesson_date: str) -> dict:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS completed_lessons, COALESCE(SUM(duration_seconds),0) AS study_seconds FROM lesson_records WHERE lesson_date = ?",
+                (lesson_date,),
+            ).fetchone()
+        return {"completed_lessons": int(row[0]), "study_seconds": int(row[1])}
+
+    def list_daily_lessons(self, lesson_date: str) -> list[dict]:
+        with self.lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT session_id,lesson_number,started_at,ended_at,duration_seconds FROM lesson_records WHERE lesson_date = ? ORDER BY lesson_number,started_at",
+                (lesson_date,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def daily_schedule_state(self, lesson_date: str) -> dict:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT paused_label,last_lag_lesson,last_lag_at FROM daily_schedule_state WHERE lesson_date = ?",
+                (lesson_date,),
+            ).fetchone()
+        return dict(row) if row else {"paused_label": "", "last_lag_lesson": 0, "last_lag_at": None}
+
+    def update_daily_schedule_state(self, lesson_date: str, **changes) -> None:
+        current = {**self.daily_schedule_state(lesson_date), **changes}
+        with self.lock, self._connection() as connection:
+            connection.execute(
+                "INSERT INTO daily_schedule_state(lesson_date,paused_label,last_lag_lesson,last_lag_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,updated_at=excluded.updated_at",
+                (lesson_date, current["paused_label"], current["last_lag_lesson"], current["last_lag_at"], time.time()),
+            )
 
     def enqueue_event(self, event_type: str, payload: dict, event_id: str | None = None) -> str:
         event_id = event_id or uuid.uuid4().hex

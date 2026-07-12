@@ -13,6 +13,8 @@ export async function handlePublicApiRoutes(req, res, {
   recordBreakGuardEvent,
   queueBreakGuardNotification,
   getBreakGuardSummary,
+  getBreakGuardScheduleConfig,
+  saveBreakGuardScheduleConfig,
   todayISO,
   findDictionaryEntry,
   confusingWordsRepository,
@@ -61,10 +63,30 @@ export async function handlePublicApiRoutes(req, res, {
     }
     const event = recordBreakGuardEvent(body);
     let delivery = null;
-    if (!event.duplicate && (event.eventType === 'break_timeout_warning' || event.eventType === 'unfocused')) {
+    if (!event.duplicate && ['break_timeout_warning', 'unfocused', 'schedule_lag'].includes(event.eventType)) {
       delivery = queueBreakGuardNotification(event);
     }
     sendJson(res, { ok: true, event, summary: getBreakGuardSummary(todayISO()), delivery });
+    return true;
+  }
+
+  if (req.url === '/api/break-guard/config' && ['GET', 'POST'].includes(req.method)) {
+    const body = req.method === 'POST' ? await readJsonBody(req) : {};
+    const sessionRole = getSessionRole(req.headers.cookie);
+    const tokenAccess = requireBreakGuardToken(req, body);
+    if (!sessionRole && !tokenAccess.ok) {
+      sendJson(res, { error: tokenAccess.error }, tokenAccess.status);
+      return true;
+    }
+    if (req.method === 'GET') {
+      sendJson(res, getBreakGuardScheduleConfig());
+      return true;
+    }
+    if (sessionRole === 'read') {
+      sendJson(res, { error: 'Read only mode' }, 403);
+      return true;
+    }
+    sendJson(res, { ok: true, ...saveBreakGuardScheduleConfig(body.config || body) });
     return true;
   }
 

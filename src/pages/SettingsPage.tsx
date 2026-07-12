@@ -21,6 +21,7 @@ import type { ConfusingWordGroup } from '../features/confusing-words/types';
 import { BACKUP_BASE_URL_KEY, BACKUP_META_KEY, LEGACY_BACKUP_PASSWORD_KEY, backupKindLabel, defaultBriefSettings, formatBytes, parseReminderOffsets, reminderOffsetsText, type SettingsTab } from '../features/settings/settingsModel';
 import { SettingsNavigation } from '../features/settings/SettingsNavigation';
 import { BriefSettingsSection } from '../features/settings/BriefSettingsSection';
+import { BreakGuardScheduleSection } from '../features/settings/BreakGuardScheduleSection';
 
 export function SettingsPage() {
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
@@ -347,6 +348,7 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+      <BreakGuardScheduleSection visible={showSection('briefs')} readOnly={readOnly} />
       <BriefSettingsSection
         visible={showSection('briefs')}
         settings={briefSettings}

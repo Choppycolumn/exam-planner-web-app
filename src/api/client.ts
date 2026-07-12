@@ -1,5 +1,5 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
-import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail } from './contracts';
+import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse } from './contracts';
 import { invalidateServerQueries } from './queryClient';
 import { apiRequest } from './transport';
 export * from './contracts';
@@ -80,6 +80,8 @@ export const serverApi = {
   saveWaterIntake: (record: Pick<WaterIntakeRecord, 'date' | 'cups' | 'cupMl' | 'targetCups'>) =>
     apiRequest<void>('/water/save', { method: 'POST', body: record }),
   getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
+  getBreakGuardSchedule: () => apiRequest<BreakGuardScheduleResponse>('/break-guard/config'),
+  saveBreakGuardSchedule: (config: BreakGuardScheduleConfig) => apiRequest<{ ok: true } & BreakGuardScheduleResponse>('/break-guard/config', { method: 'POST', body: { config } }),
   runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
   restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
   getMihomoSettings: () => apiRequest<MihomoSettingsResponse>('/settings/mihomo'),

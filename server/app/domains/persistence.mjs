@@ -53,7 +53,7 @@ function baseState() {
                 updatedAt: timestamp,
             }],
         dailyReviews: [],
-        studyProjects: ['高等数学', '线性代数', '概率论', '英语单词', '英语阅读', '专业课', '政治', '复盘总结'].map((name, index) => ({
+        studyProjects: ['高等数学', '线性代数', '概率论', '英一', '信号与系统', '政治'].map((name, index) => ({
             id: index + 1,
             name,
             color: runtime.projectColors[index % runtime.projectColors.length],

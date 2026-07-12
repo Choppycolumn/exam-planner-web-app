@@ -3,6 +3,10 @@ const EVENT_LABELS = {
   break_completed: '休息结束',
   break_timeout_warning: '休息超时提醒',
   unfocused: '不专注记录',
+  class_started: '开始上课',
+  class_completed: '完成课程',
+  schedule_lag: '课表进度落后',
+  schedule_config_updated: '课表设置更新',
   lunch: '中午吃饭',
   dinner: '晚上吃饭',
   meal: '吃饭',
@@ -15,8 +19,37 @@ export function createBreakGuardService({
   todayISO,
   repository,
   tableChanged,
+  refreshStudySummariesForDate,
   queueProactiveNotification,
 }) {
+  function normalizeScheduleConfig(input = {}) {
+    const projects = repository.listActiveProjects();
+    const validProjectIds = new Set(projects.map((project) => project.id));
+    const dailyLessons = Math.max(1, Math.min(12, Math.round(Number(input.dailyLessons || 8))));
+    const requested = Array.isArray(input.lessonProjects) ? input.lessonProjects.map(Number).filter((id) => validProjectIds.has(id)) : [];
+    const lessonProjects = Array.from({ length: dailyLessons }, (_, index) => requested[index] || projects[index % Math.max(1, projects.length)]?.id || 0);
+    return {
+      dailyLessons,
+      lessonMinutes: Math.max(10, Math.min(180, Math.round(Number(input.lessonMinutes || 50)))),
+      breakMinutes: Math.max(1, Math.min(60, Math.round(Number(input.breakMinutes || 10)))),
+      dayStart: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(input.dayStart || '')) ? String(input.dayStart) : '08:00',
+      lagGraceMinutes: Math.max(0, Math.min(180, Math.round(Number(input.lagGraceMinutes ?? 20)))),
+      lagRepeatMinutes: Math.max(5, Math.min(180, Math.round(Number(input.lagRepeatMinutes || 30)))),
+      lessonProjects,
+    };
+  }
+
+  function getScheduleConfig() {
+    const projects = repository.listActiveProjects();
+    return { config: normalizeScheduleConfig(repository.getScheduleConfig() || {}), projects };
+  }
+
+  function saveScheduleConfig(input = {}) {
+    const config = normalizeScheduleConfig(input);
+    repository.saveScheduleConfig(config);
+    return { config, projects: repository.listActiveProjects() };
+  }
+
   function requireToken(req, body = {}) {
     if (!token) return { ok: false, status: 503, error: 'Break guard token is not configured' };
     const provided = String(req.headers['x-break-guard-token'] || body.token || '');
@@ -59,8 +92,20 @@ export function createBreakGuardService({
     }
     const createdAt = nowISO();
     repository.insertEvent(event, createdAt);
+    let schedule = null;
+    let studyRecord = null;
+    if (event.eventType === 'schedule_config_updated') schedule = saveScheduleConfig(event.payload);
+    if (event.eventType === 'class_completed') {
+      studyRecord = repository.appendStudyTime({
+        lessonDate: event.payload?.lessonDate,
+        projectId: Number(event.payload?.projectId || 0),
+        durationSeconds: Number(event.payload?.durationSeconds || 0),
+        lessonNumber: Number(event.payload?.lessonNumber || 0),
+      });
+      if (studyRecord) refreshStudySummariesForDate?.(studyRecord.lessonDate);
+    }
     tableChanged();
-    return { ...event, label: EVENT_LABELS[event.eventType], createdAt, duplicate: false };
+    return { ...event, label: EVENT_LABELS[event.eventType], createdAt, duplicate: false, studyRecord, schedule };
   }
 
   function getSummary(date = todayISO()) {
@@ -76,6 +121,8 @@ export function createBreakGuardService({
       completedBreakCount: Number(byType.break_completed?.count || 0),
       timeoutWarningCount: Number(byType.break_timeout_warning?.count || 0),
       unfocusedCount: Number(byType.unfocused?.count || 0),
+      completedLessonCount: Number(byType.class_completed?.count || 0),
+      scheduleLagCount: Number(byType.schedule_lag?.count || 0),
       lunchCount: Number(byType.lunch?.count || 0),
       dinnerCount: Number(byType.dinner?.count || 0),
       latest,
@@ -83,17 +130,21 @@ export function createBreakGuardService({
   }
 
   function queueNotification(event) {
-    const title = event.eventType === 'unfocused' ? '休息超时未归记录' : '休息结束提醒';
-    const text = event.eventType === 'unfocused'
+    const isUnfocused = event.eventType === 'unfocused';
+    const isScheduleLag = event.eventType === 'schedule_lag';
+    const title = isUnfocused ? '休息超时未归记录' : isScheduleLag ? '今日课表进度落后' : '休息结束提醒';
+    const text = isUnfocused
       ? `休息结束后已超过 ${Math.max(5, Math.round(event.overdueSeconds / 60))} 分钟仍未取消，已记录一次不专注。`
-      : '10 分钟休息已经结束，请回到学习。如果已经回来了，请在桌面悬浮窗点“我回来了”。';
+      : isScheduleLag
+        ? `当前完成 ${Number(event.payload?.completedLessons || 0)} / ${Number(event.payload?.dailyLessons || 0)} 节，第 ${Number(event.payload?.lessonNumber || 0)} 节尚未完成。请回到 Break Guard 调整今天的学习节奏。`
+        : '课间休息已经结束，请回到学习并在桌面悬浮窗结束休息。';
     return queueProactiveNotification({
       eventKey: `break-guard:${event.eventType}:${event.eventId || event.createdAt}`,
-      source: 'break_guard', severity: event.eventType === 'unfocused' ? 'warning' : 'info', title, content: text,
+      source: 'break_guard', severity: isUnfocused || isScheduleLag ? 'warning' : 'info', title, content: text,
       text: `【${title}】\n${text}`,
       payload: { eventId: event.eventId, eventType: event.eventType, overdueSeconds: event.overdueSeconds, createdAt: event.createdAt },
     });
   }
 
-  return { requireToken, normalizeEvent, recordEvent, getSummary, queueNotification };
+  return { requireToken, normalizeEvent, recordEvent, getSummary, queueNotification, getScheduleConfig, saveScheduleConfig };
 }

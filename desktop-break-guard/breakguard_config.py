@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 from breakguard_logging import log_error
 from breakguard_runtime import CONFIG_FILE, CONFIG_TEMPLATE_FILE, LEGACY_CONFIG_FILE
@@ -13,6 +13,13 @@ class Config:
     server_url: str
     token: str
     break_minutes: int = 10
+    daily_lessons: int = 8
+    lesson_minutes: int = 50
+    day_start: str = "08:00"
+    lag_grace_minutes: int = 20
+    lag_repeat_minutes: int = 30
+    lesson_projects: list[int] = field(default_factory=list)
+    available_projects: list[dict] = field(default_factory=list)
     notify_after_seconds: int = 60
     unfocused_after_seconds: int = 300
     always_on_top: bool = True
@@ -33,6 +40,16 @@ class Config:
         config = cls(
             server_url=str(raw.get("server_url", "")).rstrip("/"), token=token,
             break_minutes=max(1, int(raw.get("break_minutes", 10))),
+            daily_lessons=max(1, min(12, int(raw.get("daily_lessons", 8)))),
+            lesson_minutes=max(10, min(180, int(raw.get("lesson_minutes", 50)))),
+            day_start=str(raw.get("day_start", "08:00")),
+            lag_grace_minutes=max(0, min(180, int(raw.get("lag_grace_minutes", 20)))),
+            lag_repeat_minutes=max(5, min(180, int(raw.get("lag_repeat_minutes", 30)))),
+            lesson_projects=[int(value) for value in raw.get("lesson_projects", []) if str(value).isdigit()][:12],
+            available_projects=[
+                {"id": int(item.get("id", 0)), "name": str(item.get("name", "")), "color": str(item.get("color", "#2563eb"))}
+                for item in raw.get("available_projects", []) if isinstance(item, dict) and int(item.get("id", 0)) > 0
+            ],
             notify_after_seconds=max(5, int(raw.get("notify_after_seconds", 60))),
             unfocused_after_seconds=max(30, int(raw.get("unfocused_after_seconds", 300))),
             always_on_top=bool(raw.get("always_on_top", True)),

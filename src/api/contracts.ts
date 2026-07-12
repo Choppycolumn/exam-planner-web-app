@@ -77,6 +77,8 @@ export interface BreakGuardSummary {
   completedBreakCount: number;
   timeoutWarningCount: number;
   unfocusedCount: number;
+  completedLessonCount: number;
+  scheduleLagCount: number;
   lunchCount: number;
   dinnerCount: number;
   latest: Array<{
@@ -88,6 +90,28 @@ export interface BreakGuardSummary {
     overdueSeconds: number;
     createdAt: string;
   }>;
+}
+
+export interface BreakGuardScheduleConfig {
+  dailyLessons: number;
+  lessonMinutes: number;
+  breakMinutes: number;
+  dayStart: string;
+  lagGraceMinutes: number;
+  lagRepeatMinutes: number;
+  lessonProjects: number[];
+}
+
+export interface BreakGuardProject {
+  id: number;
+  name: string;
+  color: string;
+  sortOrder: number;
+}
+
+export interface BreakGuardScheduleResponse {
+  config: BreakGuardScheduleConfig;
+  projects: BreakGuardProject[];
 }
 
 export interface ReviewTrendResponse {

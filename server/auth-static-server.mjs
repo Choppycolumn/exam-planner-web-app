@@ -256,10 +256,11 @@ const breakGuardService = createBreakGuardService({
     todayISO,
     repository: breakGuardRepository,
     tableChanged: runtime.tableChanged,
+    refreshStudySummariesForDate: runtime.refreshStudySummariesForDate,
     queueProactiveNotification: runtime.queueProactiveNotification,
 });
-const { requireToken: requireBreakGuardToken, recordEvent: recordBreakGuardEvent, getSummary: getBreakGuardSummary, queueNotification: queueBreakGuardNotification, } = breakGuardService;
+const { requireToken: requireBreakGuardToken, recordEvent: recordBreakGuardEvent, getSummary: getBreakGuardSummary, queueNotification: queueBreakGuardNotification, getScheduleConfig: getBreakGuardScheduleConfig, saveScheduleConfig: saveBreakGuardScheduleConfig, } = breakGuardService;
 
-exposeRuntime({ "backupService": () => backupService, "createBackupFile": () => createBackupFile, "restoreBackupFile": () => restoreBackupFile, "ensureDailyBackup": () => ensureDailyBackup, "ensureWeeklyBackup": () => ensureWeeklyBackup, "getBackupStatus": () => getBackupStatus, "nextWeeklyBackupAt": () => nextWeeklyBackupAt, "nextDailyBackupAt": () => nextDailyBackupAt, "breakGuardService": () => breakGuardService, "requireBreakGuardToken": () => requireBreakGuardToken, "recordBreakGuardEvent": () => recordBreakGuardEvent, "getBreakGuardSummary": () => getBreakGuardSummary, "queueBreakGuardNotification": () => queueBreakGuardNotification }, {  });
+exposeRuntime({ "backupService": () => backupService, "createBackupFile": () => createBackupFile, "restoreBackupFile": () => restoreBackupFile, "ensureDailyBackup": () => ensureDailyBackup, "ensureWeeklyBackup": () => ensureWeeklyBackup, "getBackupStatus": () => getBackupStatus, "nextWeeklyBackupAt": () => nextWeeklyBackupAt, "nextDailyBackupAt": () => nextDailyBackupAt, "breakGuardService": () => breakGuardService, "requireBreakGuardToken": () => requireBreakGuardToken, "recordBreakGuardEvent": () => recordBreakGuardEvent, "getBreakGuardSummary": () => getBreakGuardSummary, "queueBreakGuardNotification": () => queueBreakGuardNotification, "getBreakGuardScheduleConfig": () => getBreakGuardScheduleConfig, "saveBreakGuardScheduleConfig": () => saveBreakGuardScheduleConfig }, {  });
 
 await import('./app/domains/bootstrap.mjs');

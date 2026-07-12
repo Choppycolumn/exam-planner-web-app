@@ -20,6 +20,8 @@ async function handleApi(req, res) {
         recordBreakGuardEvent: runtime.recordBreakGuardEvent,
         queueBreakGuardNotification: runtime.queueBreakGuardNotification,
         getBreakGuardSummary: runtime.getBreakGuardSummary,
+        getBreakGuardScheduleConfig: runtime.getBreakGuardScheduleConfig,
+        saveBreakGuardScheduleConfig: runtime.saveBreakGuardScheduleConfig,
         todayISO: runtime.todayISO,
         findDictionaryEntry: runtime.findDictionaryEntry,
         confusingWordsRepository: runtime.confusingWordsRepository,

@@ -25,7 +25,7 @@ export async function initializeDefaultData() {
     });
 
     await db.studyProjects.bulkAdd(
-      ['高等数学', '线性代数', '概率论', '英语单词', '英语阅读', '专业课', '政治', '复盘总结'].map((name, index) => ({
+      ['高等数学', '线性代数', '概率论', '英一', '信号与系统', '政治'].map((name, index) => ({
         name,
         color: projectColors[index % projectColors.length],
         isActive: true,
