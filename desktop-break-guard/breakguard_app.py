@@ -151,6 +151,11 @@ class BreakGuardApp:
 
         self.enable_acrylic()
         self.build_ui()
+        self.root.update_idletasks()
+        clamp_window_to_screen(self.root, self.width, self.height)
+        self.root.update_idletasks()
+        self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+        self.config.save()
         self.tray = WindowsTrayIcon(ICON_FILE, self.tray_actions)
         if self.tray.wait_until_ready():
             self.hide_from_taskbar()
