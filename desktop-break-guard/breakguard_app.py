@@ -122,7 +122,9 @@ class BreakGuardApp:
 
         self.root = Tk()
         self.root.title("休息守护")
-        self.width, self.height = 428, 628
+        self.width = 428
+        self.schedule_rows = self.schedule_row_count()
+        self.height = self.preferred_height()
         self.root.geometry(geometry_with_size(self.config.window_geometry, self.width, self.height))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", self.config.always_on_top)
@@ -216,28 +218,42 @@ class BreakGuardApp:
         close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
         self.button_commands.append(close_button)
         self.buttons["btn_close"] = close_button
-        canvas.create_text(28, 82, anchor="w", text="点击开始上课，到时自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
+        canvas.create_text(28, 87, anchor="w", text="点击开始上课，到时自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
 
-        rounded_rect(canvas, 28, 100, 400, 182, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
-        canvas.create_text(46, 121, anchor="w", text="今日课表", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.progress_item = canvas.create_text(382, 121, anchor="e", text="0 / 8 节", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
-        rounded_rect(canvas, 46, 143, 382, 153, 5, fill=LIQUID.neutral_soft, outline="")
-        self.progress_bar = rounded_rect(canvas, 46, 143, 47, 153, 5, fill=LIQUID.accent, outline="")
-        self.target_item = canvas.create_text(46, 169, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        canvas.create_text(28, 191, anchor="w", text="课程安排 · 点击课程格切换网站科目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        rounded_rect(canvas, 28, 106, 400, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+        canvas.create_text(46, 127, anchor="w", text="今日课表", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
+        self.progress_item = canvas.create_text(382, 127, anchor="e", text="0 / 8 节", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
+        rounded_rect(canvas, 46, 149, 382, 159, 5, fill=LIQUID.neutral_soft, outline="")
+        self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
+        self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        canvas.create_text(28, 210, anchor="w", text="课程安排", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        canvas.create_text(400, 210, anchor="e", text="点击课程格切换网站科目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
         self.draw_schedule()
 
-        painter.timer_well(28, 350, 400, 454)
-        self.timer_item = canvas.create_text(214, 391, text="第 1 节", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 38, "bold"))
-        self.subtitle_item = canvas.create_text(214, 433, text="准备开始今天的课程", fill=LIQUID.text_secondary, font=LIQUID.font_status)
-        self.add_button(28, 472, 242, 50, "开始第 1 节课", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
-        self.add_button(282, 472, 118, 50, "课表设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
-        canvas.create_text(29, 542, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        self.add_button(28, 556, 116, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(156, 556, 116, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(284, 556, 116, 38, "收起", "btn_min", self.hide_to_tray, LIQUID.control_bg, LIQUID.text_secondary)
-        canvas.create_line(38, 606, 390, 606, fill=LIQUID.panel_border_soft, width=1)
-        self.status_item = canvas.create_text(214, 617, text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_tertiary, font=LIQUID.font_footer)
+        vertical_offset = (self.schedule_rows - 2) * 44
+        timer_top = 326 + vertical_offset
+        painter.timer_well(28, timer_top, 400, timer_top + 104)
+        self.timer_item = canvas.create_text(214, timer_top + 41, text="第 1 节", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 38, "bold"))
+        self.subtitle_item = canvas.create_text(214, timer_top + 82, text="准备开始今天的课程", fill=LIQUID.text_secondary, font=LIQUID.font_status)
+
+        action_top = timer_top + 121
+        self.add_button(28, action_top, 242, 50, "开始第 1 节课", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
+        self.add_button(282, action_top, 118, 50, "课表设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
+        canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        self.add_button(28, action_top + 88, 116, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(156, action_top + 88, 116, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(284, action_top + 88, 116, 38, "收起", "btn_min", self.hide_to_tray, LIQUID.control_bg, LIQUID.text_secondary)
+
+        status_top = action_top + 141
+        rounded_rect(canvas, 28, status_top, 400, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        canvas.create_oval(40, status_top + 10, 48, status_top + 18, fill=LIQUID.success, outline="")
+        self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=328)
+
+    def schedule_row_count(self) -> int:
+        return max(1, (max(1, min(12, int(self.config.daily_lessons))) + 3) // 4)
+
+    def preferred_height(self) -> int:
+        return 628 + (self.schedule_rows - 2) * 44
 
     def draw_schedule(self) -> None:
         if self.canvas is None:
@@ -246,7 +262,7 @@ class BreakGuardApp:
         for slot in self.planner.schedule_slots()[:12]:
             index = slot["lesson_number"] - 1
             row, column = divmod(index, 4)
-            x, y = 28 + column * 93, 204 + row * 46
+            x, y = 28 + column * 93, 226 + row * 44
             colors = {
                 "done": (LIQUID.success_soft, LIQUID.success_text, "✓"),
                 "active": (LIQUID.accent_soft, LIQUID.accent, "●"),
@@ -322,7 +338,7 @@ class BreakGuardApp:
         self.canvas.itemconfigure(self.target_item, text=f"目标 {hours}小时{minutes:02d}分 · 已完成 {study_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
         width = max(1, int(336 * summary["progress"]))
-        self.progress_bar = rounded_rect(self.canvas, 46, 143, 46 + width, 153, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
+        self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
         self.draw_schedule()
         return summary
 
@@ -478,6 +494,17 @@ class BreakGuardApp:
             self.config.lag_grace_minutes,
             self.config.lag_repeat_minutes,
         )
+        next_rows = self.schedule_row_count()
+        if next_rows != self.schedule_rows:
+            self.schedule_rows = next_rows
+            self.height = self.preferred_height()
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+            self.root.geometry(f"{self.width}x{self.height}+{x}+{y}")
+            self.build_ui()
+            self.root.update_idletasks()
+            clamp_window_to_screen(self.root, self.width, self.height)
+            self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+            self.config.save()
         if sync:
             self.sync_schedule_config()
         self.set_status("每日课表已更新")
