@@ -22,6 +22,7 @@ class ScheduleSettingsDialog:
         self.lesson_projects = list(config.lesson_projects)
         self.value_items = {}
         self.window = Toplevel(parent)
+        self.window.withdraw()
         self.window.title("课表设置")
         self.window.geometry(self._geometry(parent, self.WIDTH, self.HEIGHT))
         self.window.overrideredirect(True)
@@ -41,6 +42,9 @@ class ScheduleSettingsDialog:
         self.window.bind("<Escape>", lambda _event: self.close())
         self.canvas.bind("<ButtonPress-1>", self._start_drag)
         self.canvas.bind("<B1-Motion>", self._drag)
+        self.window.update_idletasks()
+        self.window.deiconify()
+        self.window.lift()
 
     @staticmethod
     def _clock_minutes(value: str) -> int:

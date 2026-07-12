@@ -42,6 +42,13 @@ def geometry_with_size(saved: str, width: int, height: int) -> str:
     return f"{width}x{height}{match.group(1)}{match.group(2)}" if match else default_geometry(width, height)
 
 
+def saved_window_size(saved: str, minimum_width: int, minimum_height: int) -> tuple[int, int]:
+    match = re.match(r"^(\d+)x(\d+)[+-]\d+[+-]\d+$", str(saved or ""))
+    if not match:
+        return minimum_width, minimum_height
+    return max(minimum_width, int(match.group(1))), max(minimum_height, int(match.group(2)))
+
+
 def bring_to_front(window) -> None:
     try:
         window.deiconify()
@@ -122,9 +129,10 @@ class BreakGuardApp:
 
         self.root = Tk()
         self.root.title("休息守护")
-        self.width = 428
+        self.minimum_width = 428
         self.schedule_rows = self.schedule_row_count()
-        self.height = self.preferred_height()
+        self.minimum_height = self.preferred_height()
+        self.width, self.height = saved_window_size(self.config.window_geometry, self.minimum_width, self.minimum_height)
         self.root.geometry(geometry_with_size(self.config.window_geometry, self.width, self.height))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", self.config.always_on_top)
@@ -134,6 +142,7 @@ class BreakGuardApp:
         self.root.bind("<ButtonPress-1>", self.start_drag)
         self.root.bind("<B1-Motion>", self.drag)
         self.root.bind("<ButtonRelease-1>", self.stop_drag)
+        self.root.bind("<Motion>", self.update_resize_cursor)
 
         self.canvas: Canvas | None = None
         self.timer_item = self.subtitle_item = self.status_item = self.state_dot = None
@@ -142,6 +151,8 @@ class BreakGuardApp:
         self.buttons: dict[str, CanvasButton] = {}
         self.drag_offset = (0, 0)
         self.dragging = False
+        self.resize_edge = ""
+        self.resize_origin = None
         self.hidden_to_tray = False
         self.exiting = False
         self.fullscreen: Toplevel | None = None
@@ -210,44 +221,50 @@ class BreakGuardApp:
         painter = LiquidPainter(canvas)
         painter.background(self.width, self.height)
         painter.glass_panel(8, 8, self.width - 8, self.height - 8)
+        right = self.width - 28
+        center = self.width / 2
         self.state_dot = painter.status_dot(29, 31, LIQUID.success)
         canvas.create_text(50, 37, anchor="w", text="Break Guard", fill=LIQUID.text_primary, font=LIQUID.font_title)
         canvas.create_text(50, 57, anchor="w", text="每日课表 · 专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        close_visual = painter.icon_button(374, 22, 32, "×", "btn_close")
+        close_visual = painter.icon_button(self.width - 54, 22, 32, "×", "btn_close")
         close_visual["label"] = "btn_close__label"
         close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
         self.button_commands.append(close_button)
         self.buttons["btn_close"] = close_button
         canvas.create_text(28, 87, anchor="w", text="点击开始上课，到时自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
 
-        rounded_rect(canvas, 28, 106, 400, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+        rounded_rect(canvas, 28, 106, right, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_text(46, 127, anchor="w", text="今日课表", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.progress_item = canvas.create_text(382, 127, anchor="e", text="0 / 8 节", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
-        rounded_rect(canvas, 46, 149, 382, 159, 5, fill=LIQUID.neutral_soft, outline="")
+        self.progress_item = canvas.create_text(right - 18, 127, anchor="e", text="0 / 8 节", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
+        self.progress_track_width = max(1, right - 64)
+        rounded_rect(canvas, 46, 149, right - 18, 159, 5, fill=LIQUID.neutral_soft, outline="")
         self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
         self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         canvas.create_text(28, 210, anchor="w", text="课程安排", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        canvas.create_text(400, 210, anchor="e", text="点击课程格选择当前课程", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
+        canvas.create_text(right, 210, anchor="e", text="点击课程格选择当前课程", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
         self.draw_schedule()
 
         vertical_offset = (self.schedule_rows - 2) * 44
         timer_top = 326 + vertical_offset
-        painter.timer_well(28, timer_top, 400, timer_top + 104)
-        self.timer_item = canvas.create_text(214, timer_top + 41, text="第 1 节", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 38, "bold"))
-        self.subtitle_item = canvas.create_text(214, timer_top + 82, text="准备开始今天的课程", fill=LIQUID.text_secondary, font=LIQUID.font_status)
+        painter.timer_well(28, timer_top, right, timer_top + 104)
+        self.timer_item = canvas.create_text(center, timer_top + 41, text="第 1 节", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 38, "bold"))
+        self.subtitle_item = canvas.create_text(center, timer_top + 82, text="准备开始今天的课程", fill=LIQUID.text_secondary, font=LIQUID.font_status)
 
         action_top = timer_top + 121
-        self.add_button(28, action_top, 242, 50, "开始第 1 节课", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
-        self.add_button(282, action_top, 118, 50, "课表设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
+        settings_width = 118
+        primary_width = self.width - 186
+        self.add_button(28, action_top, primary_width, 50, "开始第 1 节课", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
+        self.add_button(self.width - 146, action_top, settings_width, 50, "课表设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
         canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        self.add_button(28, action_top + 88, 116, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(156, action_top + 88, 116, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(284, action_top + 88, 116, 38, "收起", "btn_min", self.hide_to_tray, LIQUID.control_bg, LIQUID.text_secondary)
+        chip_width = (self.width - 80) // 3
+        self.add_button(28, action_top + 88, chip_width, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(40 + chip_width, action_top + 88, chip_width, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, "收起", "btn_min", self.hide_to_tray, LIQUID.control_bg, LIQUID.text_secondary)
 
         status_top = action_top + 141
-        rounded_rect(canvas, 28, status_top, 400, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_oval(40, status_top + 10, 48, status_top + 18, fill=LIQUID.success, outline="")
-        self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=328)
+        self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=max(260, self.width - 100))
 
     def schedule_row_count(self) -> int:
         return max(1, (max(1, min(12, int(self.config.daily_lessons))) + 3) // 4)
@@ -259,10 +276,12 @@ class BreakGuardApp:
         if self.canvas is None:
             return
         self.canvas.delete("schedule_dynamic")
+        gap = 10
+        tile_width = max(78, (self.width - 86) // 4)
         for slot in self.planner.schedule_slots()[:12]:
             index = slot["lesson_number"] - 1
             row, column = divmod(index, 4)
-            x, y = 28 + column * 93, 226 + row * 44
+            x, y = 28 + column * (tile_width + gap), 226 + row * 44
             colors = {
                 "done": (LIQUID.success_soft, LIQUID.success_text, "✓"),
                 "active": (LIQUID.accent_soft, LIQUID.accent, "●"),
@@ -276,16 +295,17 @@ class BreakGuardApp:
             project = self.project_for_lesson(slot["lesson_number"])
             project_name = (project.get("name") or "待分配")[:5]
             rounded_rect(
-                self.canvas, x, y, x + 82, y + 38, 13,
+                self.canvas, x, y, x + tile_width, y + 38, 13,
                 fill=fill,
                 outline=LIQUID.accent if slot["selected"] else LIQUID.panel_border_soft,
                 width=2 if slot["selected"] else 1,
                 tags=tags,
             )
             self.canvas.create_text(x + 14, y + 19, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
-            self.canvas.create_text(x + 50, y + 13, text=project_name, fill=foreground, font=("Microsoft YaHei UI", 8, "bold"), tags=tags)
+            text_center = x + 14 + (tile_width - 14) / 2
+            self.canvas.create_text(text_center, y + 13, text=project_name, fill=foreground, font=("Microsoft YaHei UI", 8, "bold"), tags=tags)
             slot_label = "进行中" if slot["status"] == "active" else "已完成" if slot["status"] == "done" else "已选择" if slot["selected"] else f"第 {slot['lesson_number']} 节"
-            self.canvas.create_text(x + 50, y + 27, text=slot_label, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
+            self.canvas.create_text(text_center, y + 27, text=slot_label, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
             self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=slot["lesson_number"]: self.select_current_lesson(number))
             self.canvas.tag_bind(lesson_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
             self.canvas.tag_bind(lesson_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
@@ -298,19 +318,85 @@ class BreakGuardApp:
         self.buttons[tag] = button
 
     def start_drag(self, event) -> None:
-        if event.widget is self.canvas and event.y < 96 and event.x < 365:
+        edge = self.resize_hit_test(event.x, event.y)
+        if edge:
+            self.resize_edge = edge
+            self.resize_origin = (
+                event.x_root,
+                event.y_root,
+                self.root.winfo_x(),
+                self.root.winfo_y(),
+                self.root.winfo_width(),
+                self.root.winfo_height(),
+            )
+            return
+        if event.widget is self.canvas and event.y < 96 and event.x < self.width - 64:
             self.dragging = True
             self.drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
     def drag(self, event) -> None:
-        if self.dragging:
+        if self.resize_edge and self.resize_origin:
+            start_x, start_y, window_x, window_y, window_width, window_height = self.resize_origin
+            delta_x, delta_y = event.x_root - start_x, event.y_root - start_y
+            x, y, width, height = window_x, window_y, window_width, window_height
+            if "e" in self.resize_edge:
+                width = max(self.minimum_width, window_width + delta_x)
+            if "s" in self.resize_edge:
+                height = max(self.minimum_height, window_height + delta_y)
+            if "w" in self.resize_edge:
+                width = max(self.minimum_width, window_width - delta_x)
+                x = window_x + window_width - width
+            if "n" in self.resize_edge:
+                height = max(self.minimum_height, window_height - delta_y)
+                y = window_y + window_height - height
+            self.root.geometry(f"{width}x{height}+{x}+{y}")
+        elif self.dragging:
             self.root.geometry(f"+{event.x_root - self.drag_offset[0]}+{event.y_root - self.drag_offset[1]}")
 
-    def stop_drag(self, _event) -> None:
+    def stop_drag(self, event) -> None:
+        if self.resize_edge:
+            current_status = self.canvas.itemcget(self.status_item, "text") if self.canvas is not None and self.status_item else ""
+            self.resize_edge = ""
+            self.resize_origin = None
+            self.root.update_idletasks()
+            self.width = max(self.minimum_width, self.root.winfo_width())
+            self.height = max(self.minimum_height, self.root.winfo_height())
+            self.root.geometry(f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}")
+            self.build_ui()
+            self.enable_acrylic()
+            clamp_window_to_screen(self.root, self.width, self.height)
+            self.refresh_view_state()
+            if current_status:
+                self.set_status(current_status)
+            self.persist_window_geometry()
+            self.update_resize_cursor(event)
+            return
         if not self.dragging:
             return
         self.dragging = False
         clamp_window_to_screen(self.root, self.width, self.height)
+        self.persist_window_geometry()
+
+    def resize_hit_test(self, x: int, y: int) -> str:
+        margin = 9
+        horizontal = "w" if x <= margin else "e" if x >= self.width - margin else ""
+        vertical = "n" if y <= margin else "s" if y >= self.height - margin else ""
+        return vertical + horizontal
+
+    def update_resize_cursor(self, event) -> None:
+        if self.canvas is None or self.dragging or self.resize_edge:
+            return
+        edge = self.resize_hit_test(event.x, event.y)
+        cursors = {
+            "n": "size_ns", "s": "size_ns", "e": "size_we", "w": "size_we",
+            "ne": "size_ne_sw", "sw": "size_ne_sw", "nw": "size_nw_se", "se": "size_nw_se",
+        }
+        try:
+            self.canvas.configure(cursor=cursors.get(edge, ""))
+        except Exception:
+            self.canvas.configure(cursor="sizing" if edge else "")
+
+    def persist_window_geometry(self) -> None:
         self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
         self.config.save()
 
@@ -344,7 +430,7 @@ class BreakGuardApp:
         pause_text = f" · {summary['paused_label']}中" if summary["paused_label"] else ""
         self.canvas.itemconfigure(self.target_item, text=f"目标 {summary['daily_lessons']} 节 · 已记录 {study_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
-        width = max(1, int(336 * summary["progress"]))
+        width = max(1, int(self.progress_track_width * summary["progress"]))
         self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
         self.draw_schedule()
         return summary
@@ -517,14 +603,14 @@ class BreakGuardApp:
         next_rows = self.schedule_row_count()
         if next_rows != self.schedule_rows:
             self.schedule_rows = next_rows
-            self.height = self.preferred_height()
+            self.minimum_height = self.preferred_height()
+            self.height = max(self.height, self.minimum_height)
             x, y = self.root.winfo_x(), self.root.winfo_y()
             self.root.geometry(f"{self.width}x{self.height}+{x}+{y}")
             self.build_ui()
             self.root.update_idletasks()
             clamp_window_to_screen(self.root, self.width, self.height)
-            self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
-            self.config.save()
+            self.persist_window_geometry()
         if sync:
             self.sync_schedule_config()
         self.set_status("每日课表已更新")
@@ -588,6 +674,8 @@ class BreakGuardApp:
             self.hide_to_tray()
 
     def reset_window_position(self) -> None:
+        self.width = self.minimum_width
+        self.height = self.minimum_height
         self.config.window_geometry = ""
         self.config.save()
         self.root.geometry(default_geometry(self.width, self.height))
