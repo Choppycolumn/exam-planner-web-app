@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from breakguard_state import utc_iso
 from breakguard_storage import BreakGuardStore
@@ -129,9 +129,6 @@ class CoursePlanner:
             return 0
         return max(0, int((now if now is not None else time.time()) - self.session.started_at))
 
-    def course_remaining(self, now: float | None = None) -> int:
-        return max(0, self.lesson_minutes * 60 - self.course_elapsed(now))
-
     def set_pause(self, label: str, now: float | None = None) -> None:
         self.store.update_daily_schedule_state(local_date(now), paused_label=str(label)[:40])
 
@@ -145,13 +142,11 @@ class CoursePlanner:
         completed = int(stored["completed_lessons"])
         selected = self.session.lesson_number if self.session else self.selected_lesson(now)
         study_seconds = int(stored["study_seconds"])
-        target_seconds = self.daily_lessons * self.lesson_minutes * 60
         return {
             "date": day,
             "completed_lessons": completed,
             "daily_lessons": self.daily_lessons,
             "study_seconds": study_seconds,
-            "target_seconds": target_seconds,
             "progress": min(1.0, completed / self.daily_lessons),
             "next_lesson": selected,
             "paused_label": self.store.daily_schedule_state(day)["paused_label"],
@@ -159,25 +154,16 @@ class CoursePlanner:
 
     def schedule_slots(self, now: float | None = None) -> list[dict]:
         now = now if now is not None else time.time()
-        day = datetime.fromtimestamp(now)
-        hour, minute = parse_clock(self.day_start)
-        cursor = day.replace(hour=hour, minute=minute, second=0, microsecond=0)
         completed_numbers = self.store.completed_lesson_numbers(local_date(now))
         selected = self.selected_lesson(now)
         slots = []
         for index in range(1, self.daily_lessons + 1):
-            end = cursor + timedelta(minutes=self.lesson_minutes)
             status = "active" if self.session and self.session.lesson_number == index else "done" if index in completed_numbers else "pending"
             slots.append({
                 "lesson_number": index,
-                "start_at": cursor.timestamp(),
-                "end_at": end.timestamp(),
-                "start_text": cursor.strftime("%H:%M"),
-                "end_text": end.strftime("%H:%M"),
                 "status": status,
                 "selected": index == selected,
             })
-            cursor = end + timedelta(minutes=self.break_minutes)
         return slots
 
     def lag_snapshot(self, now: float | None = None) -> dict:
@@ -187,8 +173,11 @@ class CoursePlanner:
             return {"due": False}
         completed_numbers = self.store.completed_lesson_numbers(summary["date"])
         lesson_number = next((number for number in range(1, self.daily_lessons + 1) if number not in completed_numbers), self.daily_lessons)
-        slot = self.schedule_slots(now)[lesson_number - 1]
-        due_at = slot["end_at"] + self.lag_grace_minutes * 60
+        records = self.store.list_daily_lessons(summary["date"])
+        if not records:
+            return {"due": False, "lesson_number": lesson_number}
+        last_ended_at = max(float(record["ended_at"]) for record in records)
+        due_at = last_ended_at + (self.break_minutes + self.lag_grace_minutes) * 60
         if now < due_at:
             return {"due": False, "lesson_number": lesson_number, "due_at": due_at}
         state = self.store.daily_schedule_state(summary["date"])
@@ -199,7 +188,7 @@ class CoursePlanner:
             "lesson_number": lesson_number,
             "completed_lessons": summary["completed_lessons"],
             "daily_lessons": self.daily_lessons,
-            "scheduled_end": slot["end_text"],
+            "inactive_minutes": max(0, int((now - last_ended_at) / 60)),
             "behind_minutes": max(0, int((now - due_at) / 60)),
             "due_at": due_at,
         }

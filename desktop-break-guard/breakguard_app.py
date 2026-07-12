@@ -284,7 +284,8 @@ class BreakGuardApp:
             )
             self.canvas.create_text(x + 14, y + 19, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
             self.canvas.create_text(x + 50, y + 13, text=project_name, fill=foreground, font=("Microsoft YaHei UI", 8, "bold"), tags=tags)
-            self.canvas.create_text(x + 50, y + 27, text=f"{slot['lesson_number']} · {slot['start_text']}", fill=LIQUID.text_tertiary, font=("Segoe UI Variable Display", 7), tags=tags)
+            slot_label = "进行中" if slot["status"] == "active" else "已完成" if slot["status"] == "done" else "已选择" if slot["selected"] else f"第 {slot['lesson_number']} 节"
+            self.canvas.create_text(x + 50, y + 27, text=slot_label, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
             self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=slot["lesson_number"]: self.select_current_lesson(number))
             self.canvas.tag_bind(lesson_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
             self.canvas.tag_bind(lesson_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
@@ -339,11 +340,9 @@ class BreakGuardApp:
         if self.canvas is None:
             return summary
         self.canvas.itemconfigure(self.progress_item, text=f"{summary['completed_lessons']} / {summary['daily_lessons']} 节")
-        total_minutes = summary["target_seconds"] // 60
-        hours, minutes = divmod(total_minutes, 60)
         study_minutes = summary["study_seconds"] // 60
         pause_text = f" · {summary['paused_label']}中" if summary["paused_label"] else ""
-        self.canvas.itemconfigure(self.target_item, text=f"目标 {hours}小时{minutes:02d}分 · 已完成 {study_minutes} 分钟{pause_text}")
+        self.canvas.itemconfigure(self.target_item, text=f"目标 {summary['daily_lessons']} 节 · 已记录 {study_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
         width = max(1, int(336 * summary["progress"]))
         self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
@@ -466,7 +465,7 @@ class BreakGuardApp:
                 "lessonDate": session.lesson_date,
             },
         )
-        self.set_status(f"第 {session.lesson_number} 节 {session.project_name} 开始，专注 {self.config.lesson_minutes} 分钟")
+        self.set_status(f"第 {session.lesson_number} 节 {session.project_name} 已开始自动计时")
         self.refresh_view_state()
 
     def finish_course(self, auto: bool = False) -> None:
@@ -671,7 +670,7 @@ class BreakGuardApp:
         canvas.create_text(width / 2, y1 + 130, text="今天的进度正在落后", fill="#f8fafc", font=("Microsoft YaHei UI", 42, "bold"))
         canvas.create_text(
             width / 2, y1 + 198,
-            text=f"计划中的第 {snapshot['lesson_number']} 节应在 {snapshot['scheduled_end']} 前完成\n当前完成 {snapshot['completed_lessons']} / {snapshot['daily_lessons']} 节",
+            text=f"距离上一节结束已 {snapshot['inactive_minutes']} 分钟\n当前完成 {snapshot['completed_lessons']} / {snapshot['daily_lessons']} 节，请确认是否继续",
             fill="#ddd6fe", font=("Microsoft YaHei UI", 17, "bold"), justify="center",
         )
         canvas.create_text(width / 2, y1 + 266, text="这不是惩罚，只是把今天重新拉回轨道。", fill="#a5b4fc", font=("Microsoft YaHei UI", 12))
@@ -703,8 +702,9 @@ class BreakGuardApp:
         snapshot = self.machine.snapshot()
         self.set_action_emphasis(True)
         if self.planner.session:
-            remaining = self.planner.course_remaining()
-            self.set_timer(fmt_seconds(remaining), f"第 {self.planner.session.lesson_number} 节课 · 保持专注")
+            elapsed = self.planner.course_elapsed()
+            started_text = time.strftime("%H:%M", time.localtime(self.planner.session.started_at))
+            self.set_timer(fmt_seconds(elapsed), f"第 {self.planner.session.lesson_number} 节 · {started_text} 开始 · 正在记录")
             self.set_tone("running")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text="结束本节并休息")
@@ -729,10 +729,7 @@ class BreakGuardApp:
     def update_course_state(self) -> None:
         if not self.planner.session:
             return
-        if self.planner.course_remaining() <= 0:
-            self.finish_course(auto=True)
-        else:
-            self.refresh_view_state()
+        self.refresh_view_state()
 
     def update_break_state(self) -> None:
         snapshot = self.machine.snapshot()

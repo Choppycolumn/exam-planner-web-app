@@ -75,7 +75,7 @@ class ScheduleSettingsDialog:
             28, 108, "课程安排", "设置每一节课对应的网站学习项目", "01", self.show_courses, "menu_courses",
         )
         self._menu_card(
-            28, 212, "时间与提醒", "设置每日节数、课时、课间和首节时间", "02", self.show_timing, "menu_timing",
+            28, 212, "时间与提醒", "设置每日节数、课间时长和提醒宽限", "02", self.show_timing, "menu_timing",
         )
         rounded_rect(self.canvas, 28, 332, 392, 410, 22, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
         self.canvas.create_oval(48, 354, 58, 364, fill=LIQUID.success, outline="")
@@ -142,23 +142,19 @@ class ScheduleSettingsDialog:
         self.close()
 
     def show_timing(self) -> None:
-        self._shell("时间与提醒", "所有时间均可随时调整", back=True)
+        self._shell("时间与提醒", "课程时长由实际开始和结束自动记录", back=True)
         self.value_items = {}
         rows = [
             ("daily_lessons", "每天课程", "节", 1, 12, 1),
-            ("lesson_minutes", "单节时长", "分钟", 10, 180, 5),
             ("break_minutes", "课间休息", "分钟", 1, 60, 1),
-            ("day_start_minutes", "首节开始", "", 0, 1439, 30),
-            ("lag_grace_minutes", "进度宽限", "分钟", 0, 180, 5),
+            ("lag_grace_minutes", "提醒宽限", "分钟", 0, 180, 5),
         ]
         for index, row in enumerate(rows):
-            self._row(98 + index * 61, *row)
-        target_minutes = self.values["daily_lessons"] * self.values["lesson_minutes"]
-        hours, minutes = divmod(target_minutes, 60)
-        self.target_item = self.canvas.create_text(
-            210, 423, text=f"每日目标 {hours} 小时 {minutes} 分钟 · 落后后全屏提醒",
-            fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9, "bold"),
-        )
+            self._row(110 + index * 68, *row)
+        rounded_rect(self.canvas, 28, 330, 392, 412, 20, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        self.canvas.create_text(48, 353, anchor="w", text="自动计时", fill=LIQUID.accent, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 378, anchor="w", text="点击开始时记录起点，手动结束时记录真实课长。", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 399, anchor="w", text="不再预设每节课的开始时间和固定时长。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
         self._button(28, 472, 174, 42, "返回", self.show_menu, "timing_cancel")
         self._button(216, 472, 176, 42, "保存时间", self.save_timing, "timing_save", primary=True)
 
@@ -193,10 +189,6 @@ class ScheduleSettingsDialog:
             value = max(minimum, min(maximum, value))
         self.values[key] = value
         self._refresh_value(key)
-        if key in {"daily_lessons", "lesson_minutes"}:
-            target_minutes = self.values["daily_lessons"] * self.values["lesson_minutes"]
-            hours, minutes = divmod(target_minutes, 60)
-            self.canvas.itemconfigure(self.target_item, text=f"每日目标 {hours} 小时 {minutes} 分钟 · 落后后全屏提醒")
 
     def _refresh_value(self, key: str) -> None:
         item, unit = self.value_items[key]
@@ -206,10 +198,7 @@ class ScheduleSettingsDialog:
 
     def save_timing(self) -> None:
         self.config.daily_lessons = self.values["daily_lessons"]
-        self.config.lesson_minutes = self.values["lesson_minutes"]
         self.config.break_minutes = self.values["break_minutes"]
-        minutes = self.values["day_start_minutes"]
-        self.config.day_start = f"{minutes // 60:02d}:{minutes % 60:02d}"
         self.config.lag_grace_minutes = self.values["lag_grace_minutes"]
         self._normalize_projects()
         self.config.lesson_projects = self.lesson_projects

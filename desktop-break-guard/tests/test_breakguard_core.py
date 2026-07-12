@@ -83,11 +83,21 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertEqual(restored.session.session_id, session.session_id)
         self.assertEqual(restored.course_elapsed(start + 600), 600)
 
-    def test_schedule_slots_include_class_and_break_cadence(self):
+    def test_course_uses_actual_elapsed_time_without_fixed_length(self):
+        start = datetime(2026, 7, 12, 9, 0).timestamp()
+        planner = self.planner()
+        planner.start_course(start)
+        self.assertEqual(planner.course_elapsed(start + 75 * 60), 4500)
+        self.assertIsNotNone(planner.session)
+        _session, duration = planner.complete_course(start + 75 * 60)
+        self.assertEqual(duration, 4500)
+
+    def test_schedule_slots_do_not_assign_fixed_times(self):
         now = datetime(2026, 7, 12, 7, 0).timestamp()
         slots = self.planner().schedule_slots(now)
-        self.assertEqual((slots[0]["start_text"], slots[0]["end_text"]), ("08:00", "08:50"))
-        self.assertEqual((slots[1]["start_text"], slots[1]["end_text"]), ("09:00", "09:50"))
+        self.assertEqual([slot["lesson_number"] for slot in slots], [1, 2, 3, 4])
+        self.assertNotIn("start_text", slots[0])
+        self.assertNotIn("end_text", slots[0])
 
     def test_user_can_select_and_complete_any_lesson(self):
         start = datetime(2026, 7, 12, 10, 0).timestamp()
@@ -110,12 +120,15 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertTrue(restored.schedule_slots(now)[3]["selected"])
 
     def test_lag_reminder_repeats_only_after_cooldown(self):
-        due = datetime(2026, 7, 12, 9, 11).timestamp()
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
         planner = self.planner()
+        planner.start_course(start)
+        planner.complete_course(start + 50 * 60)
+        due = start + 81 * 60
         snapshot = planner.lag_snapshot(due)
         self.assertTrue(snapshot["due"])
-        self.assertEqual(snapshot["lesson_number"], 1)
-        planner.mark_lag_reminded(1, due)
+        self.assertEqual(snapshot["lesson_number"], 2)
+        planner.mark_lag_reminded(2, due)
         self.assertFalse(planner.lag_snapshot(due + 29 * 60)["due"])
         self.assertTrue(planner.lag_snapshot(due + 31 * 60)["due"])
 
