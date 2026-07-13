@@ -608,12 +608,13 @@ function insertRowsSql(table, columns, rows) {
 function writeStateToTables(state) {
     const normalized = normalizeState(state);
     const timestamp = runtime.nowISO();
+    const multiUserReady = runtime.sqliteJson('PRAGMA table_info(study_projects);').some((column) => column.name === 'user_id');
     const scripts = [
         'BEGIN;',
         'DELETE FROM goals;',
         'DELETE FROM daily_reviews;',
-        'DELETE FROM study_projects;',
-        'DELETE FROM study_time_records;',
+        multiUserReady ? 'DELETE FROM study_projects WHERE user_id = 1;' : 'DELETE FROM study_projects;',
+        multiUserReady ? 'DELETE FROM study_time_records WHERE user_id = 1;' : 'DELETE FROM study_time_records;',
         'DELETE FROM study_daily_summaries;',
         'DELETE FROM study_project_daily_summaries;',
         'DELETE FROM subjects;',
@@ -647,8 +648,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('study_projects', ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'], normalized.studyProjects.map((item, index) => ({
+    const projectColumns = multiUserReady
+        ? ['id', 'user_id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('study_projects', projectColumns, normalized.studyProjects.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         name: item.name || '',
         color: item.color || runtime.projectColors[index % runtime.projectColors.length],
         is_active: item.isActive !== false,
@@ -657,8 +662,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('study_time_records', ['id', 'date', 'project_id', 'project_name_snapshot', 'minutes', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.studyTimeRecords.map((item, index) => ({
+    const studyRecordColumns = multiUserReady
+        ? ['id', 'user_id', 'date', 'project_id', 'project_name_snapshot', 'minutes', 'note', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'date', 'project_id', 'project_name_snapshot', 'minutes', 'note', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('study_time_records', studyRecordColumns, normalized.studyTimeRecords.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         date: item.date || runtime.todayISO(),
         project_id: Number(item.projectId || 0),
         project_name_snapshot: item.projectNameSnapshot || '',
@@ -740,6 +749,8 @@ ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = exc
     runtime.rebuildStudySummaries();
 }
 function readStateFromTables() {
+    const multiUserReady = runtime.sqliteJson('PRAGMA table_info(study_projects);').some((column) => column.name === 'user_id');
+    const ownerClause = multiUserReady ? ' WHERE user_id = 1' : '';
     const goals = runtime.sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM goals ORDER BY id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
@@ -748,10 +759,10 @@ schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedA
 FROM daily_reviews ORDER BY date DESC;`).map(runtime.normalizeReview);
     const studyProjects = runtime.sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM study_projects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+    FROM study_projects${ownerClause} ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
     const studyTimeRecords = runtime.sqliteJson(`SELECT id, date, project_id AS projectId, project_name_snapshot AS projectNameSnapshot, minutes, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM study_time_records ORDER BY date DESC, project_id;`);
+    FROM study_time_records${ownerClause} ORDER BY date DESC, project_id;`);
     const subjects = runtime.sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM subjects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));

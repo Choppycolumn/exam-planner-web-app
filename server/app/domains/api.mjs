@@ -1,4 +1,5 @@
 import { exposeRuntime, runtime } from '../runtime-context.mjs';
+import { learnerCanAccess } from '../../auth/learner-access.mjs';
 
 async function handleApi(req, res) {
     if (req.method === 'OPTIONS') {
@@ -35,15 +36,36 @@ async function handleApi(req, res) {
         handleTelegramWebhook: runtime.handleTelegramWebhook,
     }))
         return;
-    const sessionRole = runtime.getSessionRole(req.headers.cookie);
-    if (!sessionRole) {
+    const session = runtime.getSession(req.headers.cookie);
+    const sessionRole = session?.role;
+    if (!session) {
         runtime.sendJson(res, { error: 'Unauthorized' }, 401);
+        return;
+    }
+    const apiPathname = new URL(req.url || '/', 'http://localhost').pathname;
+    if (apiPathname === '/api/session' && req.method === 'GET') {
+        runtime.sendJson(res, {
+            userId: session.userId,
+            displayName: session.displayName,
+            accountType: session.accountType,
+            role: session.role,
+            maxUsers: runtime.userAccountRepository.maxUsers,
+            userCount: runtime.userAccountRepository.countAccounts(),
+            canAddUser: runtime.userAccountRepository.canCreateLearner(),
+            capabilities: session.accountType === 'learner'
+                ? ['study-time', 'learning-progress', 'study-comparison']
+                : ['all'],
+        });
         return;
     }
     if (req.url === '/api/client-errors' && req.method === 'POST') {
         const body = await runtime.readJsonBody(req);
         const record = runtime.writeClientErrorLog({ req, role: sessionRole, body });
         runtime.sendJson(res, { ok: true, id: record?.id || 0 });
+        return;
+    }
+    if (session.accountType === 'learner' && !learnerCanAccess(req.method || 'GET', apiPathname)) {
+        runtime.sendJson(res, { error: '该学习账号无权访问此功能' }, 403);
         return;
     }
     if (req.method !== 'GET' && sessionRole === 'read') {
@@ -64,6 +86,7 @@ async function handleApi(req, res) {
         return;
     if (await runtime.handleOpsRoutes(req, res, {
         sessionRole,
+        session,
         sendJson: runtime.sendJson,
         readJsonBody: runtime.readJsonBody,
         runExclusiveTask: runtime.runExclusiveTask,
@@ -81,6 +104,13 @@ async function handleApi(req, res) {
         precomputeNightlyArtifacts: runtime.precomputeNightlyArtifacts,
     }))
         return;
+    if (apiPathname === '/api/study-comparison' && req.method === 'GET') {
+        const requestUrl = new URL(req.url, 'http://localhost');
+        runtime.sendJson(res, runtime.studyComparisonService.getComparison({
+            days: requestUrl.searchParams.get('days') || 30,
+        }));
+        return;
+    }
     if (await runtime.handleNotificationRoutes(req, res, {
         sessionRole,
         sendJson: runtime.sendJson,
@@ -134,6 +164,7 @@ async function handleApi(req, res) {
         return;
     if (await runtime.handleLearningReadRoutes(req, res, {
         sessionRole,
+        session,
         sendJson: runtime.sendJson,
         ensureSqliteStore: runtime.ensureSqliteStore,
         getGoalsList: runtime.getGoalsList,
@@ -161,7 +192,6 @@ async function handleApi(req, res) {
         readState: runtime.readState,
     }))
         return;
-    const apiPathname = new URL(req.url || '/', 'http://localhost').pathname;
     if (apiPathname.startsWith('/api/library')) {
         runtime.sendJson(res, { error: 'This module has been retired' }, 410);
         return;
@@ -172,6 +202,7 @@ async function handleApi(req, res) {
     }
     if (await runtime.handleLearningWriteRoutes(req, res, {
         sessionRole,
+        session,
         sendJson: runtime.sendJson,
         readJsonBody: runtime.readJsonBody,
         ensureSqliteStore: runtime.ensureSqliteStore,

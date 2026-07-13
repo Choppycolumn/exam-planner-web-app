@@ -1,12 +1,12 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const sqliteAvailable = spawnSync('sqlite3', ['--version'], { encoding: 'utf8' }).status === 0;
-const suite = sqliteAvailable ? describe : describe.skip;
+const suite = describe;
 
 function freePort() {
   return new Promise((resolvePort, reject) => {
@@ -38,7 +38,7 @@ suite('production server runtime', () => {
     temporary = mkdtempSync(join(tmpdir(), 'exam-planner-runtime-'));
     const staticRoot = join(temporary, 'dist');
     mkdirSync(join(staticRoot, 'assets'), { recursive: true });
-    writeFileSync(join(staticRoot, 'index.html'), '<!doctype html><html><body><div id="root"></div><script type="module" src="/assets/app.js"></script></body></html>');
+    writeFileSync(join(staticRoot, 'index.html'), '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Exam Planner Runtime Fixture</title></head><body><div id="root">runtime fixture</div><script type="module" src="/assets/app.js"></script></body></html>');
     writeFileSync(join(staticRoot, 'assets', 'app.js'), 'console.log("runtime fixture")');
     writeFileSync(join(staticRoot, 'manifest.webmanifest'), JSON.stringify({ name: 'Exam Planner' }));
     writeFileSync(join(staticRoot, 'service-worker.js'), 'self.addEventListener("install",()=>{})');
@@ -100,5 +100,54 @@ suite('production server runtime', () => {
     expect(JSON.parse((await request(baseUrl, '/api/break-guard/events', options)).text).event.duplicate).toBe(true);
     expect((await request(baseUrl, '/api/library/books', { cookie })).status).toBe(410);
     expect((await request(baseUrl, '/api/market-copilot', { cookie })).status).toBe(410);
+  });
+
+  it('creates one password-only learner with isolated study data and restricted capabilities', async () => {
+    const loginPage = await request(baseUrl, '/');
+    expect(loginPage.text).toContain('新增学习用户');
+    const registration = await fetch(`${baseUrl}/register-learner`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: 'learner-runtime-password', confirmPassword: 'learner-runtime-password' }),
+    });
+    expect(registration.status).toBe(302);
+    expect(registration.headers.get('location')).toBe('/study-time');
+    const learnerCookie = registration.headers.get('set-cookie')?.split(';')[0] || '';
+
+    const session = JSON.parse((await request(baseUrl, '/api/session', { cookie: learnerCookie })).text);
+    expect(session).toMatchObject({ userId: 2, accountType: 'learner', userCount: 2, canAddUser: false });
+    expect((await request(baseUrl, '/api/notifications/center', { cookie: learnerCookie })).status).toBe(403);
+    const projects = JSON.parse((await request(baseUrl, '/api/projects', { cookie: learnerCookie })).text).items;
+    expect(projects.length).toBeGreaterThan(0);
+
+    const date = '2026-07-13';
+    const saved = await request(baseUrl, '/api/study-records/save-day', {
+      method: 'POST',
+      cookie: learnerCookie,
+      body: { date, records: [{ projectId: projects[0].id, projectNameSnapshot: projects[0].name, minutes: 55, note: 'learner fixture' }] },
+    });
+    expect(saved.status).toBe(200);
+    const learnerRecords = JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: learnerCookie })).text).records;
+    const adminRecords = JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie })).text).records;
+    expect(learnerRecords).toEqual([expect.objectContaining({ minutes: 55, note: 'learner fixture' })]);
+    expect(adminRecords.some((record) => record.note === 'learner fixture')).toBe(false);
+
+    const comparison = JSON.parse((await request(baseUrl, '/api/study-comparison?days=7', { cookie: learnerCookie })).text);
+    expect(comparison.accounts).toHaveLength(2);
+    expect(comparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
+
+    const sqlite = new DatabaseSync(join(temporary, 'data', 'exam-planner.sqlite'), { readOnly: true });
+    const storedHash = sqlite.prepare('SELECT password_hash AS passwordHash FROM user_accounts WHERE id=2').get().passwordHash;
+    expect(storedHash).not.toContain('learner-runtime-password');
+    sqlite.close();
+
+    const secondRegistration = await fetch(`${baseUrl}/register-learner`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: 'third-runtime-password', confirmPassword: 'third-runtime-password' }),
+    });
+    expect(secondRegistration.status).toBe(400);
   });
 });

@@ -15,13 +15,13 @@ ORDER BY date DESC${paging};`, parameters);
     return { total, reviews };
   }
 
-  function listStudyRecords(date) {
+  function listStudyRecords(date, userId = 1) {
     return database.json(`SELECT id, date, project_id AS projectId,
 project_name_snapshot AS projectNameSnapshot, minutes, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM study_time_records
-WHERE date = ?
-ORDER BY project_id;`, [date]);
+WHERE date = ? AND user_id = ?
+ORDER BY project_id;`, [date, userId]);
   }
 
   function activateGoal(id, updatedAt) {
@@ -31,9 +31,9 @@ SET is_active = CASE WHEN id = ? THEN 1 ELSE 0 END, updated_at = ?;`, [id, updat
 
   const mutations = {
     removeGoal: (id) => database.execute('DELETE FROM goals WHERE id = ?;', [id]),
-    removeProject: (id, updatedAt) => database.execute(
-      'UPDATE study_projects SET is_active = 0, updated_at = ? WHERE id = ?;',
-      [updatedAt, id],
+    removeProject: (id, updatedAt, userId = 1) => database.execute(
+      'UPDATE study_projects SET is_active = 0, updated_at = ? WHERE id = ? AND user_id = ?;',
+      [updatedAt, id, userId],
     ),
     removeSubject: (id, updatedAt) => database.execute(
       'UPDATE subjects SET is_active = 0, updated_at = ? WHERE id = ?;',

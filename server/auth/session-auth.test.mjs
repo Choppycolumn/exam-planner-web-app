@@ -36,6 +36,18 @@ describe('session auth service', () => {
     }
   });
 
+  it('preserves the learner identity in a signed session', () => {
+    const { auth, cleanup } = withAuth();
+    try {
+      const value = auth.createSessionValue({ role: 'write', userId: 2, accountType: 'learner', displayName: '学习伙伴' });
+      expect(auth.getSession(`exam_planner_session=${value}`)).toEqual(expect.objectContaining({
+        role: 'write', userId: 2, accountType: 'learner', displayName: '学习伙伴',
+      }));
+    } finally {
+      cleanup();
+    }
+  });
+
   it('returns null when not locked and a remainingMs object when locked', () => {
     const { auth, cleanup } = withAuth();
     try {

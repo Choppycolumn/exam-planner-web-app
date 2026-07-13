@@ -18,13 +18,27 @@ export function createSessionAuth({
 }) {
   let loginAttempts = loadLoginAttempts();
 
-  function createSessionValue(role = 'write') {
-    const payload = JSON.stringify({ role, issuedAt: Date.now() });
+  function normalizeSession(session = 'write') {
+    if (typeof session === 'string') {
+      return session === 'read'
+        ? { role: 'read', userId: 1, accountType: 'visitor', displayName: '访客' }
+        : { role: 'write', userId: 1, accountType: 'admin', displayName: '我' };
+    }
+    return {
+      role: session?.role === 'read' ? 'read' : 'write',
+      userId: Number(session?.userId || 1),
+      accountType: ['admin', 'learner', 'visitor'].includes(session?.accountType) ? session.accountType : 'admin',
+      displayName: String(session?.displayName || (session?.accountType === 'learner' ? '学习伙伴' : '我')).slice(0, 40),
+    };
+  }
+
+  function createSessionValue(session = 'write') {
+    const payload = JSON.stringify({ ...normalizeSession(session), issuedAt: Date.now() });
     const encoded = Buffer.from(payload).toString('base64url');
     return `${encoded}.${sign(encoded, cookieSecret)}`;
   }
 
-  function getSessionRole(cookieHeader = '') {
+  function getSession(cookieHeader = '') {
     const cookies = Object.fromEntries(String(cookieHeader || '').split(';').map((part) => {
       const [key, ...rest] = part.trim().split('=');
       return [key, rest.join('=')];
@@ -36,10 +50,14 @@ export function createSessionAuth({
     try {
       const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
       if (!payload?.issuedAt || Date.now() - Number(payload.issuedAt) > 30 * 24 * 60 * 60 * 1000) return null;
-      return payload.role === 'read' ? 'read' : 'write';
+      return { ...normalizeSession(payload), issuedAt: Number(payload.issuedAt) };
     } catch {
       return null;
     }
+  }
+
+  function getSessionRole(cookieHeader = '') {
+    return getSession(cookieHeader)?.role || null;
   }
 
   function isValidSession(cookieHeader = '') {
@@ -104,7 +122,7 @@ export function createSessionAuth({
     return sleep(loginFailureDelayMinMs + Math.floor(Math.random() * loginFailureDelaySpreadMs));
   }
 
-  function loginPage(error = '') {
+  function loginPage(error = '', { canAddUser = false } = {}) {
     const safeError = String(error || '').replace(/[&<>"']/g, (character) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[character]);
@@ -115,24 +133,40 @@ export function createSessionAuth({
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>考研计划管理</title>
   <style>
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fb;color:#111827;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-    main{width:min(420px,calc(100vw - 32px));border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:28px;box-shadow:0 18px 50px rgba(15,23,42,.08)}
-    h1{margin:0;font-size:22px}p{color:#64748b;line-height:1.7}label{display:block;margin:20px 0 8px;font-size:13px;font-weight:700;color:#475569}
-    input{width:100%;box-sizing:border-box;border:1px solid #d9dee8;border-radius:8px;padding:12px;font:inherit;outline:none}
-    input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
-    button{width:100%;margin-top:14px;border:0;border-radius:8px;background:#2563eb;color:white;padding:12px;font-weight:700;cursor:pointer}
-    .error{margin-top:12px;color:#be123c;background:#fff1f2;border:1px solid #fecaca;border-radius:8px;padding:10px;font-size:14px}
+    :root{color-scheme:light dark}*{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 18% 12%,rgba(110,168,255,.32),transparent 38%),radial-gradient(circle at 82% 84%,rgba(119,230,190,.24),transparent 34%),linear-gradient(145deg,#edf4ff,#f8fbff 52%,#eef9f5);color:#111827;font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    main{width:min(430px,100%);border:1px solid rgba(255,255,255,.78);border-radius:28px;background:rgba(255,255,255,.68);padding:28px;box-shadow:0 24px 70px rgba(34,71,115,.16),inset 0 1px 0 rgba(255,255,255,.9);backdrop-filter:blur(28px) saturate(145%)}
+    .brand{display:flex;align-items:center;gap:10px}.dot{width:10px;height:10px;border-radius:999px;background:#34c759;box-shadow:0 0 0 5px rgba(52,199,89,.12)}
+    h1{margin:0;font-size:23px;letter-spacing:0}p{margin:9px 0 0;color:#64748b;line-height:1.65}label{display:block;margin:20px 0 8px;font-size:13px;font-weight:700;color:#475569}
+    input{width:100%;border:1px solid rgba(148,163,184,.38);border-radius:14px;background:rgba(255,255,255,.72);padding:13px 14px;color:#0f172a;font:inherit;outline:none;transition:.18s ease}
+    input:focus{border-color:#2684ff;box-shadow:0 0 0 4px rgba(38,132,255,.13);background:rgba(255,255,255,.9)}
+    button{width:100%;margin-top:14px;border:1px solid rgba(255,255,255,.62);border-radius:14px;background:#1687ff;color:white;padding:13px;font-weight:750;cursor:pointer;box-shadow:0 8px 24px rgba(22,135,255,.22);transition:.18s ease}
+    button:hover{transform:translateY(-1px);filter:brightness(1.03)}button:active{transform:translateY(0)}
+    details{margin-top:18px;border-top:1px solid rgba(148,163,184,.24);padding-top:16px}summary{cursor:pointer;color:#2563eb;font-size:14px;font-weight:700;list-style:none}summary::-webkit-details-marker{display:none}
+    .secondary{background:rgba(255,255,255,.76);color:#1769c2;border-color:rgba(37,99,235,.16);box-shadow:none}.hint{font-size:12px;color:#718096;margin-top:8px}.error{margin-top:14px;color:#be123c;background:rgba(255,241,242,.86);border:1px solid #fecaca;border-radius:14px;padding:11px 12px;font-size:14px}
+    @media(prefers-color-scheme:dark){body{background:radial-gradient(circle at 20% 10%,rgba(22,101,180,.35),transparent 38%),radial-gradient(circle at 80% 85%,rgba(23,125,98,.22),transparent 34%),#07101d;color:#f8fafc}main{background:rgba(18,28,43,.72);border-color:rgba(255,255,255,.13);box-shadow:0 28px 80px rgba(0,0,0,.46)}p,.hint{color:#9ba9bc}label{color:#cbd5e1}input{background:rgba(15,23,42,.72);border-color:rgba(255,255,255,.14);color:#f8fafc}input:focus{background:rgba(15,23,42,.9)}.secondary{background:rgba(255,255,255,.08);color:#8fc5ff;border-color:rgba(255,255,255,.12)}summary{color:#8fc5ff}}
   </style>
 </head>
 <body>
   <main>
-    <h1>考研计划管理</h1>
+    <div class="brand"><span class="dot"></span><h1>考研计划管理</h1></div>
     <p>请输入访问密码进入你的学习管理面板。</p>
     <form method="post" action="/login">
       <label for="password">访问密码</label>
       <input id="password" name="password" type="password" autofocus autocomplete="current-password" />
       <button type="submit">进入网站</button>
     </form>
+    ${canAddUser ? `<details>
+      <summary>+ 新增学习用户</summary>
+      <p class="hint">无需用户名。设置一个独立密码后，它会成为第二位也是最后一位学习用户。</p>
+      <form method="post" action="/register-learner">
+        <label for="new-password">设置密码</label>
+        <input id="new-password" name="password" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+        <label for="confirm-password">确认密码</label>
+        <input id="confirm-password" name="confirmPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
+        <button class="secondary" type="submit">创建并进入</button>
+      </form>
+    </details>` : '<p class="hint">双用户席位已满。</p>'}
     ${safeError ? `<div class="error">${safeError}</div>` : ''}
   </main>
 </body>
@@ -144,6 +178,7 @@ export function createSessionAuth({
     readOnlyPassword,
     cookieName,
     createSessionValue,
+    getSession,
     getSessionRole,
     isValidSession,
     getLoginLock,

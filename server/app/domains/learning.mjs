@@ -273,18 +273,24 @@ LIMIT 1;`)[0];
         return null;
     return { ...JSON.parse(row.payloadJson), precomputedAt: row.computedAt };
 }
+function studyUserIsolationReady() {
+    return runtime.sqliteJson('PRAGMA table_info(study_time_records);').some((column) => column.name === 'user_id');
+}
 function rebuildStudySummaries() {
     const timestamp = runtime.nowISO();
+    const userClause = studyUserIsolationReady() ? 'WHERE user_id = 1' : '';
     runtime.runSqlite(`BEGIN;
 DELETE FROM study_daily_summaries;
 DELETE FROM study_project_daily_summaries;
 INSERT INTO study_daily_summaries (date, total_minutes, record_count, updated_at)
 SELECT date, COALESCE(SUM(minutes), 0), COUNT(*), ${runtime.sqlString(timestamp)}
 FROM study_time_records
+${userClause}
 GROUP BY date;
 INSERT INTO study_project_daily_summaries (date, project_id, project_name_snapshot, minutes, record_count, updated_at)
 SELECT date, project_id, project_name_snapshot, COALESCE(SUM(minutes), 0), COUNT(*), ${runtime.sqlString(timestamp)}
 FROM study_time_records
+${userClause}
 GROUP BY date, project_id, project_name_snapshot;
 INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('study_summaries_rebuilt_at', ${runtime.sqlString(timestamp)}, datetime('now'))
@@ -294,18 +300,19 @@ COMMIT;`);
 function refreshStudySummariesForDate(date) {
     const targetDate = date || runtime.todayISO();
     const timestamp = runtime.nowISO();
+    const userClause = studyUserIsolationReady() ? ' AND user_id = 1' : '';
     runtime.runSqlite(`BEGIN;
 DELETE FROM study_daily_summaries WHERE date = ${runtime.sqlString(targetDate)};
 DELETE FROM study_project_daily_summaries WHERE date = ${runtime.sqlString(targetDate)};
 INSERT INTO study_daily_summaries (date, total_minutes, record_count, updated_at)
 SELECT date, COALESCE(SUM(minutes), 0), COUNT(*), ${runtime.sqlString(timestamp)}
 FROM study_time_records
-WHERE date = ${runtime.sqlString(targetDate)}
+WHERE date = ${runtime.sqlString(targetDate)}${userClause}
 GROUP BY date;
 INSERT INTO study_project_daily_summaries (date, project_id, project_name_snapshot, minutes, record_count, updated_at)
 SELECT date, project_id, project_name_snapshot, COALESCE(SUM(minutes), 0), COUNT(*), ${runtime.sqlString(timestamp)}
 FROM study_time_records
-WHERE date = ${runtime.sqlString(targetDate)}
+WHERE date = ${runtime.sqlString(targetDate)}${userClause}
 GROUP BY date, project_id, project_name_snapshot;
 INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('study_summaries_rebuilt_at', ${runtime.sqlString(timestamp)}, datetime('now'))
@@ -343,23 +350,28 @@ VALUES (${id}, ${runtime.sqlValue(payload.name || '')}, ${runtime.sqlValue(paylo
     tableChanged();
     return id;
 }
-function saveProjectSql(payload) {
+function saveProjectSql(payload, userId = 1) {
     const timestamp = runtime.nowISO();
-    if (payload.id && Number(runtime.sqliteScalar(`SELECT COUNT(*) FROM study_projects WHERE id = ${runtime.sqlValue(Number(payload.id))};`) || 0)) {
+    if (payload.id && Number(runtime.sqliteScalar(`SELECT COUNT(*) FROM study_projects WHERE id = ${runtime.sqlValue(Number(payload.id))} AND user_id = ${runtime.sqlValue(userId)};`) || 0)) {
         runtime.runSqlite(`UPDATE study_projects SET
 name = ${runtime.sqlValue(payload.name || '')},
 color = ${runtime.sqlValue(payload.color || '#2563eb')},
 is_active = ${runtime.sqlValue(payload.isActive !== false)},
 sort_order = ${runtime.sqlValue(Number(payload.sortOrder || 0))},
 updated_at = ${runtime.sqlValue(timestamp)}
-WHERE id = ${runtime.sqlValue(Number(payload.id))};`);
+WHERE id = ${runtime.sqlValue(Number(payload.id))} AND user_id = ${runtime.sqlValue(userId)};`);
         tableChanged();
         return Number(payload.id);
     }
+    if (payload.id) {
+        const error = new Error('Project does not belong to this account');
+        error.statusCode = 403;
+        throw error;
+    }
     const id = nextTableId('study_projects');
-    const sortOrder = Number(payload.sortOrder || runtime.sqliteScalar('SELECT COALESCE(MAX(sort_order), 0) + 1 FROM study_projects;') || id);
-    runtime.runSqlite(`INSERT INTO study_projects (id, name, color, is_active, sort_order, schema_version, created_at, updated_at)
-VALUES (${id}, ${runtime.sqlValue(payload.name || '')}, ${runtime.sqlValue(payload.color || '#2563eb')}, 1, ${runtime.sqlValue(sortOrder)}, ${runtime.entitySchemaVersion}, ${runtime.sqlValue(timestamp)}, ${runtime.sqlValue(timestamp)});`);
+    const sortOrder = Number(payload.sortOrder || runtime.sqliteScalar(`SELECT COALESCE(MAX(sort_order), 0) + 1 FROM study_projects WHERE user_id = ${runtime.sqlValue(userId)};`) || id);
+    runtime.runSqlite(`INSERT INTO study_projects (id, user_id, name, color, is_active, sort_order, schema_version, created_at, updated_at)
+VALUES (${id}, ${runtime.sqlValue(userId)}, ${runtime.sqlValue(payload.name || '')}, ${runtime.sqlValue(payload.color || '#2563eb')}, 1, ${runtime.sqlValue(sortOrder)}, ${runtime.entitySchemaVersion}, ${runtime.sqlValue(timestamp)}, ${runtime.sqlValue(timestamp)});`);
     tableChanged();
     return id;
 }
@@ -461,15 +473,22 @@ updated_at = excluded.updated_at;`);
     tableChanged();
     return id;
 }
-function saveDayRecordsSql(date, records = []) {
+function saveDayRecordsSql(date, records = [], userId = 1) {
     const timestamp = runtime.nowISO();
     const statements = ['BEGIN;'];
     let nextRecordId = nextTableId('study_time_records');
     for (const record of records) {
-        const existingId = Number(runtime.sqliteScalar(`SELECT id FROM study_time_records WHERE date = ${runtime.sqlValue(date)} AND project_id = ${runtime.sqlValue(Number(record.projectId || 0))} LIMIT 1;`) || 0);
+        const projectId = Number(record.projectId || 0);
+        const project = runtime.sqliteJson(`SELECT name FROM study_projects WHERE id = ${runtime.sqlValue(projectId)} AND user_id = ${runtime.sqlValue(userId)} AND is_active = 1 LIMIT 1;`)[0];
+        if (!project) {
+            const error = new Error('Project does not belong to this account');
+            error.statusCode = 403;
+            throw error;
+        }
+        const existingId = Number(runtime.sqliteScalar(`SELECT id FROM study_time_records WHERE date = ${runtime.sqlValue(date)} AND project_id = ${runtime.sqlValue(projectId)} AND user_id = ${runtime.sqlValue(userId)} LIMIT 1;`) || 0);
         const id = existingId || nextRecordId++;
-        statements.push(`INSERT INTO study_time_records (id, date, project_id, project_name_snapshot, minutes, note, schema_version, created_at, updated_at)
-VALUES (${id}, ${runtime.sqlValue(date)}, ${runtime.sqlValue(Number(record.projectId || 0))}, ${runtime.sqlValue(record.projectNameSnapshot || '')}, ${runtime.sqlValue(Math.max(0, Number(record.minutes || 0)))}, ${runtime.sqlValue(record.note || '')}, ${runtime.entitySchemaVersion}, ${runtime.sqlValue(timestamp)}, ${runtime.sqlValue(timestamp)})
+        statements.push(`INSERT INTO study_time_records (id, user_id, date, project_id, project_name_snapshot, minutes, note, schema_version, created_at, updated_at)
+VALUES (${id}, ${runtime.sqlValue(userId)}, ${runtime.sqlValue(date)}, ${runtime.sqlValue(projectId)}, ${runtime.sqlValue(project.name)}, ${runtime.sqlValue(Math.max(0, Number(record.minutes || 0)))}, ${runtime.sqlValue(record.note || '')}, ${runtime.entitySchemaVersion}, ${runtime.sqlValue(timestamp)}, ${runtime.sqlValue(timestamp)})
 ON CONFLICT(date, project_id) DO UPDATE SET
 project_name_snapshot = excluded.project_name_snapshot,
 minutes = excluded.minutes,
@@ -478,7 +497,8 @@ updated_at = excluded.updated_at;`);
     }
     statements.push('COMMIT;');
     runtime.runSqlite(statements.join('\n'));
-    refreshStudySummariesForDate(date);
+    if (userId === 1)
+        refreshStudySummariesForDate(date);
     tableChanged();
 }
 function saveWaterSql(payload) {
@@ -555,42 +575,53 @@ WHERE date = ${runtime.sqlString(date)} AND status = 'open';`);
     tableChanged();
     return { ok: true, resolvedAt: timestamp };
 }
-function getStudyTargetMinutes() {
-    return Math.max(0, Number(runtime.sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${runtime.sqlString(runtime.studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0);
+function getStudyTargetMinutes(userId = 1) {
+    const value = runtime.sqliteScalar(`SELECT target_minutes FROM user_study_settings WHERE user_id = ${runtime.sqlValue(userId)} LIMIT 1;`);
+    if (value !== null && value !== undefined && value !== '')
+        return Math.max(0, Number(value) || 0);
+    return userId === 1
+        ? Math.max(0, Number(runtime.sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${runtime.sqlString(runtime.studyTargetMinutesKey)} LIMIT 1;`) || 0) || 0)
+        : 0;
 }
-function saveStudyTargetMinutes(payload) {
+function saveStudyTargetMinutes(payload, userId = 1) {
     const hours = Number(payload.targetHours ?? 0);
     const explicitMinutes = Number(payload.targetMinutes ?? NaN);
     const minutes = Number.isFinite(explicitMinutes)
         ? Math.max(0, Math.round(explicitMinutes))
         : Math.max(0, Math.round(hours * 60));
-    runtime.runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
+    runtime.runSqlite(`INSERT INTO user_study_settings (user_id, target_minutes, updated_at)
+VALUES (${runtime.sqlValue(userId)}, ${runtime.sqlValue(minutes)}, datetime('now'))
+ON CONFLICT(user_id) DO UPDATE SET target_minutes = excluded.target_minutes, updated_at = excluded.updated_at;`);
+    if (userId === 1) {
+        runtime.runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES (${runtime.sqlString(runtime.studyTargetMinutesKey)}, ${runtime.sqlString(String(minutes))}, datetime('now'))
 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    }
     tableChanged();
     return { targetMinutes: minutes, targetHours: Math.round((minutes / 60) * 10) / 10 };
 }
-function getLastNDaysTotals(days, endDate = runtime.todayISO()) {
+function getLastNDaysTotals(days, endDate = runtime.todayISO(), userId = 1) {
     const startDate = runtime.addDaysISO(endDate, -(days - 1));
-    const rows = runtime.sqliteJson(`SELECT date, total_minutes AS minutes
-FROM study_daily_summaries
-WHERE date BETWEEN ${runtime.sqlString(startDate)} AND ${runtime.sqlString(endDate)}
+    const rows = runtime.sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
+  FROM study_time_records
+  WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(startDate)} AND ${runtime.sqlString(endDate)}
+  GROUP BY date
 ORDER BY date;`);
     const map = new Map(rows.map((row) => [row.date, Number(row.minutes || 0)]));
     return runtime.dateRange(startDate, endDate).map((date) => ({ date, minutes: map.get(date) || 0 }));
 }
-function getProjectTotals(startDate, endDate) {
+function getProjectTotals(startDate, endDate, userId = 1) {
     return runtime.sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS minutes
-FROM study_project_daily_summaries
-WHERE date BETWEEN ${runtime.sqlString(startDate)} AND ${runtime.sqlString(endDate)}
+FROM study_time_records
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(startDate)} AND ${runtime.sqlString(endDate)}
 GROUP BY project_name_snapshot
 HAVING minutes > 0
 ORDER BY minutes DESC, name;`).map((row) => ({ name: row.name, minutes: Number(row.minutes || 0) }));
 }
-function getProjectDistributionForDate(date) {
+function getProjectDistributionForDate(date, userId = 1) {
     return runtime.sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS value
-FROM study_project_daily_summaries
-WHERE date = ${runtime.sqlString(date)}
+FROM study_time_records
+WHERE user_id = ${runtime.sqlValue(userId)} AND date = ${runtime.sqlString(date)}
 GROUP BY project_name_snapshot
 HAVING value > 0
 ORDER BY value DESC;`).map((row) => ({ name: row.name, value: Number(row.value || 0) }));
@@ -832,51 +863,54 @@ function getDashboardChartsPayload() {
         trend: getLastNDaysTotals(7, today),
     };
 }
-function getStatisticsSummary() {
+function getStatisticsSummary(userId = 1) {
     const cacheDate = runtime.todayISO();
-    if (runtime.statisticsSummaryCache?.revision === runtime.dataRevision && runtime.statisticsSummaryCache.date === cacheDate) {
+    if (runtime.statisticsSummaryCache?.revision === runtime.dataRevision && runtime.statisticsSummaryCache.date === cacheDate && runtime.statisticsSummaryCache.userId === userId) {
         return runtime.statisticsSummaryCache.payload;
     }
     const today = cacheDate;
-    const todayTotal = Number(runtime.sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${runtime.sqlString(today)};`) || 0);
-    const distribution = getProjectDistributionForDate(today);
-    const last7 = getLastNDaysTotals(7, today);
-    const last30 = getProjectTotals(runtime.addDaysISO(today, -29), today);
+    const todayTotal = Number(runtime.sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE user_id = ${runtime.sqlValue(userId)} AND date = ${runtime.sqlString(today)};`) || 0);
+    const distribution = getProjectDistributionForDate(today, userId);
+    const last7 = getLastNDaysTotals(7, today, userId);
+    const last30 = getProjectTotals(runtime.addDaysISO(today, -29), today, userId);
     const payload = { today, todayTotal, distribution, last7, last30 };
-    runtime.statisticsSummaryCache = { revision: runtime.dataRevision, date: today, payload };
+    runtime.statisticsSummaryCache = { revision: runtime.dataRevision, date: today, userId, payload };
     return payload;
 }
-function getLearningProgressPayload(sessionRole = 'write') {
+function getLearningProgressPayload(sessionRole = 'write', userId = 1, accountType = 'admin') {
     runtime.ensureSqliteStore();
     const today = runtime.todayISO();
     const start30 = runtime.addDaysISO(today, -29);
     const start7 = runtime.addDaysISO(today, -6);
     const previous7Start = runtime.addDaysISO(today, -13);
     const previous7End = runtime.addDaysISO(today, -7);
-    const targetMinutes = getStudyTargetMinutes();
-    const dailyRows = runtime.sqliteJson(`SELECT s.date, COALESCE(s.total_minutes, 0) AS minutes, r.score AS reviewScore
-FROM study_daily_summaries s
-LEFT JOIN daily_reviews r ON r.date = s.date
-WHERE s.date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)}
-ORDER BY s.date ASC;`);
+    const targetMinutes = getStudyTargetMinutes(userId);
+    const dailyRows = runtime.sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
+FROM study_time_records
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)}
+GROUP BY date
+ORDER BY date ASC;`);
+    const reviewByDate = accountType === 'learner'
+        ? new Map()
+        : new Map(runtime.sqliteJson(`SELECT date, score FROM daily_reviews WHERE date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)};`).map((row) => [row.date, Number(row.score)]));
     const dailyByDate = new Map(dailyRows.map((row) => [row.date, row]));
     const daily = runtime.dateRange(start30, today).map((date) => {
         const row = dailyByDate.get(date) || {};
         const minutes = Number(row.minutes || 0);
-        const reviewScore = row.reviewScore === undefined || row.reviewScore === null ? null : Number(row.reviewScore);
+        const reviewScore = reviewByDate.get(date) ?? null;
         return { date, minutes, reviewScore, targetMinutes, hitTarget: targetMinutes > 0 && minutes >= targetMinutes };
     });
     const current7Minutes = daily.filter((day) => day.date >= start7).reduce((sum, day) => sum + day.minutes, 0);
-    const previous7Minutes = Number(runtime.sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE date BETWEEN ${runtime.sqlString(previous7Start)} AND ${runtime.sqlString(previous7End)};`) || 0);
-    const reviewStats = runtime.sqliteJson(`SELECT COUNT(*) AS count, AVG(score) AS averageScore FROM daily_reviews WHERE date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)};`)[0] || {};
-    const taskStats = runtime.sqliteJson(`SELECT COUNT(*) AS total, SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) AS completed
+    const previous7Minutes = Number(runtime.sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(previous7Start)} AND ${runtime.sqlString(previous7End)};`) || 0);
+    const reviewStats = accountType === 'learner' ? {} : runtime.sqliteJson(`SELECT COUNT(*) AS count, AVG(score) AS averageScore FROM daily_reviews WHERE date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)};`)[0] || {};
+    const taskStats = accountType === 'learner' ? {} : runtime.sqliteJson(`SELECT COUNT(*) AS total, SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) AS completed
 FROM short_term_tasks
 WHERE due_date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(today)};`)[0] || {};
-    const projectTotals = getProjectTotals(start30, today);
+    const projectTotals = getProjectTotals(start30, today, userId);
     let studyStreakDays = 0;
     for (let offset = 0; offset < 365; offset += 1) {
         const date = runtime.addDaysISO(today, -offset);
-        const minutes = Number(runtime.sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${runtime.sqlString(date)};`) || 0);
+        const minutes = Number(runtime.sqliteScalar(`SELECT COALESCE(SUM(minutes), 0) FROM study_time_records WHERE user_id = ${runtime.sqlValue(userId)} AND date = ${runtime.sqlString(date)};`) || 0);
         if (minutes <= 0)
             break;
         studyStreakDays += 1;
@@ -902,6 +936,7 @@ WHERE due_date BETWEEN ${runtime.sqlString(start30)} AND ${runtime.sqlString(tod
         daily,
         projectTotals,
         reviewTrend: daily.map((day) => ({ date: day.date, score: day.reviewScore })),
+        accountType,
         readOnly: sessionRole === 'read',
     };
 }
@@ -1091,10 +1126,11 @@ FROM goals
 ORDER BY created_at DESC, id DESC;`).map((goal) => ({ ...goal, isActive: Boolean(goal.isActive) }));
     return { items, readOnly: sessionRole === 'read' };
 }
-function getProjectsList(sessionRole) {
+function getProjectsList(sessionRole, userId = 1) {
     const items = runtime.sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
 FROM study_projects
+WHERE user_id = ${runtime.sqlValue(userId)}
 ORDER BY sort_order, id;`).map((project) => ({ ...project, isActive: Boolean(project.isActive) }));
     return { items, readOnly: sessionRole === 'read' };
 }

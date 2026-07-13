@@ -2,6 +2,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   if (req.method !== 'POST') return false;
 
   const {
+    session,
     sessionRole,
     sendJson,
     readJsonBody,
@@ -32,6 +33,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
     saveDayRecordsSql,
     tableChanged,
   } = dependencies;
+  const userId = Number(session?.userId || 1);
 
   const body = await readJsonBody(req);
   const timestamp = nowISO();
@@ -61,7 +63,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
 
   const directRoutes = {
     '/api/goals/save': () => saveGoalSql(body),
-    '/api/projects/save': () => saveProjectSql(body),
+    '/api/projects/save': () => saveProjectSql(body, userId),
     '/api/subjects/save': () => saveSubjectSql(body),
     '/api/exams/save': () => saveExamSql(body),
     '/api/tasks/save': () => saveTaskSql(body),
@@ -86,7 +88,7 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/settings/study-target') {
-    sendJson(res, saveStudyTargetMinutes(body));
+    sendJson(res, saveStudyTargetMinutes(body, userId));
     return true;
   }
 
@@ -125,14 +127,14 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/study-records/save-day') {
-    saveDayRecordsSql(body.date || todayISO(), body.records || []);
+    saveDayRecordsSql(body.date || todayISO(), body.records || [], userId);
     sendJson(res, { ok: true });
     return true;
   }
 
   const mutations = {
     '/api/goals/remove': () => learningRepository.removeGoal(Number(body.id)),
-    '/api/projects/remove': () => learningRepository.removeProject(Number(body.id), timestamp),
+    '/api/projects/remove': () => learningRepository.removeProject(Number(body.id), timestamp, userId),
     '/api/subjects/remove': () => learningRepository.removeSubject(Number(body.id), timestamp),
     '/api/exams/remove': () => learningRepository.removeExam(Number(body.id)),
     '/api/tasks/remove': () => learningRepository.removeTask(Number(body.id)),

@@ -19,6 +19,7 @@ export const queryClient = new QueryClient({
 
 export const queryKeys = {
   all: ['server'] as const,
+  session: ['server', 'session'] as const,
   state: ['server', 'state'] as const,
   dashboard: ['server', 'dashboard'] as const,
   dashboardCharts: ['server', 'dashboard', 'charts'] as const,
@@ -32,6 +33,7 @@ export const queryKeys = {
   statistics: ['server', 'statistics'] as const,
   taskCenter: ['server', 'task-center'] as const,
   learningProgress: ['server', 'learning-progress'] as const,
+  studyComparison: (days: number = 30) => ['server', 'study-comparison', days] as const,
   projectProgress: ['server', 'project-progress'] as const,
   visitStats: ['server', 'visit-stats'] as const,
   opsLogs: ['server', 'ops-logs'] as const,

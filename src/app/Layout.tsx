@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, Moon, Settings, ShieldCheck, Sun, TrendingUp } from 'lucide-react';
+import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TrendingUp, Users } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -7,13 +7,15 @@ import { calculateCountdownDays, formatChineseDate } from '../utils/date';
 import { preloadRoute, preloadSecondaryRoutes } from '../router/preload';
 import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme';
 import { usePwaInstall } from '../hooks/usePwaInstall';
+import { useAccountSession } from '../hooks/useAccountSession';
 
-const navItems = [
+const adminNavItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
   { to: '/progress', label: '学习进度', icon: TrendingUp },
+  { to: '/study-comparison', label: '学习对比', icon: Users },
   { to: '/goal-review', label: '目标复盘', icon: Flag },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
@@ -21,14 +23,32 @@ const navItems = [
   { to: '/operations', label: '运维与健康', icon: ShieldCheck },
 ];
 
+const learnerNavItems = [
+  { to: '/study-time', label: '学习时间', icon: BookOpen },
+  { to: '/progress', label: '学习进度', icon: TrendingUp },
+  { to: '/study-comparison', label: '学习对比', icon: Users },
+];
+
+function AdminGoalSummary() {
+  const { activeGoal } = useDashboardData();
+  return (
+    <p className="text-sm text-slate-700">
+      {activeGoal ? `当前目标：${activeGoal.name}，剩余 ${calculateCountdownDays(activeGoal.deadline)} 天` : '还没有启用目标'}
+    </p>
+  );
+}
+
 export function Layout() {
-  const { activeGoal, readOnly } = useDashboardData();
+  const { data: session } = useAccountSession();
   const { online } = useNetworkStatus();
   const { canInstall, installed, install } = usePwaInstall();
   const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
 
   useEffect(() => preloadSecondaryRoutes(), []);
   useEffect(() => applyTheme(theme), [theme]);
+  const isLearner = session?.accountType === 'learner';
+  const readOnly = session?.role === 'read';
+  const navItems = isLearner ? learnerNavItems : adminNavItems;
 
   return (
     <div className="min-h-screen bg-[#f7f8fb] text-slate-900">
@@ -62,12 +82,11 @@ export function Layout() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-slate-500">{formatChineseDate()}</p>
-              <p className="text-sm text-slate-700">
-                {activeGoal ? `当前目标：${activeGoal.name}，剩余 ${calculateCountdownDays(activeGoal.deadline)} 天` : '还没有启用目标'}
-              </p>
+              {session ? (isLearner ? <p className="text-sm text-slate-700">独立学习空间 · 记录仅属于当前账号</p> : <AdminGoalSummary />) : <p className="text-sm text-slate-500">正在读取账户...</p>}
             </div>
             <div className="flex items-center gap-2">
               {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
+              {session ? <span className="hidden rounded-lg border border-slate-200 bg-white/70 px-3 py-2 text-sm font-semibold text-slate-700 sm:inline">{session.displayName}</span> : null}
               {canInstall && !installed ? (
                 <button className="btn btn-soft h-10 w-10 px-0" type="button" onClick={() => void install()} aria-label="安装到桌面" title="安装到桌面">
                   <Download size={17} />
@@ -82,6 +101,11 @@ export function Layout() {
               >
                 {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               </button>
+              <form method="post" action="/logout">
+                <button className="btn btn-soft h-10 w-10 px-0" type="submit" aria-label="退出登录" title="退出登录">
+                  <LogOut size={17} />
+                </button>
+              </form>
             </div>
             <div className="flex gap-2 overflow-x-auto lg:hidden">
               {navItems.map(({ to, label }) => (

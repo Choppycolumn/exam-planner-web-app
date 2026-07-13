@@ -2,6 +2,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
   if (req.method !== 'GET') return false;
 
   const {
+    session,
     sessionRole,
     sendJson,
     ensureSqliteStore,
@@ -29,6 +30,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     listLearningReports,
     readState,
   } = dependencies;
+  const userId = Number(session?.userId || 1);
 
   if (req.url === '/api/goals') {
     ensureSqliteStore();
@@ -38,7 +40,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/projects') {
     ensureSqliteStore();
-    sendJson(res, getProjectsList(sessionRole));
+    sendJson(res, getProjectsList(sessionRole, userId));
     return true;
   }
 
@@ -50,7 +52,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/settings/study-target') {
     ensureSqliteStore();
-    const targetMinutes = getStudyTargetMinutes();
+    const targetMinutes = getStudyTargetMinutes(userId);
     sendJson(res, { targetMinutes, targetHours: Math.round((targetMinutes / 60) * 10) / 10, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -111,7 +113,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
     const date = requestUrl.searchParams.get('date') || todayISO();
-    const records = learningRepository.listStudyRecords(date);
+    const records = learningRepository.listStudyRecords(date, userId);
     sendJson(res, { records, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -124,7 +126,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/statistics/summary') {
     ensureSqliteStore();
-    sendJson(res, getStatisticsSummary());
+    sendJson(res, getStatisticsSummary(userId));
     return true;
   }
 

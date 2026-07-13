@@ -10,6 +10,10 @@ catch (error) {
     runtime.logStructured('error', 'startup_store_initialization_failed', { error: runtime.startupError });
     throw error;
 }
+const renderLoginPage = (error = '') => runtime.loginPage(error, {
+    canAddUser: runtime.userAccountRepository.canCreateLearner(),
+});
+const sessionCookie = (session) => `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(session))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`;
 const requestHandler = async (req, res) => {
     if (runtime.shuttingDown) {
         res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'connection': 'close' });
@@ -22,16 +26,27 @@ const requestHandler = async (req, res) => {
         const locked = runtime.getLoginLock(clientIp);
         if (locked) {
             await runtime.loginFailureDelay();
-            runtime.sendHtml(res, runtime.loginPage(runtime.lockMessage(locked.remainingMs)), 429);
+            runtime.sendHtml(res, renderLoginPage(runtime.lockMessage(locked.remainingMs)), 429);
             return;
         }
-        const password = params.get('password');
-        const role = password === runtime.appPassword ? 'write' : runtime.readOnlyPassword && password === runtime.readOnlyPassword ? 'read' : '';
-        if (role) {
+        const password = String(params.get('password') || '');
+        let session = null;
+        if (runtime.safeSecretEqual(password, runtime.appPassword)) {
+            session = { role: 'write', userId: 1, accountType: 'admin', displayName: '我' };
+        }
+        else if (runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)) {
+            session = { role: 'read', userId: 1, accountType: 'visitor', displayName: '访客' };
+        }
+        else {
+            const learner = runtime.userAccountRepository.authenticateLearner(password);
+            if (learner)
+                session = learner;
+        }
+        if (session) {
             runtime.recordLoginSuccess(clientIp);
             res.writeHead(302, {
-                location: '/',
-                'set-cookie': `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(role))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`,
+                location: session.accountType === 'learner' ? '/study-time' : '/',
+                'set-cookie': sessionCookie(session),
             });
             res.end();
             return;
@@ -39,11 +54,62 @@ const requestHandler = async (req, res) => {
         const attempt = runtime.recordLoginFailure(clientIp);
         await runtime.loginFailureDelay();
         if (attempt.lockedUntil && attempt.lockedUntil > Date.now()) {
-            runtime.sendHtml(res, runtime.loginPage(runtime.lockMessage(attempt.lockedUntil - Date.now())), 429);
+            runtime.sendHtml(res, renderLoginPage(runtime.lockMessage(attempt.lockedUntil - Date.now())), 429);
             return;
         }
         const remainingAttempts = Math.max(0, runtime.loginFailureLimit - Number(attempt.failures || 0));
-        runtime.sendHtml(res, runtime.loginPage(`密码不正确，请重试。剩余 ${remainingAttempts} 次后将锁定 30 分钟。`), 401);
+        runtime.sendHtml(res, renderLoginPage(`密码不正确，请重试。剩余 ${remainingAttempts} 次后将锁定 30 分钟。`), 401);
+        return;
+    }
+    if (req.url === '/register-learner' && req.method === 'POST') {
+        const clientIp = runtime.getClientIp(req);
+        const locked = runtime.getLoginLock(clientIp);
+        if (locked) {
+            await runtime.loginFailureDelay();
+            runtime.sendHtml(res, renderLoginPage(runtime.lockMessage(locked.remainingMs)), 429);
+            return;
+        }
+        const params = new URLSearchParams(await runtime.readBody(req));
+        const password = String(params.get('password') || '');
+        const confirmation = String(params.get('confirmPassword') || '');
+        let errorMessage = '';
+        if (!runtime.userAccountRepository.canCreateLearner())
+            errorMessage = '双用户席位已满，不能继续新增用户。';
+        else if (password.length < 6 || password.length > 128)
+            errorMessage = '密码长度需要在 6 到 128 位之间。';
+        else if (password !== confirmation)
+            errorMessage = '两次输入的密码不一致。';
+        else if (runtime.safeSecretEqual(password, runtime.appPassword) || (runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)))
+            errorMessage = '该密码已被其他访问身份使用，请更换一个密码。';
+        if (errorMessage) {
+            const attempt = runtime.recordLoginFailure(clientIp);
+            await runtime.loginFailureDelay();
+            const status = attempt.lockedUntil && attempt.lockedUntil > Date.now() ? 429 : 400;
+            runtime.sendHtml(res, renderLoginPage(status === 429 ? runtime.lockMessage(attempt.lockedUntil - Date.now()) : errorMessage), status);
+            return;
+        }
+        try {
+            const learner = runtime.userAccountRepository.createLearner(password);
+            runtime.recordLoginSuccess(clientIp);
+            runtime.tableChanged();
+            res.writeHead(302, {
+                location: '/study-time',
+                'set-cookie': sessionCookie(learner),
+            });
+            res.end();
+        }
+        catch (error) {
+            const status = error?.code === 'USER_LIMIT_REACHED' ? 409 : 500;
+            runtime.sendHtml(res, renderLoginPage(status === 409 ? '双用户席位已满，不能继续新增用户。' : '创建用户失败，请稍后重试。'), status);
+        }
+        return;
+    }
+    if (req.url === '/logout' && req.method === 'POST') {
+        res.writeHead(302, {
+            location: '/',
+            'set-cookie': `${runtime.cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${runtime.secureCookie ? '; Secure' : ''}`,
+        });
+        res.end();
         return;
     }
     if (req.url?.startsWith('/health')) {
@@ -64,7 +130,8 @@ const requestHandler = async (req, res) => {
     }
     if (req.url?.startsWith('/api/')) {
         const startedAt = Date.now();
-        const sessionRole = runtime.getSessionRole(req.headers.cookie) || '';
+        const activeSession = runtime.getSession(req.headers.cookie);
+        const sessionRole = activeSession?.role || '';
         let statusCode = 200;
         const originalWriteHead = res.writeHead.bind(res);
         res.writeHead = (status, ...args) => {
@@ -108,12 +175,12 @@ const requestHandler = async (req, res) => {
         runtime.serveStatic(req, res);
         return;
     }
-    const pageSessionRole = runtime.getSessionRole(req.headers.cookie);
-    if (!pageSessionRole) {
-        runtime.sendHtml(res, runtime.loginPage());
+    const pageSession = runtime.getSession(req.headers.cookie);
+    if (!pageSession) {
+        runtime.sendHtml(res, renderLoginPage());
         return;
     }
-    runtime.recordVisitEvent(req, pageSessionRole);
+    runtime.recordVisitEvent(req, `${pageSession.role}:${pageSession.accountType}`);
     runtime.serveStatic(req, res);
 };
 const safeRequestHandler = (req, res) => {

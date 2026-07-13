@@ -13,6 +13,39 @@ export interface ServerState {
   readOnly?: boolean;
 }
 
+export interface AccountSession {
+  userId: number;
+  displayName: string;
+  accountType: 'admin' | 'learner' | 'visitor';
+  role: 'write' | 'read';
+  maxUsers: 2;
+  userCount: number;
+  canAddUser: boolean;
+  capabilities: string[];
+}
+
+export interface StudyComparisonAccount {
+  userId: number;
+  displayName: string;
+  accountType: 'admin' | 'learner';
+  todayMinutes: number;
+  weekMinutes: number;
+  monthMinutes: number;
+  totalMinutes: number;
+  studyDays: number;
+  streakDays: number;
+}
+
+export interface StudyComparisonResponse {
+  generatedAt: string;
+  today: string;
+  periodStart: string;
+  periodEnd: string;
+  maxUsers: 2;
+  accounts: StudyComparisonAccount[];
+  daily: Array<{ date: string; users: Record<string, number> }>;
+}
+
 export interface DashboardData {
   activeGoal: Goal | null;
   today: string;
@@ -421,6 +454,7 @@ export interface LearningProgressResponse {
   daily: Array<{ date: string; minutes: number; reviewScore: number | null; targetMinutes: number; hitTarget: boolean }>;
   projectTotals: Array<{ name: string; minutes: number }>;
   reviewTrend: Array<{ date: string; score: number | null }>;
+  accountType?: 'admin' | 'learner' | 'visitor';
   readOnly?: boolean;
 }
 

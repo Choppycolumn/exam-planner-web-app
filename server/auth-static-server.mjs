@@ -40,6 +40,8 @@ import { createDailyBriefRepository } from './repositories/daily-brief-repositor
 import { createConfusingWordsRepository } from './repositories/confusing-words-repository.mjs';
 import { createBreakGuardRepository } from './repositories/break-guard-repository.mjs';
 import { createBackupRepository } from './repositories/backup-repository.mjs';
+import { createUserAccountRepository } from './auth/user-account-repository.mjs';
+import { createStudyComparisonService } from './domains/study-comparison/service.mjs';
 import { createSchedulerRegistry } from './infrastructure/scheduler-registry.mjs';
 import { addDaysISO, addYearISO, currentPeriod, endOfMonthISO, endOfWeekISO, formatDateString, localDateISO, nowISO, parseDateString, previousMonthPeriod, previousPeriod, previousWeekPeriod, startOfMonthISO, startOfWeekISO, todayISO, } from './core/date-time.mjs';
 import { createSqliteCli, runSqliteFile, sqliteIntegrityCheck, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
@@ -110,6 +112,7 @@ const dailyBriefRepository = createDailyBriefRepository(sqliteRepository);
 const confusingWordsRepository = createConfusingWordsRepository(sqliteRepository);
 const breakGuardRepository = createBreakGuardRepository(sqliteRepository);
 const backupRepository = createBackupRepository(sqliteRepository);
+const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers: 2 });
 const scheduler = createSchedulerRegistry({
     onError: (name, error) => console.error(JSON.stringify({
         level: 'error', event: 'scheduled_job_failed', name, error: String(error?.message || error),
@@ -141,7 +144,7 @@ const sessionAuth = createSessionAuth({
     loginFailureDelayMinMs,
     loginFailureDelaySpreadMs,
 });
-const { createSessionValue, getSessionRole, isValidSession, getLoginLock, recordLoginSuccess, recordLoginFailure, loginFailureDelay, loginPage, } = sessionAuth;
+const { createSessionValue, getSession, getSessionRole, isValidSession, getLoginLock, recordLoginSuccess, recordLoginFailure, loginFailureDelay, loginPage, } = sessionAuth;
 if (!appPassword) {
     throw new Error('APP_PASSWORD is required');
 }
@@ -218,6 +221,8 @@ exposeRuntime({
     confusingWordsRepository: () => confusingWordsRepository,
     breakGuardRepository: () => breakGuardRepository,
     backupRepository: () => backupRepository,
+    userAccountRepository: () => userAccountRepository,
+    getSession: () => getSession,
     scheduler: () => scheduler,
 });
 
@@ -228,6 +233,13 @@ await import('./app/domains/proxy.mjs');
 await import('./app/domains/operations.mjs');
 await import('./app/domains/learning.mjs');
 await import('./app/domains/notifications.mjs');
+const studyComparisonService = createStudyComparisonService({
+    database: sqliteRepository,
+    todayISO,
+    addDaysISO,
+    nowISO,
+});
+exposeRuntime({ studyComparisonService: () => studyComparisonService });
 await import('./app/domains/api.mjs');
 
 const backupService = createBackupService({

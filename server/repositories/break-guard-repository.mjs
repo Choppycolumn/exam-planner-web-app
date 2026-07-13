@@ -2,7 +2,7 @@ export function createBreakGuardRepository(database) {
   return {
     listActiveProjects() {
       return database.json(`SELECT id, name, color, sort_order AS sortOrder
-FROM study_projects WHERE is_active = 1 ORDER BY sort_order, id;`).map((row) => ({
+FROM study_projects WHERE user_id = 1 AND is_active = 1 ORDER BY sort_order, id;`).map((row) => ({
         ...row,
         id: Number(row.id),
         sortOrder: Number(row.sortOrder || 0),
@@ -54,13 +54,13 @@ FROM break_guard_events ORDER BY created_at DESC, id DESC LIMIT ?;`, [limit]);
     },
     appendStudyTime({ lessonDate, projectId, durationSeconds, lessonNumber }) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(lessonDate || ''))) return null;
-      const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND is_active = 1 LIMIT 1;', [projectId])[0];
+      const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = 1 AND is_active = 1 LIMIT 1;', [projectId])[0];
       if (!project) return null;
       const minutes = Math.max(1, Math.min(24 * 60, Math.round(Number(durationSeconds || 0) / 60)));
       const note = `Break Guard 第 ${Math.max(1, Number(lessonNumber || 1))} 节`;
       database.execute(`INSERT INTO study_time_records
-(date,project_id,project_name_snapshot,minutes,note,schema_version,created_at,updated_at)
-VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'))
+(date,project_id,project_name_snapshot,minutes,note,schema_version,created_at,updated_at,user_id)
+VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'),1)
 ON CONFLICT(date,project_id) DO UPDATE SET
   minutes=study_time_records.minutes+excluded.minutes,
   project_name_snapshot=excluded.project_name_snapshot,

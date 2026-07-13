@@ -1,5 +1,6 @@
 export async function handleOpsRoutes(req, res, {
   sessionRole,
+  session,
   sendJson,
   readJsonBody,
   runExclusiveTask,
@@ -43,7 +44,7 @@ export async function handleOpsRoutes(req, res, {
   }
 
   if (req.url === '/api/learning-progress' && req.method === 'GET') {
-    sendJson(res, getLearningProgressPayload(sessionRole));
+    sendJson(res, getLearningProgressPayload(sessionRole, session?.userId || 1, session?.accountType || 'admin'));
     return true;
   }
 

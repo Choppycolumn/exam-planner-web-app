@@ -1,5 +1,5 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
-import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse } from './contracts';
+import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse } from './contracts';
 import { invalidateServerQueries } from './queryClient';
 import { apiRequest } from './transport';
 export * from './contracts';
@@ -24,6 +24,7 @@ function cachedDashboard() {
 }
 
 export const serverApi = {
+  getSession: () => apiRequest<AccountSession>('/session'),
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
   getDashboardCharts: () => cachedApiRequest<DashboardChartsData>('/dashboard/charts', 90_000),
@@ -94,6 +95,7 @@ export const serverApi = {
   testMihomoProxy: () => apiRequest<MihomoTestResponse>('/settings/mihomo/test', { method: 'POST' }),
   getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
   getLearningProgress: () => cachedApiRequest<LearningProgressResponse>('/learning-progress', 60_000),
+  getStudyComparison: (days = 30) => cachedApiRequest<StudyComparisonResponse>(`/study-comparison?days=${days}`, 60_000),
   getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
   getVisitStats: () => cachedApiRequest<VisitStatsResponse>('/visits/summary', 30_000),
   getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
