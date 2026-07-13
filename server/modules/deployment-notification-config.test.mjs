@@ -13,9 +13,12 @@ describe('production notification configuration', () => {
     expect(unit).toContain('EnvironmentFile=-/etc/exam-planner/bark.env');
   });
 
-  it('installs locked production dependencies before replacing the running service', () => {
-    const deployScript = readFileSync(resolve(root, 'scripts/remote-deploy.sh'), 'utf8');
-    expect(deployScript).toContain('ci --omit=dev --ignore-scripts --no-audit --no-fund');
-    expect(deployScript).toContain('mv "$STAGE_DIR/node_modules" "$APP_DIR/node_modules"');
+  it('bundles the Telegram proxy dependency without installing packages on the server', () => {
+    const deployScript = readFileSync(resolve(root, 'scripts/deploy-production.ps1'), 'utf8');
+    expect(deployScript).toContain('$runtimeDependency = "node_modules/undici"');
+
+    const remoteDeployScript = readFileSync(resolve(root, 'scripts/remote-deploy.sh'), 'utf8');
+    expect(remoteDeployScript).toContain('bundled undici runtime dependency is missing');
+    expect(remoteDeployScript).not.toContain('npm ci');
   });
 });
