@@ -156,6 +156,10 @@ class BreakGuardApp:
         self.dragging = False
         self.resize_edge = ""
         self.resize_origin = None
+        self.resize_target = None
+        self.resize_preview: Toplevel | None = None
+        self.resize_preview_canvas: Canvas | None = None
+        self.resize_preview_border = None
         self.last_resize_update = 0.0
         self.hidden_to_tray = False
         self.exiting = False
@@ -395,6 +399,8 @@ class BreakGuardApp:
                 self.root.winfo_width(),
                 self.root.winfo_height(),
             )
+            self.resize_target = None
+            self.show_resize_preview()
             return
         header_limit = self.width - (100 if self.compact_mode else 64)
         header_height = 72 if self.compact_mode else 96
@@ -427,14 +433,67 @@ class BreakGuardApp:
         if "n" in self.resize_edge:
             height = max(self.minimum_height, window_height - delta_y)
             y = window_y + window_height - height
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.resize_target = (x, y, width, height)
+        if self.resize_preview and self.resize_preview.winfo_exists():
+            self.resize_preview.geometry(f"{width}x{height}+{x}+{y}")
+            self.resize_preview.update_idletasks()
+            if self.resize_preview_canvas is not None and self.resize_preview_border is not None:
+                self.resize_preview_canvas.coords(self.resize_preview_border, 2, 2, width - 3, height - 3)
+
+    def show_resize_preview(self) -> None:
+        self.close_resize_preview()
+        try:
+            preview = Toplevel(self.root)
+            preview.withdraw()
+            preview.overrideredirect(True)
+            preview.attributes("-topmost", True)
+            preview.configure(bg="#ff00ff")
+            if IS_WINDOWS:
+                preview.attributes("-transparentcolor", "#ff00ff")
+            canvas = Canvas(preview, bg="#ff00ff", highlightthickness=0)
+            canvas.pack(fill=BOTH, expand=True)
+            border = canvas.create_rectangle(
+                2, 2, self.root.winfo_width() - 3, self.root.winfo_height() - 3,
+                outline=LIQUID.accent, width=3,
+            )
+            preview.geometry(
+                f"{self.root.winfo_width()}x{self.root.winfo_height()}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+            )
+            preview.deiconify()
+            preview.lift()
+            self.resize_preview = preview
+            self.resize_preview_canvas = canvas
+            self.resize_preview_border = border
+        except Exception as exc:
+            self.resize_preview = None
+            self.resize_preview_canvas = None
+            self.resize_preview_border = None
+            log_error("resize preview failed", exc)
+
+    def close_resize_preview(self) -> None:
+        preview = self.resize_preview
+        self.resize_preview = None
+        self.resize_preview_canvas = None
+        self.resize_preview_border = None
+        if preview is not None:
+            try:
+                if preview.winfo_exists():
+                    preview.destroy()
+            except Exception:
+                pass
 
     def stop_drag(self, event) -> None:
         if self.resize_edge:
             current_status = self.canvas.itemcget(self.status_item, "text") if self.canvas is not None and self.status_item else ""
             self.apply_resize(event.x_root, event.y_root)
+            target = self.resize_target
+            self.close_resize_preview()
             self.resize_edge = ""
             self.resize_origin = None
+            self.resize_target = None
+            if target:
+                x, y, width, height = target
+                self.root.geometry(f"{width}x{height}+{x}+{y}")
             self.root.update_idletasks()
             self.width = max(self.minimum_width, self.root.winfo_width())
             self.height = max(self.minimum_height, self.root.winfo_height())
@@ -1004,6 +1063,7 @@ class BreakGuardApp:
         if self.exiting:
             return
         self.exiting = True
+        self.close_resize_preview()
         self.hide_fullscreen()
         self.client.close()
         self.tray.remove()
