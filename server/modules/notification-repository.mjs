@@ -163,6 +163,19 @@ SET status = 'queued', next_attempt_at = ${sqlString(timestamp)}, error = NULL, 
 WHERE id = ${sqlValue(Number(id))} AND status = 'failed';`);
   };
 
+  const cancelPendingDeliveriesByEventPrefix = (eventKeyPrefix, reason = 'suppressed') => {
+    const timestamp = new Date().toISOString();
+    const pattern = `${String(eventKeyPrefix || '')}%`;
+    sqlite.run(`UPDATE notification_deliveries
+SET status = 'cancelled', next_attempt_at = NULL, error = ${sqlString(reason)}, updated_at = ${sqlString(timestamp)}
+WHERE status IN ('queued', 'retrying') AND event_id IN (
+  SELECT id FROM notification_events WHERE event_key LIKE ${sqlString(pattern)}
+);`);
+    sqlite.run(`UPDATE notification_events
+SET status = 'suppressed', updated_at = ${sqlString(timestamp)}
+WHERE event_key LIKE ${sqlString(pattern)} AND status != 'suppressed';`);
+  };
+
   const metrics = () => {
     const row = sqlite.json(`SELECT
 COUNT(*) AS total,
@@ -192,6 +205,7 @@ FROM notification_events;`)[0] || {};
     deferDelivery,
     acknowledge,
     requeueDelivery,
+    cancelPendingDeliveriesByEventPrefix,
     metrics,
   };
 }

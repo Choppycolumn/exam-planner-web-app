@@ -21,6 +21,7 @@ export function createBreakGuardService({
   tableChanged,
   refreshStudySummariesForDate,
   queueProactiveNotification,
+  cancelScheduleLagNotifications = () => {},
 }) {
   function normalizeScheduleConfig(input = {}) {
     const projects = repository.listActiveProjects();
@@ -104,6 +105,9 @@ export function createBreakGuardService({
       });
       if (studyRecord) refreshStudySummariesForDate?.(studyRecord.lessonDate);
     }
+    if (['lunch', 'dinner', 'meal'].includes(event.eventType)) {
+      cancelScheduleLagNotifications();
+    }
     tableChanged();
     return { ...event, label: EVENT_LABELS[event.eventType], createdAt, duplicate: false, studyRecord, schedule };
   }
@@ -132,6 +136,14 @@ export function createBreakGuardService({
   function queueNotification(event) {
     const isUnfocused = event.eventType === 'unfocused';
     const isScheduleLag = event.eventType === 'schedule_lag';
+    if (isScheduleLag) {
+      const latest = repository.latestEvents(20);
+      const mealIndex = latest.findIndex((item) => ['lunch', 'dinner', 'meal'].includes(item.eventType));
+      const resumedIndex = latest.findIndex((item) => item.eventType === 'class_started');
+      if (mealIndex >= 0 && (resumedIndex < 0 || mealIndex < resumedIndex)) {
+        return { ok: true, queued: false, status: 'suppressed', reason: 'meal_pause' };
+      }
+    }
     const title = isUnfocused ? '休息超时未归记录' : isScheduleLag ? '今日课表进度落后' : '休息结束提醒';
     const text = isUnfocused
       ? `休息结束后已超过 ${Math.max(5, Math.round(event.overdueSeconds / 60))} 分钟仍未取消，已记录一次不专注。`

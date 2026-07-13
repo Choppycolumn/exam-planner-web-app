@@ -189,6 +189,14 @@ class BreakGuardStore:
                 (error[:500], event_id),
             )
 
+    def cancel_pending_events(self, event_type: str) -> int:
+        with self.lock, self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE event_outbox SET status='cancelled',next_attempt_at=0,last_error='suppressed by pause' WHERE event_type=? AND status='pending'",
+                (str(event_type),),
+            )
+        return int(cursor.rowcount or 0)
+
     def pending_count(self) -> int:
         with self.lock, self._connection() as connection:
             return int(connection.execute("SELECT COUNT(*) FROM event_outbox WHERE status='pending'").fetchone()[0])

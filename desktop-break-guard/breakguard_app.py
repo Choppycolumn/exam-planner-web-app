@@ -796,6 +796,7 @@ class BreakGuardApp:
         label = "中午吃饭" if kind == "lunch" else "晚上吃饭"
         pause_label = "午饭" if kind == "lunch" else "晚饭"
         self.planner.set_pause(pause_label)
+        self.store.cancel_pending_events("schedule_lag")
         self.client.post_event(kind, endedAt=utc_iso(), note=label)
         self.set_tone("meal")
         self.set_status(f"{label}暂停中；开始下一节课时自动恢复进度提醒")

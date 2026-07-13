@@ -15,6 +15,7 @@ function fixture() {
     appendStudyTime: vi.fn((input) => ({ ...input, projectName: '高等数学', minutes: 50 })),
   };
   const refreshStudySummariesForDate = vi.fn();
+  const cancelScheduleLagNotifications = vi.fn();
   const service = createBreakGuardService({
     token: 'test-token',
     safeSecretEqual: (left, right) => left === right,
@@ -24,8 +25,9 @@ function fixture() {
     tableChanged: vi.fn(),
     refreshStudySummariesForDate,
     queueProactiveNotification: (event) => { queued.push(event); return event; },
+    cancelScheduleLagNotifications,
   });
-  return { service, queued, repository, refreshStudySummariesForDate };
+  return { service, queued, repository, refreshStudySummariesForDate, cancelScheduleLagNotifications };
 }
 
 describe('break guard service', () => {
@@ -58,6 +60,37 @@ describe('break guard service', () => {
     expect(event.label).toBe('课表进度落后');
     const delivery = service.queueNotification(event);
     expect(delivery.content).toContain('2 / 8');
+    expect(queued).toHaveLength(1);
+  });
+
+  it('suppresses schedule progress alerts while a meal pause is active', () => {
+    const { service, queued, repository, cancelScheduleLagNotifications } = fixture();
+    service.recordEvent({ eventId: 'dinner_20260713', eventType: 'dinner' });
+    expect(cancelScheduleLagNotifications).toHaveBeenCalledOnce();
+    repository.latestEvents.mockReturnValue([
+      { eventType: 'schedule_lag', createdAt: '2026-07-13T11:31:00.000Z' },
+      { eventType: 'dinner', createdAt: '2026-07-13T11:30:00.000Z' },
+      { eventType: 'class_started', createdAt: '2026-07-13T10:00:00.000Z' },
+    ]);
+    const event = service.recordEvent({
+      eventId: 'schedule_lag_meal_pause',
+      eventType: 'schedule_lag',
+      payload: { lessonNumber: 3, completedLessons: 2, dailyLessons: 8 },
+    });
+    expect(service.queueNotification(event)).toMatchObject({ status: 'suppressed', reason: 'meal_pause' });
+    expect(queued).toHaveLength(0);
+
+    repository.latestEvents.mockReturnValue([
+      { eventType: 'schedule_lag', createdAt: '2026-07-13T12:31:00.000Z' },
+      { eventType: 'class_started', createdAt: '2026-07-13T12:00:00.000Z' },
+      { eventType: 'dinner', createdAt: '2026-07-13T11:30:00.000Z' },
+    ]);
+    const resumed = service.recordEvent({
+      eventId: 'schedule_lag_after_meal',
+      eventType: 'schedule_lag',
+      payload: { lessonNumber: 4, completedLessons: 3, dailyLessons: 8 },
+    });
+    expect(service.queueNotification(resumed).content).toContain('3 / 8');
     expect(queued).toHaveLength(1);
   });
 

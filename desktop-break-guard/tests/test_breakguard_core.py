@@ -55,6 +55,12 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertEqual(restarted.pending_count(), 0)
         self.assertEqual(restarted.failed_count(), 1)
 
+    def test_meal_pause_cancels_pending_schedule_lag_events(self):
+        self.store.enqueue_event("schedule_lag", {}, "schedule_lag_pending")
+        self.store.enqueue_event("class_started", {}, "class_started_pending")
+        self.assertEqual(self.store.cancel_pending_events("schedule_lag"), 1)
+        self.assertEqual(self.store.pending_count(), 1)
+
     def test_secret_round_trip(self):
         protected = protect_secret("local-test-token")
         self.assertNotIn("local-test-token", protected)

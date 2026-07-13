@@ -258,6 +258,10 @@ const breakGuardService = createBreakGuardService({
     tableChanged: runtime.tableChanged,
     refreshStudySummariesForDate: runtime.refreshStudySummariesForDate,
     queueProactiveNotification: runtime.queueProactiveNotification,
+    cancelScheduleLagNotifications: () => runtime.notificationRepository.cancelPendingDeliveriesByEventPrefix(
+        'break-guard:schedule_lag:',
+        'suppressed by meal pause',
+    ),
 });
 const { requireToken: requireBreakGuardToken, recordEvent: recordBreakGuardEvent, getSummary: getBreakGuardSummary, queueNotification: queueBreakGuardNotification, getScheduleConfig: getBreakGuardScheduleConfig, saveScheduleConfig: saveBreakGuardScheduleConfig, } = breakGuardService;
 
