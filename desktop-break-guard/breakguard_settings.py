@@ -97,7 +97,7 @@ class ScheduleSettingsDialog:
         self._bind(tag, command)
 
     def show_courses(self) -> None:
-        self._shell("课程安排", "点击课程卡，循环切换网站学习项目", back=True)
+        self._shell("课程安排", "点击课程卡，直接选择网站学习项目", back=True)
         self._normalize_projects()
         lesson_count = self.values["daily_lessons"]
         for index in range(lesson_count):
@@ -108,8 +108,8 @@ class ScheduleSettingsDialog:
             rounded_rect(self.canvas, x, y, x + 172, y + 47, 16, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1, tags=tag)
             self.canvas.create_text(x + 15, y + 15, anchor="w", text=f"第 {index + 1} 节", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"), tags=tag)
             self.canvas.create_text(x + 15, y + 33, anchor="w", text=project["name"][:8], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"), tags=tag)
-            self.canvas.create_text(x + 155, y + 24, text="↻", fill=LIQUID.accent, font=("Segoe UI Symbol", 11), tags=tag)
-            self._bind(tag, lambda number=index + 1: self.cycle_project(number))
+            self.canvas.create_text(x + 155, y + 24, text="›", fill=LIQUID.accent, font=("Segoe UI Variable Display", 14), tags=tag)
+            self._bind(tag, lambda number=index + 1: self.show_project_picker(number))
         self._button(28, 488, 174, 40, "返回", self.show_menu, "courses_cancel")
         self._button(216, 488, 176, 40, "保存安排", self.save_courses, "courses_save", primary=True)
 
@@ -129,14 +129,32 @@ class ScheduleSettingsDialog:
             {"id": 0, "name": "待同步项目"},
         )
 
-    def cycle_project(self, lesson_number: int) -> None:
+    def show_project_picker(self, lesson_number: int) -> None:
         projects = self.config.available_projects
         if not projects:
             return
-        index = lesson_number - 1
-        current = self.lesson_projects[index]
-        current_index = next((position for position, item in enumerate(projects) if int(item["id"]) == int(current)), -1)
-        self.lesson_projects[index] = int(projects[(current_index + 1) % len(projects)]["id"])
+        self._shell(f"第 {lesson_number} 节", "选择这一节课对应的学习项目", back=True)
+        self._bind("back", self.show_courses)
+        current_id = int(self.lesson_projects[lesson_number - 1])
+        for index, project in enumerate(projects[:12]):
+            row, column = divmod(index, 2)
+            x, y = 28 + column * 184, 108 + row * 58
+            tag = f"project_choice_{project['id']}"
+            selected = int(project["id"]) == current_id
+            rounded_rect(
+                self.canvas, x, y, x + 172, y + 48, 16,
+                fill=LIQUID.accent_soft if selected else LIQUID.control_bg,
+                outline=LIQUID.accent if selected else LIQUID.panel_border_soft,
+                width=2 if selected else 1,
+                tags=tag,
+            )
+            self.canvas.create_text(x + 18, y + 24, anchor="w", text=str(project["name"])[:10], fill=LIQUID.accent if selected else LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"), tags=tag)
+            self.canvas.create_text(x + 152, y + 24, text="✓" if selected else "", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"), tags=tag)
+            self._bind(tag, lambda project_id=int(project["id"]), number=lesson_number: self.choose_project(number, project_id))
+        self._button(28, 488, 364, 40, "返回课程安排", self.show_courses, "picker_back")
+
+    def choose_project(self, lesson_number: int, project_id: int) -> None:
+        self.lesson_projects[lesson_number - 1] = int(project_id)
         self.show_courses()
 
     def save_courses(self) -> None:
