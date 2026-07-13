@@ -132,7 +132,10 @@ class BreakGuardApp:
         self.minimum_width = 428
         self.schedule_rows = self.schedule_row_count()
         self.minimum_height = self.preferred_height()
-        self.width, self.height = saved_window_size(self.config.window_geometry, self.minimum_width, self.minimum_height)
+        self.normal_width, self.normal_height = saved_window_size(self.config.window_geometry, self.minimum_width, self.minimum_height)
+        self.normal_geometry = geometry_with_size(self.config.window_geometry, self.normal_width, self.normal_height)
+        self.compact_mode = bool(self.planner.session)
+        self.width, self.height = (360, 168) if self.compact_mode else (self.normal_width, self.normal_height)
         self.root.geometry(geometry_with_size(self.config.window_geometry, self.width, self.height))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", self.config.always_on_top)
@@ -153,6 +156,7 @@ class BreakGuardApp:
         self.dragging = False
         self.resize_edge = ""
         self.resize_origin = None
+        self.last_resize_update = 0.0
         self.hidden_to_tray = False
         self.exiting = False
         self.fullscreen: Toplevel | None = None
@@ -167,8 +171,7 @@ class BreakGuardApp:
         self.root.update_idletasks()
         clamp_window_to_screen(self.root, self.width, self.height)
         self.root.update_idletasks()
-        self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
-        self.config.save()
+        self.persist_window_geometry()
         self.tray = WindowsTrayIcon(ICON_FILE, self.tray_actions)
         if self.tray.wait_until_ready():
             self.hide_from_taskbar()
@@ -215,6 +218,11 @@ class BreakGuardApp:
             child.destroy()
         self.button_commands = []
         self.buttons = {}
+        self.timer_item = self.subtitle_item = self.status_item = self.state_dot = None
+        self.progress_item = self.target_item = None
+        if self.compact_mode:
+            self.build_compact_ui()
+            return
         canvas = Canvas(self.root, width=self.width, height=self.height, bg=LIQUID.bg_bottom, highlightthickness=0)
         self.canvas = canvas
         canvas.pack(fill=BOTH, expand=True)
@@ -231,7 +239,7 @@ class BreakGuardApp:
         close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
         self.button_commands.append(close_button)
         self.buttons["btn_close"] = close_button
-        canvas.create_text(28, 87, anchor="w", text="点击开始上课，到时自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
+        canvas.create_text(28, 87, anchor="w", text="点击开始上课，结束后自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
 
         rounded_rect(canvas, 28, 106, right, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_text(46, 127, anchor="w", text="今日课表", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
@@ -259,18 +267,76 @@ class BreakGuardApp:
         chip_width = (self.width - 80) // 3
         self.add_button(28, action_top + 88, chip_width, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
         self.add_button(40 + chip_width, action_top + 88, chip_width, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, "收起", "btn_min", self.hide_to_tray, LIQUID.control_bg, LIQUID.text_secondary)
+        compact_action = self.enter_compact_mode if self.planner.session else self.hide_to_tray
+        compact_label = "专注小窗" if self.planner.session else "收起"
+        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, compact_label, "btn_min", compact_action, LIQUID.control_bg, LIQUID.text_secondary)
 
         status_top = action_top + 141
         rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_oval(40, status_top + 10, 48, status_top + 18, fill=LIQUID.success, outline="")
         self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=max(260, self.width - 100))
 
+    def build_compact_ui(self) -> None:
+        canvas = Canvas(self.root, width=self.width, height=self.height, bg=LIQUID.bg_bottom, highlightthickness=0)
+        self.canvas = canvas
+        canvas.pack(fill=BOTH, expand=True)
+        painter = LiquidPainter(canvas)
+        painter.background(self.width, self.height)
+        painter.glass_panel(8, 8, self.width - 8, self.height - 8)
+        self.state_dot = painter.status_dot(27, 26, LIQUID.accent)
+        session = self.planner.session
+        course_title = f"第 {session.lesson_number} 节 · {session.project_name}" if session else "课程计时"
+        canvas.create_text(47, 31, anchor="w", text=course_title[:18], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
+        canvas.create_text(47, 52, anchor="w", text="专注小窗 · 正在自动记录", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
+
+        expand_visual = painter.icon_button(self.width - 86, 20, 28, "↗", "btn_expand")
+        expand_visual["label"] = "btn_expand__label"
+        expand_button = CanvasButton(canvas, "btn_expand", self.exit_compact_mode, expand_visual)
+        self.button_commands.append(expand_button)
+        self.buttons["btn_expand"] = expand_button
+        close_visual = painter.icon_button(self.width - 50, 20, 28, "×", "btn_close")
+        close_visual["label"] = "btn_close__label"
+        close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
+        self.button_commands.append(close_button)
+        self.buttons["btn_close"] = close_button
+
+        self.timer_item = canvas.create_text(34, 103, anchor="w", text="00:00", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 34, "bold"))
+        self.subtitle_item = canvas.create_text(36, 137, anchor="w", text="已开始自动计时", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8, "bold"))
+        self.add_button(self.width - 154, 82, 124, 58, "结束课程", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
+
     def schedule_row_count(self) -> int:
         return max(1, (max(1, min(12, int(self.config.daily_lessons))) + 3) // 4)
 
     def preferred_height(self) -> int:
         return 640 + (self.schedule_rows - 2) * 44
+
+    def enter_compact_mode(self) -> None:
+        if self.compact_mode:
+            return
+        self.normal_width, self.normal_height = self.width, self.height
+        self.normal_geometry = f"{self.normal_width}x{self.normal_height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+        self.config.window_geometry = self.normal_geometry
+        self.config.save()
+        right_edge = self.root.winfo_x() + self.normal_width
+        top = self.root.winfo_y()
+        self.compact_mode = True
+        self.width, self.height = 360, 168
+        self.root.geometry(f"{self.width}x{self.height}+{max(0, right_edge - self.width)}+{max(0, top)}")
+        self.build_ui()
+        self.enable_acrylic()
+        clamp_window_to_screen(self.root, self.width, self.height)
+        self.refresh_view_state()
+
+    def exit_compact_mode(self) -> None:
+        if not self.compact_mode:
+            return
+        self.compact_mode = False
+        self.width, self.height = self.normal_width, self.normal_height
+        self.root.geometry(geometry_with_size(self.normal_geometry, self.width, self.height))
+        self.build_ui()
+        self.enable_acrylic()
+        clamp_window_to_screen(self.root, self.width, self.height)
+        self.refresh_view_state()
 
     def draw_schedule(self) -> None:
         if self.canvas is None:
@@ -330,37 +396,49 @@ class BreakGuardApp:
                 self.root.winfo_height(),
             )
             return
-        if event.widget is self.canvas and event.y < 96 and event.x < self.width - 64:
+        header_limit = self.width - (100 if self.compact_mode else 64)
+        header_height = 72 if self.compact_mode else 96
+        if event.widget is self.canvas and event.y < header_height and event.x < header_limit:
             self.dragging = True
             self.drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
     def drag(self, event) -> None:
         if self.resize_edge and self.resize_origin:
-            start_x, start_y, window_x, window_y, window_width, window_height = self.resize_origin
-            delta_x, delta_y = event.x_root - start_x, event.y_root - start_y
-            x, y, width, height = window_x, window_y, window_width, window_height
-            if "e" in self.resize_edge:
-                width = max(self.minimum_width, window_width + delta_x)
-            if "s" in self.resize_edge:
-                height = max(self.minimum_height, window_height + delta_y)
-            if "w" in self.resize_edge:
-                width = max(self.minimum_width, window_width - delta_x)
-                x = window_x + window_width - width
-            if "n" in self.resize_edge:
-                height = max(self.minimum_height, window_height - delta_y)
-                y = window_y + window_height - height
-            self.root.geometry(f"{width}x{height}+{x}+{y}")
+            now = time.monotonic()
+            if now - self.last_resize_update >= 0.025:
+                self.last_resize_update = now
+                self.apply_resize(event.x_root, event.y_root)
         elif self.dragging:
             self.root.geometry(f"+{event.x_root - self.drag_offset[0]}+{event.y_root - self.drag_offset[1]}")
+
+    def apply_resize(self, pointer_x: int, pointer_y: int) -> None:
+        if not self.resize_edge or not self.resize_origin:
+            return
+        start_x, start_y, window_x, window_y, window_width, window_height = self.resize_origin
+        delta_x, delta_y = pointer_x - start_x, pointer_y - start_y
+        x, y, width, height = window_x, window_y, window_width, window_height
+        if "e" in self.resize_edge:
+            width = max(self.minimum_width, window_width + delta_x)
+        if "s" in self.resize_edge:
+            height = max(self.minimum_height, window_height + delta_y)
+        if "w" in self.resize_edge:
+            width = max(self.minimum_width, window_width - delta_x)
+            x = window_x + window_width - width
+        if "n" in self.resize_edge:
+            height = max(self.minimum_height, window_height - delta_y)
+            y = window_y + window_height - height
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
 
     def stop_drag(self, event) -> None:
         if self.resize_edge:
             current_status = self.canvas.itemcget(self.status_item, "text") if self.canvas is not None and self.status_item else ""
+            self.apply_resize(event.x_root, event.y_root)
             self.resize_edge = ""
             self.resize_origin = None
             self.root.update_idletasks()
             self.width = max(self.minimum_width, self.root.winfo_width())
             self.height = max(self.minimum_height, self.root.winfo_height())
+            self.normal_width, self.normal_height = self.width, self.height
             self.root.geometry(f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}")
             self.build_ui()
             self.enable_acrylic()
@@ -378,6 +456,8 @@ class BreakGuardApp:
         self.persist_window_geometry()
 
     def resize_hit_test(self, x: int, y: int) -> str:
+        if self.compact_mode:
+            return ""
         margin = 9
         horizontal = "w" if x <= margin else "e" if x >= self.width - margin else ""
         vertical = "n" if y <= margin else "s" if y >= self.height - margin else ""
@@ -397,7 +477,11 @@ class BreakGuardApp:
             self.canvas.configure(cursor="sizing" if edge else "")
 
     def persist_window_geometry(self) -> None:
-        self.config.window_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+        if self.compact_mode:
+            return
+        self.normal_width, self.normal_height = self.width, self.height
+        self.normal_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
+        self.config.window_geometry = self.normal_geometry
         self.config.save()
 
     def set_status(self, text: str) -> None:
@@ -552,7 +636,7 @@ class BreakGuardApp:
             },
         )
         self.set_status(f"第 {session.lesson_number} 节 {session.project_name} 已开始自动计时")
-        self.refresh_view_state()
+        self.enter_compact_mode()
 
     def finish_course(self, auto: bool = False) -> None:
         session = self.planner.session
@@ -581,6 +665,7 @@ class BreakGuardApp:
             startedAt=break_session.started_iso,
             note=f"第 {completed.lesson_number} 节课结束后自动休息",
         )
+        self.exit_compact_mode()
         self.set_status(f"第 {completed.lesson_number} 节完成，自动休息 {self.config.break_minutes} 分钟")
         self.refresh_view_state()
 
@@ -604,6 +689,14 @@ class BreakGuardApp:
         if next_rows != self.schedule_rows:
             self.schedule_rows = next_rows
             self.minimum_height = self.preferred_height()
+            if self.compact_mode:
+                self.normal_height = max(self.normal_height, self.minimum_height)
+                self.normal_geometry = geometry_with_size(self.normal_geometry, self.normal_width, self.normal_height)
+                self.config.window_geometry = self.normal_geometry
+                self.config.save()
+                if sync:
+                    self.sync_schedule_config()
+                return
             self.height = max(self.height, self.minimum_height)
             x, y = self.root.winfo_x(), self.root.winfo_y()
             self.root.geometry(f"{self.width}x{self.height}+{x}+{y}")
@@ -674,11 +767,14 @@ class BreakGuardApp:
             self.hide_to_tray()
 
     def reset_window_position(self) -> None:
+        self.compact_mode = False
         self.width = self.minimum_width
         self.height = self.minimum_height
+        self.normal_width, self.normal_height = self.width, self.height
         self.config.window_geometry = ""
         self.config.save()
         self.root.geometry(default_geometry(self.width, self.height))
+        self.normal_geometry = default_geometry(self.width, self.height)
         self.show_window()
         self.set_status("窗口位置已重置")
 
@@ -786,6 +882,9 @@ class BreakGuardApp:
         self.fullscreen_kind = ""
 
     def refresh_view_state(self) -> None:
+        if self.compact_mode:
+            self.refresh_compact_view()
+            return
         summary = self.update_progress()
         snapshot = self.machine.snapshot()
         self.set_action_emphasis(True)
@@ -809,10 +908,20 @@ class BreakGuardApp:
         else:
             next_lesson = summary["next_lesson"]
             label = "开始加练" if summary["completed_lessons"] >= summary["daily_lessons"] else f"开始第 {next_lesson} 节课"
-            self.set_timer(f"第 {next_lesson} 节", f"{summary['paused_label']}暂停中" if summary["paused_label"] else "点击后开始课程倒计时")
+            self.set_timer(f"第 {next_lesson} 节", f"{summary['paused_label']}暂停中" if summary["paused_label"] else "点击后开始记录学习时间")
             self.set_tone("idle")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text=label)
+
+    def refresh_compact_view(self) -> None:
+        session = self.planner.session
+        if not session or self.canvas is None:
+            return
+        elapsed = self.planner.course_elapsed()
+        started_text = time.strftime("%H:%M", time.localtime(session.started_at))
+        self.set_timer(fmt_seconds(elapsed), f"{started_text} 开始 · 已自动记录")
+        self.set_tone("running")
+        self.canvas.itemconfigure("btn_primary__label", text="结束课程")
 
     def update_course_state(self) -> None:
         if not self.planner.session:
