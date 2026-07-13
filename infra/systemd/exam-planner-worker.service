@@ -14,6 +14,7 @@ Environment=NODE_ENV=production
 Environment=TELEGRAM_ENV_FILE=/opt/exam-planner/data/telegram.env
 Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
 EnvironmentFile=-/etc/exam-planner/runtime.env
+EnvironmentFile=-/etc/exam-planner/bark.env
 ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/server/worker.mjs
 Restart=always
 RestartSec=10

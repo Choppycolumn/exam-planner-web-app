@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/exam-planner}"
 APP_NODE_BIN="${APP_NODE_BIN:-/opt/node-v22.22.3-linux-x64/bin/node}"
+APP_NPM_BIN="${APP_NPM_BIN:-/opt/node-v22.22.3-linux-x64/bin/npm}"
 PACKAGE_FILE="${1:?deployment package path is required}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/exam-planner-deploy-backups}"
 STAMP="$(date +%Y%m%d%H%M%S)"
@@ -12,6 +13,9 @@ STAGE_DIR="$(mktemp -d /opt/exam-planner-stage.XXXXXX)"
 TEST_DATA_DIR="$(mktemp -d /tmp/exam-planner-smoke-data.XXXXXX)"
 TEST_PID=""
 HELPER_PID=""
+OLD_NODE_MODULES="$STAGE_DIR/node_modules.previous"
+NODE_MODULES_BACKED_UP=0
+NODE_MODULES_REPLACED=0
 
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
@@ -28,6 +32,8 @@ for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/ex
 done
 tar -xzf "$PACKAGE_FILE" -C "$STAGE_DIR"
 [[ -x "$APP_NODE_BIN" ]] || { echo "Node 22 runtime is missing: $APP_NODE_BIN" >&2; exit 1; }
+[[ -x "$APP_NPM_BIN" ]] || { echo "npm runtime is missing: $APP_NPM_BIN" >&2; exit 1; }
+(cd "$STAGE_DIR" && "$APP_NPM_BIN" ci --omit=dev --ignore-scripts --no-audit --no-fund)
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/auth-static-server.mjs"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/web.mjs"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/worker.mjs"
@@ -156,6 +162,13 @@ deploy_and_verify() {
   systemctl stop exam-planner || return 1
   systemctl stop exam-planner-privileged 2>/dev/null || true
   tar -xzf "$PACKAGE_FILE" -C "$APP_DIR" || return 1
+  [[ ! -e "$OLD_NODE_MODULES" ]] || return 1
+  if [[ -d "$APP_DIR/node_modules" ]]; then
+    mv "$APP_DIR/node_modules" "$OLD_NODE_MODULES" || return 1
+    NODE_MODULES_BACKED_UP=1
+  fi
+  mv "$STAGE_DIR/node_modules" "$APP_DIR/node_modules" || return 1
+  NODE_MODULES_REPLACED=1
   ensure_runtime_user || return 1
   configure_service_roles || return 1
   systemctl start exam-planner-privileged || return 1
@@ -179,6 +192,10 @@ if ! deploy_and_verify; then
   cp -a "$UNIT_BACKUP_DIR"/* /etc/systemd/system/ 2>/dev/null || true
   systemctl daemon-reload
   tar -xzf "$BACKUP_FILE" -C "$APP_DIR"
+  if [[ "$NODE_MODULES_REPLACED" == 1 || "$NODE_MODULES_BACKED_UP" == 1 ]]; then
+    rm -rf "$APP_DIR/node_modules"
+    [[ ! -d "$OLD_NODE_MODULES" ]] || mv "$OLD_NODE_MODULES" "$APP_DIR/node_modules"
+  fi
   systemctl restart exam-planner
   "$APP_NODE_BIN" "$APP_DIR/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null
   echo "deployment failed; previous release restored" >&2
