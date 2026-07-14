@@ -68,12 +68,18 @@ class BreakGuardStore:
                     selected_lesson INTEGER NOT NULL DEFAULT 1,
                     last_lag_lesson INTEGER NOT NULL DEFAULT 0,
                     last_lag_at REAL,
+                    pause_started_at REAL,
+                    last_pause_started_at REAL,
+                    last_pause_ended_at REAL,
                     updated_at REAL NOT NULL
                 );
             """)
             columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_schedule_state)")}
             if "selected_lesson" not in columns:
                 connection.execute("ALTER TABLE daily_schedule_state ADD COLUMN selected_lesson INTEGER NOT NULL DEFAULT 1")
+            for column in ("pause_started_at", "last_pause_started_at", "last_pause_ended_at"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE daily_schedule_state ADD COLUMN {column} REAL")
 
     def load_runtime_state(self, key: str) -> dict | None:
         with self.lock, self._connection() as connection:
@@ -146,17 +152,35 @@ class BreakGuardStore:
     def daily_schedule_state(self, lesson_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(
-                "SELECT paused_label,selected_lesson,last_lag_lesson,last_lag_at FROM daily_schedule_state WHERE lesson_date = ?",
+                "SELECT paused_label,selected_lesson,last_lag_lesson,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at FROM daily_schedule_state WHERE lesson_date = ?",
                 (lesson_date,),
             ).fetchone()
-        return dict(row) if row else {"paused_label": "", "selected_lesson": 1, "last_lag_lesson": 0, "last_lag_at": None}
+        return dict(row) if row else {
+            "paused_label": "",
+            "selected_lesson": 1,
+            "last_lag_lesson": 0,
+            "last_lag_at": None,
+            "pause_started_at": None,
+            "last_pause_started_at": None,
+            "last_pause_ended_at": None,
+        }
 
     def update_daily_schedule_state(self, lesson_date: str, **changes) -> None:
         current = {**self.daily_schedule_state(lesson_date), **changes}
         with self.lock, self._connection() as connection:
             connection.execute(
-                "INSERT INTO daily_schedule_state(lesson_date,paused_label,selected_lesson,last_lag_lesson,last_lag_at,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,selected_lesson=excluded.selected_lesson,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,updated_at=excluded.updated_at",
-                (lesson_date, current["paused_label"], current["selected_lesson"], current["last_lag_lesson"], current["last_lag_at"], time.time()),
+                "INSERT INTO daily_schedule_state(lesson_date,paused_label,selected_lesson,last_lag_lesson,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,selected_lesson=excluded.selected_lesson,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,pause_started_at=excluded.pause_started_at,last_pause_started_at=excluded.last_pause_started_at,last_pause_ended_at=excluded.last_pause_ended_at,updated_at=excluded.updated_at",
+                (
+                    lesson_date,
+                    current["paused_label"],
+                    current["selected_lesson"],
+                    current["last_lag_lesson"],
+                    current["last_lag_at"],
+                    current["pause_started_at"],
+                    current["last_pause_started_at"],
+                    current["last_pause_ended_at"],
+                    time.time(),
+                ),
             )
 
     def enqueue_event(self, event_type: str, payload: dict, event_id: str | None = None) -> str:

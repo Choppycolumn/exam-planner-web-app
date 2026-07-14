@@ -143,8 +143,29 @@ class BreakGuardCoreTests(unittest.TestCase):
         planner = self.planner()
         planner.set_pause("午饭", now)
         self.assertFalse(planner.lag_snapshot(now)["due"])
-        planner.start_course(now + 60)
-        self.assertEqual(planner.summary(now + 60)["paused_label"], "")
+        planner.select_lesson(3, now + 30 * 60)
+        self.assertEqual(planner.summary(now + 30 * 60)["paused_label"], "午饭")
+        self.assertFalse(planner.lag_snapshot(now + 30 * 60)["due"])
+        planner.start_course(now + 60 * 60)
+        self.assertEqual(planner.summary(now + 60 * 60)["paused_label"], "")
+
+    def test_completed_meal_pause_is_excluded_from_inactive_time(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner()
+        planner.start_course(start)
+        planner.complete_course(start + 50 * 60)
+        planner.set_pause("午饭", start + 55 * 60)
+        planner.select_lesson(2, start + 100 * 60)
+
+        restarted = CoursePlanner(BreakGuardStore(self.database), 4, 50, 10, "08:00", 20, 30)
+        self.assertEqual(restarted.summary(start + 100 * 60)["paused_label"], "午饭")
+        restarted.clear_pause(start + 130 * 60)
+
+        self.assertFalse(restarted.lag_snapshot(start + 154 * 60)["due"])
+        snapshot = restarted.lag_snapshot(start + 156 * 60)
+        self.assertTrue(snapshot["due"])
+        self.assertEqual(snapshot["inactive_minutes"], 31)
+        self.assertEqual(snapshot["behind_minutes"], 1)
 
 
 if __name__ == "__main__":

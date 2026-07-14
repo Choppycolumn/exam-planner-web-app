@@ -75,7 +75,7 @@ class CoursePlanner:
 
     def select_lesson(self, lesson_number: int, now: float | None = None) -> int:
         selected = max(1, min(self.daily_lessons, int(lesson_number)))
-        self.store.update_daily_schedule_state(local_date(now), selected_lesson=selected, paused_label="")
+        self.store.update_daily_schedule_state(local_date(now), selected_lesson=selected)
         return selected
 
     def start_course(
@@ -90,7 +90,7 @@ class CoursePlanner:
         now = now if now is not None else time.time()
         day = local_date(now)
         selected = self.select_lesson(lesson_number or self.selected_lesson(now), now)
-        self.store.update_daily_schedule_state(day, paused_label="")
+        self.clear_pause(now)
         self.session = CourseSession(
             session_id=uuid.uuid4().hex,
             lesson_date=day,
@@ -130,10 +130,28 @@ class CoursePlanner:
         return max(0, int((now if now is not None else time.time()) - self.session.started_at))
 
     def set_pause(self, label: str, now: float | None = None) -> None:
-        self.store.update_daily_schedule_state(local_date(now), paused_label=str(label)[:40])
+        now = now if now is not None else time.time()
+        day = local_date(now)
+        state = self.store.daily_schedule_state(day)
+        pause_started_at = state.get("pause_started_at")
+        self.store.update_daily_schedule_state(
+            day,
+            paused_label=str(label)[:40],
+            pause_started_at=float(pause_started_at) if pause_started_at is not None else now,
+        )
 
     def clear_pause(self, now: float | None = None) -> None:
-        self.store.update_daily_schedule_state(local_date(now), paused_label="")
+        now = now if now is not None else time.time()
+        day = local_date(now)
+        state = self.store.daily_schedule_state(day)
+        pause_started_at = state.get("pause_started_at")
+        changes = {"paused_label": "", "pause_started_at": None}
+        if pause_started_at is not None:
+            changes.update(
+                last_pause_started_at=float(pause_started_at),
+                last_pause_ended_at=now,
+            )
+        self.store.update_daily_schedule_state(day, **changes)
 
     def summary(self, now: float | None = None) -> dict:
         now = now if now is not None else time.time()
@@ -177,10 +195,15 @@ class CoursePlanner:
         if not records:
             return {"due": False, "lesson_number": lesson_number}
         last_ended_at = max(float(record["ended_at"]) for record in records)
-        due_at = last_ended_at + (self.break_minutes + self.lag_grace_minutes) * 60
+        state = self.store.daily_schedule_state(summary["date"])
+        pause_started_at = float(state.get("last_pause_started_at") or 0)
+        pause_ended_at = float(state.get("last_pause_ended_at") or 0)
+        excluded_pause_seconds = 0
+        if pause_ended_at > last_ended_at and pause_ended_at > pause_started_at:
+            excluded_pause_seconds = max(0, pause_ended_at - max(last_ended_at, pause_started_at))
+        due_at = last_ended_at + excluded_pause_seconds + (self.break_minutes + self.lag_grace_minutes) * 60
         if now < due_at:
             return {"due": False, "lesson_number": lesson_number, "due_at": due_at}
-        state = self.store.daily_schedule_state(summary["date"])
         last_lag_at = float(state.get("last_lag_at") or 0)
         already_recent = int(state.get("last_lag_lesson") or 0) == lesson_number and now - last_lag_at < self.lag_repeat_minutes * 60
         return {
@@ -188,7 +211,7 @@ class CoursePlanner:
             "lesson_number": lesson_number,
             "completed_lessons": summary["completed_lessons"],
             "daily_lessons": self.daily_lessons,
-            "inactive_minutes": max(0, int((now - last_ended_at) / 60)),
+            "inactive_minutes": max(0, int((now - last_ended_at - excluded_pause_seconds) / 60)),
             "behind_minutes": max(0, int((now - due_at) / 60)),
             "due_at": due_at,
         }
