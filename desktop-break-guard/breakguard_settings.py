@@ -13,17 +13,14 @@ class ScheduleSettingsDialog:
         self.config = config
         self.on_save = on_save
         self.values = {
-            "daily_lessons": config.daily_lessons,
-            "lesson_minutes": config.lesson_minutes,
+            "daily_target_minutes": config.daily_target_minutes,
             "break_minutes": config.break_minutes,
-            "day_start_minutes": self._clock_minutes(config.day_start),
             "lag_grace_minutes": config.lag_grace_minutes,
         }
-        self.lesson_projects = list(config.lesson_projects)
         self.value_items = {}
         self.window = Toplevel(parent)
         self.window.withdraw()
-        self.window.title("课表设置")
+        self.window.title("学习设置")
         self.window.geometry(self._geometry(parent, self.WIDTH, self.HEIGHT))
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
@@ -74,17 +71,17 @@ class ScheduleSettingsDialog:
         self._button(366, 24, 30, 30, "×", self.close, "close")
 
     def show_menu(self) -> None:
-        self._shell("课表设置", "先选择要调整的内容")
+        self._shell("学习设置", "设置目标时长，课程自动从网站同步")
         self._menu_card(
-            28, 108, "课程安排", "设置每一节课对应的网站学习项目", "01", self.show_courses, "menu_courses",
+            28, 108, "课程列表", "查看从网站同步的可选学习科目", "01", self.show_courses, "menu_courses",
         )
         self._menu_card(
-            28, 212, "时间与提醒", "设置每日节数、课间时长和提醒宽限", "02", self.show_timing, "menu_timing",
+            28, 212, "目标与提醒", "设置每日总时长、课间休息和提醒宽限", "02", self.show_timing, "menu_timing",
         )
         rounded_rect(self.canvas, 28, 332, 392, 410, 22, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
         self.canvas.create_oval(48, 354, 58, 364, fill=LIQUID.success, outline="")
-        self.canvas.create_text(72, 359, anchor="w", text="设置会自动同步到网站", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.canvas.create_text(48, 386, anchor="w", text="主面板点击课程格，只负责选择当前要上的课。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
+        self.canvas.create_text(72, 359, anchor="w", text="学习设置会自动同步到网站", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
+        self.canvas.create_text(48, 386, anchor="w", text="主面板直接选择科目，不再安排固定节次。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
         self._button(28, 478, 364, 42, "完成", self.close, "done", primary=True)
 
     def _menu_card(self, x, y, title, subtitle, index, command, tag) -> None:
@@ -97,86 +94,33 @@ class ScheduleSettingsDialog:
         self._bind(tag, command)
 
     def show_courses(self) -> None:
-        self._shell("课程安排", "点击课程卡，直接选择网站学习项目", back=True)
-        self._normalize_projects()
-        lesson_count = self.values["daily_lessons"]
-        for index in range(lesson_count):
+        self._shell("课程列表", "这些科目来自网站中的学习项目", back=True)
+        projects = self.config.available_projects[:12]
+        for index, project in enumerate(projects):
             row, column = divmod(index, 2)
-            x, y = 28 + column * 184, 98 + row * 57
-            tag = f"course_{index + 1}"
-            project = self._project_by_id(self.lesson_projects[index])
-            rounded_rect(self.canvas, x, y, x + 172, y + 47, 16, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1, tags=tag)
-            self.canvas.create_text(x + 15, y + 15, anchor="w", text=f"第 {index + 1} 节", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"), tags=tag)
-            self.canvas.create_text(x + 15, y + 33, anchor="w", text=project["name"][:8], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"), tags=tag)
-            self.canvas.create_text(x + 155, y + 24, text="›", fill=LIQUID.accent, font=("Segoe UI Variable Display", 14), tags=tag)
-            self._bind(tag, lambda number=index + 1: self.show_project_picker(number))
-        self._button(28, 488, 174, 40, "返回", self.show_menu, "courses_cancel")
-        self._button(216, 488, 176, 40, "保存安排", self.save_courses, "courses_save", primary=True)
-
-    def _normalize_projects(self) -> None:
-        projects = self.config.available_projects
-        valid_ids = {int(project["id"]) for project in projects}
-        assignments = []
-        for index in range(self.values["daily_lessons"]):
-            current = self.lesson_projects[index] if index < len(self.lesson_projects) else 0
-            fallback = int(projects[index % len(projects)]["id"]) if projects else 0
-            assignments.append(int(current) if int(current or 0) in valid_ids else fallback)
-        self.lesson_projects = assignments
-
-    def _project_by_id(self, project_id: int) -> dict:
-        return next(
-            (item for item in self.config.available_projects if int(item["id"]) == int(project_id)),
-            {"id": 0, "name": "待同步项目"},
-        )
-
-    def show_project_picker(self, lesson_number: int) -> None:
-        projects = self.config.available_projects
+            x, y = 28 + column * 184, 104 + row * 58
+            rounded_rect(self.canvas, x, y, x + 172, y + 48, 16, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+            self.canvas.create_oval(x + 16, y + 19, x + 26, y + 29, fill=str(project.get("color") or LIQUID.accent), outline="")
+            self.canvas.create_text(x + 36, y + 24, anchor="w", text=str(project["name"])[:10], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
         if not projects:
-            return
-        self._shell(f"第 {lesson_number} 节", "选择这一节课对应的学习项目", back=True)
-        self._bind("back", self.show_courses)
-        current_id = int(self.lesson_projects[lesson_number - 1])
-        for index, project in enumerate(projects[:12]):
-            row, column = divmod(index, 2)
-            x, y = 28 + column * 184, 108 + row * 58
-            tag = f"project_choice_{project['id']}"
-            selected = int(project["id"]) == current_id
-            rounded_rect(
-                self.canvas, x, y, x + 172, y + 48, 16,
-                fill=LIQUID.accent_soft if selected else LIQUID.control_bg,
-                outline=LIQUID.accent if selected else LIQUID.panel_border_soft,
-                width=2 if selected else 1,
-                tags=tag,
-            )
-            self.canvas.create_text(x + 18, y + 24, anchor="w", text=str(project["name"])[:10], fill=LIQUID.accent if selected else LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"), tags=tag)
-            self.canvas.create_text(x + 152, y + 24, text="✓" if selected else "", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"), tags=tag)
-            self._bind(tag, lambda project_id=int(project["id"]), number=lesson_number: self.choose_project(number, project_id))
-        self._button(28, 488, 364, 40, "返回课程安排", self.show_courses, "picker_back")
-
-    def choose_project(self, lesson_number: int, project_id: int) -> None:
-        self.lesson_projects[lesson_number - 1] = int(project_id)
-        self.show_courses()
-
-    def save_courses(self) -> None:
-        self.config.lesson_projects = self.lesson_projects
-        self.config.save()
-        self.on_save()
-        self.close()
+            self.canvas.create_text(28, 118, anchor="w", text="暂未同步到学习项目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 9))
+        self.canvas.create_text(28, 454, anchor="w", text="科目的新增、删除和排序请在网站学习项目中完成。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
+        self._button(28, 488, 364, 40, "返回学习设置", self.show_menu, "courses_cancel")
 
     def show_timing(self) -> None:
-        self._shell("时间与提醒", "课程时长由实际开始和结束自动记录", back=True)
+        self._shell("目标与提醒", "学习时长由实际开始和结束自动记录", back=True)
         self.value_items = {}
         rows = [
-            ("daily_lessons", "每天课程", "节", 1, 12, 1),
+            ("daily_target_minutes", "每日目标", "分钟", 30, 960, 30),
             ("break_minutes", "课间休息", "分钟", 1, 60, 1),
             ("lag_grace_minutes", "提醒宽限", "分钟", 0, 180, 5),
         ]
         for index, row in enumerate(rows):
             self._row(110 + index * 68, *row)
         rounded_rect(self.canvas, 28, 330, 392, 412, 20, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
-        self.canvas.create_text(48, 353, anchor="w", text="自动计时", fill=LIQUID.accent, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 353, anchor="w", text="时长制进度", fill=LIQUID.accent, font=("Microsoft YaHei UI", 9, "bold"))
         self.canvas.create_text(48, 378, anchor="w", text="点击开始时记录起点，手动结束时记录真实课长。", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        self.canvas.create_text(48, 399, anchor="w", text="不再预设每节课的开始时间和固定时长。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
+        self.canvas.create_text(48, 399, anchor="w", text="进度 = 今日已学时长 ÷ 每日目标时长。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
         self._button(28, 472, 174, 42, "返回", self.show_menu, "timing_cancel")
         self._button(216, 472, 176, 42, "保存时间", self.save_timing, "timing_save", primary=True)
 
@@ -219,11 +163,9 @@ class ScheduleSettingsDialog:
         self.canvas.itemconfigure(item, text=text)
 
     def save_timing(self) -> None:
-        self.config.daily_lessons = self.values["daily_lessons"]
+        self.config.daily_target_minutes = self.values["daily_target_minutes"]
         self.config.break_minutes = self.values["break_minutes"]
         self.config.lag_grace_minutes = self.values["lag_grace_minutes"]
-        self._normalize_projects()
-        self.config.lesson_projects = self.lesson_projects
         self.config.save()
         self.on_save()
         self.close()

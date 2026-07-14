@@ -15,6 +15,7 @@ class Config:
     break_minutes: int = 10
     daily_lessons: int = 8
     lesson_minutes: int = 50
+    daily_target_minutes: int = 400
     day_start: str = "08:00"
     lag_grace_minutes: int = 20
     lag_repeat_minutes: int = 30
@@ -37,11 +38,14 @@ class Config:
         else:
             raw = {}
         token = unprotect_secret(str(raw.get("token_protected", ""))) or str(raw.get("token", ""))
+        legacy_daily_lessons = max(1, min(12, int(raw.get("daily_lessons", 8))))
+        legacy_lesson_minutes = max(10, min(180, int(raw.get("lesson_minutes", 50))))
         config = cls(
             server_url=str(raw.get("server_url", "")).rstrip("/"), token=token,
             break_minutes=max(1, int(raw.get("break_minutes", 10))),
-            daily_lessons=max(1, min(12, int(raw.get("daily_lessons", 8)))),
-            lesson_minutes=max(10, min(180, int(raw.get("lesson_minutes", 50)))),
+            daily_lessons=legacy_daily_lessons,
+            lesson_minutes=legacy_lesson_minutes,
+            daily_target_minutes=max(30, min(960, int(raw.get("daily_target_minutes", legacy_daily_lessons * legacy_lesson_minutes)))),
             day_start=str(raw.get("day_start", "08:00")),
             lag_grace_minutes=max(0, min(180, int(raw.get("lag_grace_minutes", 20)))),
             lag_repeat_minutes=max(5, min(180, int(raw.get("lag_repeat_minutes", 30)))),
@@ -57,6 +61,9 @@ class Config:
             verify_tls=bool(raw.get("verify_tls", True)),
             window_geometry=str(raw.get("window_geometry", "")),
         )
+        if config.available_projects:
+            config.lesson_projects = [int(project["id"]) for project in config.available_projects[:12]]
+            config.daily_lessons = len(config.lesson_projects)
         config.save()
         if source == LEGACY_CONFIG_FILE and LEGACY_CONFIG_FILE.exists() and raw.get("token"):
             try:

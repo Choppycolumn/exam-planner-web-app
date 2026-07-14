@@ -13,6 +13,7 @@ __pycache__
 *.pyc
 dist
 desktop-break-guard/config.local.json
+desktop-break-guard/build/
 desktop-pet/.local-data
 desktop-pet/config.json
 dist-ssr

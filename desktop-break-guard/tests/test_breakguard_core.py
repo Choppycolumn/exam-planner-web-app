@@ -69,6 +69,9 @@ class BreakGuardCoreTests(unittest.TestCase):
     def planner(self):
         return CoursePlanner(self.store, 4, 50, 10, "08:00", 20, 30)
 
+    def planner_with_target(self, target_minutes: int):
+        return CoursePlanner(self.store, 4, 50, 10, "08:00", 20, 30, target_minutes)
+
     def test_course_completion_persists_daily_progress(self):
         start = datetime(2026, 7, 12, 8, 0).timestamp()
         planner = self.planner()
@@ -98,6 +101,31 @@ class BreakGuardCoreTests(unittest.TestCase):
         _session, duration = planner.complete_course(start + 75 * 60)
         self.assertEqual(duration, 4500)
 
+    def test_progress_uses_study_time_instead_of_lesson_count(self):
+        start = datetime(2026, 7, 12, 9, 0).timestamp()
+        planner = self.planner_with_target(120)
+        planner.start_course(start)
+        planner.complete_course(start + 30 * 60)
+        summary = planner.summary(start + 31 * 60)
+        self.assertEqual(summary["study_seconds"], 1800)
+        self.assertEqual(summary["target_minutes"], 120)
+        self.assertEqual(summary["progress"], 0.25)
+
+    def test_active_course_time_is_included_in_progress(self):
+        start = datetime(2026, 7, 12, 9, 0).timestamp()
+        planner = self.planner_with_target(60)
+        planner.start_course(start)
+        summary = planner.summary(start + 15 * 60)
+        self.assertEqual(summary["study_seconds"], 900)
+        self.assertEqual(summary["progress"], 0.25)
+
+    def test_reaching_time_target_suppresses_progress_warning(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner_with_target(50)
+        planner.start_course(start)
+        planner.complete_course(start + 50 * 60)
+        self.assertFalse(planner.lag_snapshot(start + 180 * 60)["due"])
+
     def test_schedule_slots_do_not_assign_fixed_times(self):
         now = datetime(2026, 7, 12, 7, 0).timestamp()
         slots = self.planner().schedule_slots(now)
@@ -115,7 +143,7 @@ class BreakGuardCoreTests(unittest.TestCase):
 
         slots = planner.schedule_slots(start + 51 * 60)
         self.assertEqual(slots[2]["status"], "done")
-        self.assertEqual(planner.summary(start + 51 * 60)["next_lesson"], 1)
+        self.assertEqual(planner.summary(start + 51 * 60)["next_lesson"], 3)
         self.assertEqual(planner.summary(start + 51 * 60)["completed_lessons"], 1)
 
     def test_selected_lesson_survives_restart(self):
@@ -133,8 +161,8 @@ class BreakGuardCoreTests(unittest.TestCase):
         due = start + 81 * 60
         snapshot = planner.lag_snapshot(due)
         self.assertTrue(snapshot["due"])
-        self.assertEqual(snapshot["lesson_number"], 2)
-        planner.mark_lag_reminded(2, due)
+        self.assertEqual(snapshot["lesson_number"], 1)
+        planner.mark_lag_reminded(1, due)
         self.assertFalse(planner.lag_snapshot(due + 29 * 60)["due"])
         self.assertTrue(planner.lag_snapshot(due + 31 * 60)["due"])
 

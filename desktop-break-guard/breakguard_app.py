@@ -122,6 +122,7 @@ class BreakGuardApp:
             self.config.day_start,
             self.config.lag_grace_minutes,
             self.config.lag_repeat_minutes,
+            self.config.daily_target_minutes,
         )
         self.ui_messages: queue.Queue[str] = queue.Queue()
         self.client = SyncWorker(self.config, self.store, self.ui_messages)
@@ -237,36 +238,36 @@ class BreakGuardApp:
         center = self.width / 2
         self.state_dot = painter.status_dot(29, 31, LIQUID.success)
         canvas.create_text(50, 37, anchor="w", text="Break Guard", fill=LIQUID.text_primary, font=LIQUID.font_title)
-        canvas.create_text(50, 57, anchor="w", text="每日课表 · 专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        canvas.create_text(50, 57, anchor="w", text="每日学习 · 专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         close_visual = painter.icon_button(self.width - 54, 22, 32, "×", "btn_close")
         close_visual["label"] = "btn_close__label"
         close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
         self.button_commands.append(close_button)
         self.buttons["btn_close"] = close_button
-        canvas.create_text(28, 87, anchor="w", text="点击开始上课，结束后自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
+        canvas.create_text(28, 87, anchor="w", text="选择科目开始学习，结束后自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
 
         rounded_rect(canvas, 28, 106, right, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
-        canvas.create_text(46, 127, anchor="w", text="今日课表", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.progress_item = canvas.create_text(right - 18, 127, anchor="e", text="0 / 8 节", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
+        canvas.create_text(46, 127, anchor="w", text="今日学习", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
+        self.progress_item = canvas.create_text(right - 18, 127, anchor="e", text="0 分钟 / 目标", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
         self.progress_track_width = max(1, right - 64)
         rounded_rect(canvas, 46, 149, right - 18, 159, 5, fill=LIQUID.neutral_soft, outline="")
         self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
         self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        canvas.create_text(28, 210, anchor="w", text="课程安排", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        canvas.create_text(right, 210, anchor="e", text="点击课程格选择当前课程", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
+        canvas.create_text(28, 210, anchor="w", text="今日课程", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        canvas.create_text(right, 210, anchor="e", text="点击科目即可切换", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
         self.draw_schedule()
 
-        vertical_offset = (self.schedule_rows - 2) * 44
-        timer_top = 326 + vertical_offset
+        vertical_offset = (self.schedule_rows - 2) * 54
+        timer_top = 334 + vertical_offset
         painter.timer_well(28, timer_top, right, timer_top + 104)
-        self.timer_item = canvas.create_text(center, timer_top + 41, text="第 1 节", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 38, "bold"))
-        self.subtitle_item = canvas.create_text(center, timer_top + 82, text="准备开始今天的课程", fill=LIQUID.text_secondary, font=LIQUID.font_status)
+        self.timer_item = canvas.create_text(center, timer_top + 41, text="选择课程", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 28, "bold"))
+        self.subtitle_item = canvas.create_text(center, timer_top + 82, text="准备开始今天的学习", fill=LIQUID.text_secondary, font=LIQUID.font_status)
 
         action_top = timer_top + 121
         settings_width = 118
         primary_width = self.width - 186
-        self.add_button(28, action_top, primary_width, 50, "开始第 1 节课", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
-        self.add_button(self.width - 146, action_top, settings_width, 50, "课表设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
+        self.add_button(28, action_top, primary_width, 50, "开始学习", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
+        self.add_button(self.width - 146, action_top, settings_width, 50, "学习设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
         canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         chip_width = (self.width - 80) // 3
         self.add_button(28, action_top + 88, chip_width, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
@@ -289,7 +290,7 @@ class BreakGuardApp:
         painter.glass_panel(8, 8, self.width - 8, self.height - 8)
         self.state_dot = painter.status_dot(27, 26, LIQUID.accent)
         session = self.planner.session
-        course_title = f"第 {session.lesson_number} 节 · {session.project_name}" if session else "课程计时"
+        course_title = session.project_name if session else "学习计时"
         canvas.create_text(47, 31, anchor="w", text=course_title[:18], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
         canvas.create_text(47, 52, anchor="w", text="专注小窗 · 正在自动记录", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
 
@@ -309,10 +310,11 @@ class BreakGuardApp:
         self.add_button(self.width - 154, 82, 124, 58, "结束课程", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
 
     def schedule_row_count(self) -> int:
-        return max(1, (max(1, min(12, int(self.config.daily_lessons))) + 3) // 4)
+        project_count = max(1, min(12, len(self.config.available_projects)))
+        return max(1, (project_count + 1) // 2)
 
     def preferred_height(self) -> int:
-        return 640 + (self.schedule_rows - 2) * 44
+        return max(586, 640 + (self.schedule_rows - 2) * 54)
 
     def enter_compact_mode(self) -> None:
         if self.compact_mode:
@@ -346,37 +348,37 @@ class BreakGuardApp:
         if self.canvas is None:
             return
         self.canvas.delete("schedule_dynamic")
+        projects = self.config.available_projects[:12]
+        if not projects:
+            self.canvas.create_text(28, 247, anchor="w", text="等待从网站同步学习项目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 9), tags="schedule_dynamic")
+            return
         gap = 10
-        tile_width = max(78, (self.width - 86) // 4)
-        for slot in self.planner.schedule_slots()[:12]:
-            index = slot["lesson_number"] - 1
-            row, column = divmod(index, 4)
-            x, y = 28 + column * (tile_width + gap), 226 + row * 44
-            colors = {
-                "done": (LIQUID.success_soft, LIQUID.success_text, "✓"),
-                "active": (LIQUID.accent_soft, LIQUID.accent, "●"),
-                "pending": (LIQUID.control_bg, LIQUID.text_secondary, str(slot["lesson_number"])),
-            }
-            fill, foreground, marker = colors[slot["status"]]
-            if slot["selected"] and slot["status"] != "active":
-                fill, foreground, marker = LIQUID.accent_soft, LIQUID.accent, "▶"
-            lesson_tag = f"lesson_slot_{slot['lesson_number']}"
+        tile_width = max(120, (self.width - 66) // 2)
+        selected_lesson = self.planner.selected_lesson()
+        for index, project in enumerate(projects):
+            lesson_number = index + 1
+            row, column = divmod(index, 2)
+            x, y = 28 + column * (tile_width + gap), 226 + row * 54
+            active = bool(self.planner.session and int(self.planner.session.project_id) == int(project["id"]))
+            selected = lesson_number == selected_lesson
+            fill = LIQUID.accent_soft if active or selected else LIQUID.control_bg
+            foreground = LIQUID.accent if active or selected else LIQUID.text_primary
+            marker = "●" if active else "▶" if selected else "○"
+            lesson_tag = f"lesson_slot_{lesson_number}"
             tags = ("schedule_dynamic", lesson_tag)
-            project = self.project_for_lesson(slot["lesson_number"])
-            project_name = (project.get("name") or "待分配")[:5]
+            project_name = (project.get("name") or "未命名课程")[:10]
             rounded_rect(
-                self.canvas, x, y, x + tile_width, y + 38, 13,
+                self.canvas, x, y, x + tile_width, y + 46, 14,
                 fill=fill,
-                outline=LIQUID.accent if slot["selected"] else LIQUID.panel_border_soft,
-                width=2 if slot["selected"] else 1,
+                outline=LIQUID.accent if active or selected else LIQUID.panel_border_soft,
+                width=2 if active or selected else 1,
                 tags=tags,
             )
-            self.canvas.create_text(x + 14, y + 19, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
-            text_center = x + 14 + (tile_width - 14) / 2
-            self.canvas.create_text(text_center, y + 13, text=project_name, fill=foreground, font=("Microsoft YaHei UI", 8, "bold"), tags=tags)
-            slot_label = "进行中" if slot["status"] == "active" else "已完成" if slot["status"] == "done" else "已选择" if slot["selected"] else f"第 {slot['lesson_number']} 节"
-            self.canvas.create_text(text_center, y + 27, text=slot_label, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
-            self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=slot["lesson_number"]: self.select_current_lesson(number))
+            self.canvas.create_text(x + 16, y + 23, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
+            self.canvas.create_text(x + 31, y + 16, anchor="w", text=project_name, fill=foreground, font=("Microsoft YaHei UI", 9, "bold"), tags=tags)
+            state_text = "学习中" if active else "当前课程" if selected else "点击选择"
+            self.canvas.create_text(x + 31, y + 33, anchor="w", text=state_text, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
+            self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=lesson_number: self.select_current_lesson(number))
             self.canvas.tag_bind(lesson_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
             self.canvas.tag_bind(lesson_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
 
@@ -568,15 +570,22 @@ class BreakGuardApp:
         summary = self.planner.summary()
         if self.canvas is None:
             return summary
-        self.canvas.itemconfigure(self.progress_item, text=f"{summary['completed_lessons']} / {summary['daily_lessons']} 节")
         study_minutes = summary["study_seconds"] // 60
+        target_minutes = summary["target_minutes"]
+        self.canvas.itemconfigure(self.progress_item, text=f"{self.format_minutes(study_minutes)} / {self.format_minutes(target_minutes)}")
         pause_text = f" · {summary['paused_label']}中" if summary["paused_label"] else ""
-        self.canvas.itemconfigure(self.target_item, text=f"目标 {summary['daily_lessons']} 节 · 已记录 {study_minutes} 分钟{pause_text}")
+        self.canvas.itemconfigure(self.target_item, text=f"已学 {study_minutes} 分钟 · 目标 {target_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
         width = max(1, int(self.progress_track_width * summary["progress"]))
         self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
         self.draw_schedule()
         return summary
+
+    @staticmethod
+    def format_minutes(minutes: int) -> str:
+        minutes = max(0, int(minutes))
+        hours, remainder = divmod(minutes, 60)
+        return f"{hours}小时{remainder:02d}分" if hours else f"{remainder}分钟"
 
     def project_for_lesson(self, lesson_number: int) -> dict:
         projects = [project for project in self.config.available_projects if int(project.get("id", 0)) > 0]
@@ -587,34 +596,13 @@ class BreakGuardApp:
         return next((project for project in projects if int(project["id"]) == int(project_id)), projects[index % len(projects)])
 
     def normalize_lesson_projects(self) -> None:
-        projects = self.config.available_projects
+        projects = self.config.available_projects[:12]
         if not projects:
-            self.config.lesson_projects = self.config.lesson_projects[:self.config.daily_lessons]
+            self.config.lesson_projects = []
+            self.config.daily_lessons = 1
             return
-        valid_ids = {int(project["id"]) for project in projects}
-        assignments = []
-        for index in range(self.config.daily_lessons):
-            current = self.config.lesson_projects[index] if index < len(self.config.lesson_projects) else 0
-            assignments.append(int(current) if int(current or 0) in valid_ids else int(projects[index % len(projects)]["id"]))
-        self.config.lesson_projects = assignments
-
-    def cycle_lesson_project(self, lesson_number: int) -> None:
-        projects = self.config.available_projects
-        if not projects:
-            self.set_status("正在等待从网站拉取学习项目")
-            self.client.last_config_pull = 0.0
-            self.client.wake_event.set()
-            return
-        self.normalize_lesson_projects()
-        index = lesson_number - 1
-        current_id = self.config.lesson_projects[index]
-        current_index = next((position for position, item in enumerate(projects) if int(item["id"]) == int(current_id)), -1)
-        selected = projects[(current_index + 1) % len(projects)]
-        self.config.lesson_projects[index] = int(selected["id"])
-        self.config.save()
-        self.sync_schedule_config()
-        self.set_status(f"第 {lesson_number} 节已设为：{selected['name']}")
-        self.draw_schedule()
+        self.config.lesson_projects = [int(project["id"]) for project in projects]
+        self.config.daily_lessons = len(projects)
 
     def select_current_lesson(self, lesson_number: int) -> None:
         if self.planner.session:
@@ -622,7 +610,7 @@ class BreakGuardApp:
             return
         selected = self.planner.select_lesson(lesson_number)
         project = self.project_for_lesson(selected)
-        self.set_status(f"已选择第 {selected} 节：{project['name']}")
+        self.set_status(f"已选择课程：{project['name']}")
         self.refresh_view_state()
 
     def schedule_config_payload(self) -> dict:
@@ -630,6 +618,7 @@ class BreakGuardApp:
         return {
             "dailyLessons": self.config.daily_lessons,
             "lessonMinutes": self.config.lesson_minutes,
+            "dailyTargetMinutes": self.config.daily_target_minutes,
             "breakMinutes": self.config.break_minutes,
             "dayStart": self.config.day_start,
             "lagGraceMinutes": self.config.lag_grace_minutes,
@@ -640,13 +629,16 @@ class BreakGuardApp:
     def sync_schedule_config(self) -> None:
         payload = self.schedule_config_payload()
         event_id = f"schedule_config_{int(time.time() * 1000)}"
-        self.client.post_event("schedule_config_updated", event_id, note="桌面端更新每日课表", payload=payload)
+        self.client.post_event("schedule_config_updated", event_id, note="桌面端更新每日学习设置", payload=payload)
 
     def apply_remote_schedule(self, message: dict) -> None:
         config = message.get("config") or {}
         projects = message.get("projects") or []
-        self.config.daily_lessons = max(1, min(12, int(config.get("dailyLessons", self.config.daily_lessons))))
-        self.config.lesson_minutes = max(10, min(180, int(config.get("lessonMinutes", self.config.lesson_minutes))))
+        legacy_lessons = max(1, min(12, int(config.get("dailyLessons", self.config.daily_lessons))))
+        legacy_minutes = max(10, min(180, int(config.get("lessonMinutes", self.config.lesson_minutes))))
+        self.config.daily_lessons = legacy_lessons
+        self.config.lesson_minutes = legacy_minutes
+        self.config.daily_target_minutes = max(30, min(960, int(config.get("dailyTargetMinutes", self.config.daily_target_minutes or legacy_lessons * legacy_minutes))))
         self.config.break_minutes = max(1, min(60, int(config.get("breakMinutes", self.config.break_minutes))))
         self.config.day_start = str(config.get("dayStart", self.config.day_start))
         self.config.lag_grace_minutes = max(0, min(180, int(config.get("lagGraceMinutes", self.config.lag_grace_minutes))))
@@ -655,11 +647,10 @@ class BreakGuardApp:
             {"id": int(item["id"]), "name": str(item["name"]), "color": str(item.get("color", "#2563eb"))}
             for item in projects if isinstance(item, dict) and item.get("id") and item.get("name")
         ]
-        self.config.lesson_projects = [int(value) for value in config.get("lessonProjects", [])][:12]
         self.normalize_lesson_projects()
         self.config.save()
         self.on_schedule_settings_saved(sync=False)
-        self.set_status("已从网站同步每日课表和学习项目")
+        self.set_status("已从网站同步课程与每日学习目标")
 
     def primary_action(self) -> None:
         if self.planner.session:
@@ -675,6 +666,11 @@ class BreakGuardApp:
             return
         next_lesson = self.planner.summary()["next_lesson"]
         project = self.project_for_lesson(next_lesson)
+        if int(project.get("id", 0)) <= 0:
+            self.set_status("尚未同步到课程，请稍后再试")
+            self.client.last_config_pull = 0.0
+            self.client.wake_event.set()
+            return
         session = self.planner.start_course(
             project_id=project["id"],
             project_name=project["name"],
@@ -685,7 +681,7 @@ class BreakGuardApp:
             "class_started",
             f"{session.session_id}_class_started",
             startedAt=session.started_iso,
-            note=f"开始第 {session.lesson_number} 节课：{session.project_name}",
+            note=f"开始学习：{session.project_name}",
             payload={
                 "lessonNumber": session.lesson_number,
                 "dailyLessons": self.config.daily_lessons,
@@ -694,7 +690,7 @@ class BreakGuardApp:
                 "lessonDate": session.lesson_date,
             },
         )
-        self.set_status(f"第 {session.lesson_number} 节 {session.project_name} 已开始自动计时")
+        self.set_status(f"{session.project_name} 已开始自动计时")
         self.enter_compact_mode()
 
     def finish_course(self, auto: bool = False) -> None:
@@ -707,7 +703,7 @@ class BreakGuardApp:
             f"{completed.session_id}_class_completed",
             startedAt=completed.started_iso,
             endedAt=utc_iso(),
-            note=f"第 {completed.lesson_number} 节课{'到时自动' if auto else '手动'}结束",
+            note=f"{completed.project_name}{'到时自动' if auto else '手动'}结束学习",
             payload={
                 "lessonNumber": completed.lesson_number,
                 "durationSeconds": duration,
@@ -722,10 +718,10 @@ class BreakGuardApp:
             "break_started",
             f"{break_session.session_id}_started",
             startedAt=break_session.started_iso,
-            note=f"第 {completed.lesson_number} 节课结束后自动休息",
+            note=f"{completed.project_name}学习结束后自动休息",
         )
         self.exit_compact_mode()
-        self.set_status(f"第 {completed.lesson_number} 节完成，自动休息 {self.config.break_minutes} 分钟")
+        self.set_status(f"{completed.project_name}学习完成，自动休息 {self.config.break_minutes} 分钟")
         self.refresh_view_state()
 
     def open_schedule_settings(self) -> None:
@@ -743,6 +739,7 @@ class BreakGuardApp:
             self.config.day_start,
             self.config.lag_grace_minutes,
             self.config.lag_repeat_minutes,
+            self.config.daily_target_minutes,
         )
         next_rows = self.schedule_row_count()
         if next_rows != self.schedule_rows:
@@ -765,7 +762,7 @@ class BreakGuardApp:
             self.persist_window_geometry()
         if sync:
             self.sync_schedule_config()
-        self.set_status("每日课表已更新")
+        self.set_status("每日学习设置已更新")
         self.refresh_view_state()
 
     def start_break(self) -> None:
@@ -785,8 +782,7 @@ class BreakGuardApp:
         self.client.post_event("break_completed", f"{session.session_id}_completed", startedAt=session.started_iso, endedAt=utc_iso(), overdueSeconds=overdue, note="用户点击我回来了")
         self.machine.complete()
         self.hide_fullscreen()
-        summary = self.planner.summary()
-        self.set_status(f"休息结束，准备第 {summary['next_lesson']} 节课")
+        self.set_status("休息结束，可以选择课程继续学习")
         self.refresh_view_state()
 
     def meal(self, kind: str) -> None:
@@ -799,7 +795,7 @@ class BreakGuardApp:
         self.store.cancel_pending_events("schedule_lag")
         self.client.post_event(kind, endedAt=utc_iso(), note=label)
         self.set_tone("meal")
-        self.set_status(f"{label}暂停中；开始下一节课时自动恢复进度提醒")
+        self.set_status(f"{label}暂停中；开始学习时自动恢复进度提醒")
         self.refresh_view_state()
 
     def hide_to_tray(self) -> None:
@@ -910,15 +906,15 @@ class BreakGuardApp:
         rounded_rect(canvas, x1 + 6, y1 + 12, x2 + 6, y2 + 12, 46, fill="#050711", outline="")
         rounded_rect(canvas, x1, y1, x2, y2, 46, fill="#211a32", outline="#a78bfa", width=1)
         rounded_rect(canvas, width / 2 - 100, y1 + 34, width / 2 + 100, y1 + 70, 18, fill="#3a2540", outline="#f59e0b", width=1)
-        canvas.create_text(width / 2, y1 + 52, text="课表进度提醒", fill="#fbbf24", font=("Microsoft YaHei UI", 11, "bold"))
-        canvas.create_text(width / 2, y1 + 130, text="今天的进度正在落后", fill="#f8fafc", font=("Microsoft YaHei UI", 42, "bold"))
+        canvas.create_text(width / 2, y1 + 52, text="学习进度提醒", fill="#fbbf24", font=("Microsoft YaHei UI", 11, "bold"))
+        canvas.create_text(width / 2, y1 + 130, text="今天的学习时长还未达标", fill="#f8fafc", font=("Microsoft YaHei UI", 42, "bold"))
         canvas.create_text(
             width / 2, y1 + 198,
-            text=f"距离上一节结束已 {snapshot['inactive_minutes']} 分钟\n当前完成 {snapshot['completed_lessons']} / {snapshot['daily_lessons']} 节，请确认是否继续",
+            text=f"距离上次学习结束已 {snapshot['inactive_minutes']} 分钟\n今日已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟，请确认是否继续",
             fill="#ddd6fe", font=("Microsoft YaHei UI", 17, "bold"), justify="center",
         )
         canvas.create_text(width / 2, y1 + 266, text="这不是惩罚，只是把今天重新拉回轨道。", fill="#a5b4fc", font=("Microsoft YaHei UI", 12))
-        self._fullscreen_button(canvas, int(width / 2 - 220), y1 + 312, 250, 64, "现在开始本节课", "lag_start", self.start_course, "#f8fafc", "#111827")
+        self._fullscreen_button(canvas, int(width / 2 - 220), y1 + 312, 250, 64, "现在开始学习", "lag_start", self.start_course, "#f8fafc", "#111827")
         self._fullscreen_button(canvas, int(width / 2 + 50), y1 + 312, 170, 64, "稍后提醒", "lag_later", self.hide_fullscreen, "#332945", "#e9d5ff")
         window.bind("<Escape>", lambda _event: self.hide_fullscreen())
         window.after(50, lambda: bring_to_front(window))
@@ -951,10 +947,10 @@ class BreakGuardApp:
         if self.planner.session:
             elapsed = self.planner.course_elapsed()
             started_text = time.strftime("%H:%M", time.localtime(self.planner.session.started_at))
-            self.set_timer(fmt_seconds(elapsed), f"第 {self.planner.session.lesson_number} 节 · {started_text} 开始 · 正在记录")
+            self.set_timer(fmt_seconds(elapsed), f"{self.planner.session.project_name} · {started_text} 开始 · 正在记录")
             self.set_tone("running")
             if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="结束本节并休息")
+                self.canvas.itemconfigure("btn_primary__label", text="结束学习并休息")
         elif snapshot["running"] and snapshot["remaining"] > 0:
             self.set_timer(fmt_seconds(snapshot["remaining"]), "课间休息中，到时会全屏提醒")
             self.set_tone("running")
@@ -966,9 +962,9 @@ class BreakGuardApp:
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text="结束休息")
         else:
-            next_lesson = summary["next_lesson"]
-            label = "开始加练" if summary["completed_lessons"] >= summary["daily_lessons"] else f"开始第 {next_lesson} 节课"
-            self.set_timer(f"第 {next_lesson} 节", f"{summary['paused_label']}暂停中" if summary["paused_label"] else "点击后开始记录学习时间")
+            project = self.project_for_lesson(summary["next_lesson"])
+            label = f"开始学习 {project['name']}" if int(project.get("id", 0)) else "等待课程同步"
+            self.set_timer(project["name"], f"{summary['paused_label']}暂停中" if summary["paused_label"] else "点击后开始记录学习时间")
             self.set_tone("idle")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text=label)
@@ -1016,15 +1012,17 @@ class BreakGuardApp:
         self.client.post_event(
             "schedule_lag",
             f"schedule_lag_{self.planner.summary()['date']}_{snapshot['lesson_number']}_{int(time.time() // (self.config.lag_repeat_minutes * 60))}",
-            note=f"每日课表进度落后，第 {snapshot['lesson_number']} 节尚未完成",
+            note=f"每日学习时长未达标，已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟",
             payload={
                 "lessonNumber": snapshot["lesson_number"],
                 "completedLessons": snapshot["completed_lessons"],
                 "dailyLessons": snapshot["daily_lessons"],
+                "studyMinutes": snapshot["study_minutes"],
+                "targetMinutes": snapshot["target_minutes"],
                 "behindMinutes": snapshot["behind_minutes"],
             },
         )
-        self.set_status("课表进度落后，已触发强提醒并同步网站")
+        self.set_status("学习时长未达标，已触发强提醒并同步网站")
         self.show_progress_warning(snapshot)
 
     def tick(self) -> None:

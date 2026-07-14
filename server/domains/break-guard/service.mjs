@@ -5,8 +5,8 @@ const EVENT_LABELS = {
   unfocused: '不专注记录',
   class_started: '开始上课',
   class_completed: '完成课程',
-  schedule_lag: '课表进度落后',
-  schedule_config_updated: '课表设置更新',
+  schedule_lag: '学习进度落后',
+  schedule_config_updated: '学习设置更新',
   lunch: '中午吃饭',
   dinner: '晚上吃饭',
   meal: '吃饭',
@@ -25,13 +25,14 @@ export function createBreakGuardService({
 }) {
   function normalizeScheduleConfig(input = {}) {
     const projects = repository.listActiveProjects();
-    const validProjectIds = new Set(projects.map((project) => project.id));
-    const dailyLessons = Math.max(1, Math.min(12, Math.round(Number(input.dailyLessons || 8))));
-    const requested = Array.isArray(input.lessonProjects) ? input.lessonProjects.map(Number).filter((id) => validProjectIds.has(id)) : [];
-    const lessonProjects = Array.from({ length: dailyLessons }, (_, index) => requested[index] || projects[index % Math.max(1, projects.length)]?.id || 0);
+    const legacyDailyLessons = Math.max(1, Math.min(12, Math.round(Number(input.dailyLessons || 8))));
+    const lessonMinutes = Math.max(10, Math.min(180, Math.round(Number(input.lessonMinutes || 50))));
+    const lessonProjects = projects.slice(0, 12).map((project) => project.id);
+    const dailyLessons = Math.max(1, lessonProjects.length || legacyDailyLessons);
     return {
       dailyLessons,
-      lessonMinutes: Math.max(10, Math.min(180, Math.round(Number(input.lessonMinutes || 50)))),
+      lessonMinutes,
+      dailyTargetMinutes: Math.max(30, Math.min(960, Math.round(Number(input.dailyTargetMinutes || legacyDailyLessons * lessonMinutes)))),
       breakMinutes: Math.max(1, Math.min(60, Math.round(Number(input.breakMinutes || 10)))),
       dayStart: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(input.dayStart || '')) ? String(input.dayStart) : '08:00',
       lagGraceMinutes: Math.max(0, Math.min(180, Math.round(Number(input.lagGraceMinutes ?? 20)))),
@@ -144,11 +145,13 @@ export function createBreakGuardService({
         return { ok: true, queued: false, status: 'suppressed', reason: 'meal_pause' };
       }
     }
-    const title = isUnfocused ? '休息超时未归记录' : isScheduleLag ? '今日课表进度落后' : '休息结束提醒';
+    const title = isUnfocused ? '休息超时未归记录' : isScheduleLag ? '今日学习进度落后' : '休息结束提醒';
     const text = isUnfocused
       ? `休息结束后已超过 ${Math.max(5, Math.round(event.overdueSeconds / 60))} 分钟仍未取消，已记录一次不专注。`
       : isScheduleLag
-        ? `当前完成 ${Number(event.payload?.completedLessons || 0)} / ${Number(event.payload?.dailyLessons || 0)} 节，第 ${Number(event.payload?.lessonNumber || 0)} 节尚未完成。请回到 Break Guard 调整今天的学习节奏。`
+        ? Number(event.payload?.targetMinutes || 0) > 0
+          ? `今日已学 ${Number(event.payload?.studyMinutes || 0)} / ${Number(event.payload?.targetMinutes || 0)} 分钟，当前学习时长尚未达标。请回到 Break Guard 调整今天的学习节奏。`
+          : `当前完成 ${Number(event.payload?.completedLessons || 0)} / ${Number(event.payload?.dailyLessons || 0)} 节。请回到 Break Guard 调整今天的学习节奏。`
         : '课间休息已经结束，请回到学习并在桌面悬浮窗结束休息。';
     return queueProactiveNotification({
       eventKey: `break-guard:${event.eventType}:${event.eventId || event.createdAt}`,

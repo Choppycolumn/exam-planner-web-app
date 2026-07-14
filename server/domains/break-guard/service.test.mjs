@@ -50,16 +50,16 @@ describe('break guard service', () => {
     expect(queued[0].eventKey).toContain('event_12345678');
   });
 
-  it('accepts schedule progress alerts with structured lesson context', () => {
+  it('accepts study progress alerts with structured time context', () => {
     const { service, queued } = fixture();
     const event = service.recordEvent({
       eventId: 'schedule_lag_20260712_1',
       eventType: 'schedule_lag',
-      payload: { lessonNumber: 3, completedLessons: 2, dailyLessons: 8 },
+      payload: { lessonNumber: 3, studyMinutes: 120, targetMinutes: 400 },
     });
-    expect(event.label).toBe('课表进度落后');
+    expect(event.label).toBe('学习进度落后');
     const delivery = service.queueNotification(event);
-    expect(delivery.content).toContain('2 / 8');
+    expect(delivery.content).toContain('120 / 400 分钟');
     expect(queued).toHaveLength(1);
   });
 
@@ -88,10 +88,18 @@ describe('break guard service', () => {
     const resumed = service.recordEvent({
       eventId: 'schedule_lag_after_meal',
       eventType: 'schedule_lag',
-      payload: { lessonNumber: 4, completedLessons: 3, dailyLessons: 8 },
+      payload: { lessonNumber: 4, studyMinutes: 180, targetMinutes: 400 },
     });
-    expect(service.queueNotification(resumed).content).toContain('3 / 8');
+    expect(service.queueNotification(resumed).content).toContain('180 / 400 分钟');
     expect(queued).toHaveLength(1);
+  });
+
+  it('normalizes a time target and exposes active projects directly', () => {
+    const { service } = fixture();
+    const result = service.saveScheduleConfig({ dailyLessons: 8, lessonMinutes: 50, dailyTargetMinutes: 360 });
+    expect(result.config.dailyTargetMinutes).toBe(360);
+    expect(result.config.dailyLessons).toBe(1);
+    expect(result.config.lessonProjects).toEqual([10]);
   });
 
   it('writes completed classes into the matching study project once', () => {
