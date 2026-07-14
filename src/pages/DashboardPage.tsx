@@ -19,6 +19,7 @@ import {
   urgencyLabel,
 } from '../utils/statistics';
 import { routeLoaders } from '../router/preload';
+import { useAccountSession } from '../hooks/useAccountSession';
 
 const LazyDashboardCharts = lazy(() => routeLoaders.dashboardCharts().then((module) => ({ default: module.DashboardCharts })));
 
@@ -68,6 +69,8 @@ function activityCellClass(minutes: number) {
 }
 
 export function DashboardPage() {
+  const { data: session } = useAccountSession();
+  const isLearner = session?.accountType === 'learner';
   const {
     activeGoal,
     todayTotal,
@@ -106,6 +109,7 @@ export function DashboardPage() {
   const { data: notificationCenter = { metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, events: [] } } = useQuery({
     queryKey: queryKeys.notifications('all'),
     queryFn: () => serverApi.getNotificationCenter('all'),
+    enabled: Boolean(session) && !isLearner,
     placeholderData: { generatedAt: '', channels: [], events: [], deliveries: [], metrics: { total: 0, open: 0, warnings: 0, critical: 0 }, channelPlan: {} },
   });
   const today = todayISO();
@@ -117,7 +121,7 @@ export function DashboardPage() {
   const briefMarkets = todayBrief?.payload.markets ?? [];
   const successfulMarkets = briefMarkets.filter((item) => item.ok).slice(0, 4);
   const showEnglishWritingPlan = Boolean(englishWritingPlan?.enabled && englishWritingPlan.showOnDashboard);
-  const showBriefCard = true;
+  const showBriefCard = !isLearner;
   const goalDaysLeft = activeGoal ? Math.max(1, calculateCountdownDays(activeGoal.deadline)) : 0;
   const remainingStudyMinutes = Math.max(0, studyTargetMinutes - totalStudyMinutes);
   const dailyRequiredMinutes = goalDaysLeft ? Math.ceil(remainingStudyMinutes / goalDaysLeft) : 0;
@@ -206,7 +210,7 @@ export function DashboardPage() {
         <WaterIntakeCard key={waterCardKey} record={todayWaterRecord ?? undefined} readOnly={readOnly} />
       </div>
 
-      <section className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className={`mt-6 grid gap-4 md:grid-cols-2 ${isLearner ? '' : 'xl:grid-cols-4'}`}>
         <Link className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700 transition hover:bg-blue-100" to="/goal-review">
           <p className="flex items-center gap-2 text-sm font-semibold"><Target size={16} />目标复盘</p>
           <p className="mt-2 text-xs leading-5 opacity-80">把长期目标、项目动量和最近报告汇总校准。</p>
@@ -215,17 +219,17 @@ export function DashboardPage() {
           <p className="flex items-center gap-2 text-sm font-semibold"><CalendarCheck size={16} />阶段进度</p>
           <p className="mt-2 text-xs leading-5 opacity-80">查看学习、复盘、任务和目标推进节奏。</p>
         </Link>
-        <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/settings">
+        {!isLearner ? <Link className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700 transition hover:bg-amber-100" to="/settings">
           <p className="flex items-center gap-2 text-sm font-semibold"><Bell size={16} />最近通知 {notificationCenter.metrics.open}</p>
           <p className="mt-2 text-xs leading-5 opacity-80">{notificationCenter.metrics.warnings || notificationCenter.metrics.critical ? '存在需要关注的系统预警。' : '日报、报告和系统事件仍会保留在后台。'}</p>
-        </Link>
-        <div className={`rounded-lg border p-4 ${breakGuard?.unfocusedCount ? 'border-rose-100 bg-rose-50 text-rose-700' : 'border-sky-100 bg-sky-50 text-sky-700'}`}>
+        </Link> : null}
+        {!isLearner ? <div className={`rounded-lg border p-4 ${breakGuard?.unfocusedCount ? 'border-rose-100 bg-rose-50 text-rose-700' : 'border-sky-100 bg-sky-50 text-sky-700'}`}>
           <p className="flex items-center gap-2 text-sm font-semibold"><TimerReset size={16} />休息守护</p>
           <p className="mt-2 text-xs leading-5 opacity-80">
             今日休息 {breakGuard?.breakCount ?? 0} 次，不专注 {breakGuard?.unfocusedCount ?? 0} 次
           </p>
           <p className="mt-1 flex items-center gap-1 text-xs opacity-80"><Coffee size={13} />午饭 {breakGuard?.lunchCount ?? 0} / 晚饭 {breakGuard?.dinnerCount ?? 0}</p>
-        </div>
+        </div> : null}
       </section>
 
       {showEnglishWritingPlan ? (
@@ -550,9 +554,9 @@ export function DashboardPage() {
           <p className="text-sm font-semibold text-blue-700">今日学习时间填写入口</p>
           <p className="mt-2 text-slate-600">按项目记录分钟数和备注，保存后自动进入统计。</p>
         </Link>
-        <Link className="card block p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/settings">
+        <Link className="card block p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/goals">
           <p className="text-sm font-semibold text-blue-700">长期目标管理</p>
-          <p className="mt-2 text-slate-600">在设置页管理考研目标、分数目标和截止日期。</p>
+          <p className="mt-2 text-slate-600">管理考研目标、分数目标和截止日期。</p>
         </Link>
       </div>
     </Page>

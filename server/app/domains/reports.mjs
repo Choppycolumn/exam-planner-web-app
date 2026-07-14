@@ -659,7 +659,7 @@ VALUES (${runtime.sqlString(source)}, ${runtime.sqlString(modelName)}, ${runtime
 }
 function recordFailedErrorThemeBatch({ periodStart, periodEnd, modelName, note }) {
     const timestamp = runtime.nowISO();
-    const reviewCount = Number(runtime.sqliteScalar(`SELECT COUNT(*) FROM daily_reviews WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`) || 0);
+    const reviewCount = Number(runtime.sqliteScalar(`SELECT COUNT(*) FROM daily_reviews WHERE user_id = 1 AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`) || 0);
     return insertErrorThemeBatch({
         periodStart,
         periodEnd,
@@ -682,11 +682,11 @@ async function runErrorThemeBatch(periodStart = '1900-01-01', periodEnd = runtim
     const modelProfile = normalizeEmbeddingModelProfile(options.modelProfile);
     const reviews = runtime.sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan
 FROM daily_reviews
-WHERE date BETWEEN ${runtime.sqlString(from)} AND ${runtime.sqlString(to)}
+WHERE user_id = 1 AND date BETWEEN ${runtime.sqlString(from)} AND ${runtime.sqlString(to)}
 ORDER BY date;`);
     const inboxItems = runtime.sqliteJson(`SELECT id, date, text
 FROM problem_inbox_items
-WHERE status = 'open' AND date BETWEEN ${runtime.sqlString(from)} AND ${runtime.sqlString(to)}
+WHERE user_id = 1 AND status = 'open' AND date BETWEEN ${runtime.sqlString(from)} AND ${runtime.sqlString(to)}
 ORDER BY date, id;`);
     const inboxReviews = inboxItems.map((item) => ({
         id: -Math.abs(Number(item.id)),
@@ -999,35 +999,35 @@ function buildReportTitle(kind, periodStart, periodEnd) {
     const label = kind === 'monthly' ? '月报' : '周报';
     return `${periodStart} 至 ${periodEnd} 学习${label}`;
 }
-function buildLearningReport(kind, periodStart, periodEnd, trigger = 'auto') {
+function buildLearningReport(kind, periodStart, periodEnd, trigger = 'auto', userId = 1) {
     const dailyRows = runtime.sqliteJson(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
 FROM study_time_records
-WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
 GROUP BY date
 ORDER BY date;`);
     const dailyMap = new Map(dailyRows.map((item) => [item.date, Number(item.minutes || 0)]));
     const dailyTotals = dateRange(periodStart, periodEnd).map((date) => ({ date, minutes: dailyMap.get(date) || 0 }));
     const projectTotals = runtime.sqliteJson(`SELECT project_name_snapshot AS name, COALESCE(SUM(minutes), 0) AS minutes
 FROM study_time_records
-WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
 GROUP BY project_name_snapshot
 HAVING minutes > 0
 ORDER BY minutes DESC, name
 LIMIT 12;`);
     const reviews = runtime.sqliteJson(`SELECT date, score, summary, wins, problems, tomorrow_plan AS tomorrowPlan
 FROM daily_reviews
-WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
 ORDER BY date;`);
     const exams = runtime.sqliteJson(`SELECT date, subject_name_snapshot AS subjectName, score, full_score AS fullScore, paper_name AS paperName
 FROM mock_exam_records
-WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)}
 ORDER BY date DESC, id DESC;`);
     const taskStats = runtime.sqliteJson(`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END), 0) AS completed
 FROM short_term_tasks
-WHERE due_date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`)[0] || { total: 0, completed: 0 };
+WHERE user_id = ${runtime.sqlValue(userId)} AND due_date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`)[0] || { total: 0, completed: 0 };
     const waterStats = runtime.sqliteJson(`SELECT COALESCE(SUM(cups), 0) AS cups, COALESCE(SUM(cups * cup_ml), 0) AS ml
 FROM water_intake_records
-WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`)[0] || { cups: 0, ml: 0 };
+WHERE user_id = ${runtime.sqlValue(userId)} AND date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(periodEnd)};`)[0] || { cups: 0, ml: 0 };
     const totalMinutes = dailyTotals.reduce((sum, item) => sum + Number(item.minutes || 0), 0);
     const studyDays = dailyTotals.filter((item) => Number(item.minutes || 0) > 0).length;
     const averageDailyMinutes = dailyTotals.length ? Math.round(totalMinutes / dailyTotals.length) : 0;
@@ -1059,7 +1059,7 @@ WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(per
         suggestions.push('学习投入集中度较高，注意给薄弱科目保留固定时间块。');
     if (!suggestions.length)
         suggestions.push('节奏比较稳，下一周期继续保持记录、复盘和任务闭环。');
-    const themeLibraryProblems = getErrorThemePeriodSummary(periodStart, periodEnd);
+    const themeLibraryProblems = userId === 1 ? getErrorThemePeriodSummary(periodStart, periodEnd) : [];
     const commonProblems = themeLibraryProblems.length ? themeLibraryProblems : buildReviewProblemSummary(reviews);
     return {
         kind,
@@ -1101,15 +1101,15 @@ WHERE date BETWEEN ${runtime.sqlString(periodStart)} AND ${runtime.sqlString(per
         exams,
     };
 }
-function saveLearningReport(report) {
-    runtime.runSqlite(`INSERT INTO learning_reports (kind, period_start, period_end, title, payload_json, generated_at, updated_at)
-VALUES (${runtime.sqlString(report.kind)}, ${runtime.sqlString(report.periodStart)}, ${runtime.sqlString(report.periodEnd)}, ${runtime.sqlString(report.title)}, ${runtime.sqlString(JSON.stringify(report))}, ${runtime.sqlString(report.generatedAt)}, datetime('now'))
-ON CONFLICT(kind, period_start, period_end) DO UPDATE SET
+function saveLearningReport(report, userId = 1) {
+    runtime.runSqlite(`INSERT INTO learning_reports (user_id, kind, period_start, period_end, title, payload_json, generated_at, updated_at)
+VALUES (${runtime.sqlValue(userId)}, ${runtime.sqlString(report.kind)}, ${runtime.sqlString(report.periodStart)}, ${runtime.sqlString(report.periodEnd)}, ${runtime.sqlString(report.title)}, ${runtime.sqlString(JSON.stringify(report))}, ${runtime.sqlString(report.generatedAt)}, datetime('now'))
+ON CONFLICT(user_id, kind, period_start, period_end) DO UPDATE SET
   title = excluded.title,
   payload_json = excluded.payload_json,
   generated_at = excluded.generated_at,
   updated_at = excluded.updated_at;`);
-    runtime.notifyEvent({
+    if (userId === 1) runtime.notifyEvent({
         eventKey: `report:${report.kind}:${report.periodStart}:${report.periodEnd}`,
         source: 'report',
         severity: 'info',
@@ -1119,14 +1119,14 @@ ON CONFLICT(kind, period_start, period_end) DO UPDATE SET
     });
     return report;
 }
-function generateLearningReport(kind, periodStart, periodEnd, trigger = 'manual') {
+function generateLearningReport(kind, periodStart, periodEnd, trigger = 'manual', userId = 1) {
     if (!['weekly', 'monthly'].includes(kind))
         throw new Error('Invalid report kind');
-    return saveLearningReport(buildLearningReport(kind, periodStart, periodEnd, trigger));
+    return saveLearningReport(buildLearningReport(kind, periodStart, periodEnd, trigger, userId), userId);
 }
-function reportExists(kind, periodStart, periodEnd) {
+function reportExists(kind, periodStart, periodEnd, userId = 1) {
     return Number(runtime.sqliteScalar(`SELECT COUNT(*) FROM learning_reports
-WHERE kind = ${runtime.sqlString(kind)} AND period_start = ${runtime.sqlString(periodStart)} AND period_end = ${runtime.sqlString(periodEnd)};`) || 0) > 0;
+WHERE user_id = ${runtime.sqlValue(userId)} AND kind = ${runtime.sqlString(kind)} AND period_start = ${runtime.sqlString(periodStart)} AND period_end = ${runtime.sqlString(periodEnd)};`) || 0) > 0;
 }
 function ensureAutomaticReports({ includeCurrent = true } = {}) {
     const today = runtime.todayISO();
@@ -1154,8 +1154,8 @@ async function precomputeNightlyArtifacts(trigger = 'nightly') {
             const from = days === 90 ? '1900-01-01' : runtime.addDaysISO(today, -(days - 1));
             runtime.setPrecomputedCache(`error-themes:${from}:${today}`, getErrorThemeAnalysis(from, today));
         }
-        runtime.setPrecomputedCache(`review-trend:30:${today}`, runtime.getReviewTrendPayload(30, today));
-        runtime.setPrecomputedCache(`review-trend:90:${today}`, runtime.getReviewTrendPayload(90, today));
+        runtime.setPrecomputedCache(`review-trend:1:30:${today}`, runtime.getReviewTrendPayload(30, today, 1));
+        runtime.setPrecomputedCache(`review-trend:1:90:${today}`, runtime.getReviewTrendPayload(90, today, 1));
         runtime.setPrecomputedCache(`dashboard-error-wall:${today}`, { items: runtime.getErrorThemeWall(12, 90, today) });
         runtime.runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('last_precompute_at', ${runtime.sqlString(timestamp)}, datetime('now'))
@@ -1176,10 +1176,11 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
         return { ok: false, ranAt: timestamp, error: message };
     }
 }
-function listLearningReports() {
+function listLearningReports(userId = 1) {
     const rows = runtime.sqliteJson(`SELECT id, kind, period_start AS periodStart, period_end AS periodEnd, title, payload_json AS payloadJson,
 generated_at AS generatedAt, updated_at AS updatedAt
 FROM learning_reports
+WHERE user_id = ${runtime.sqlValue(userId)}
 ORDER BY period_end DESC, kind DESC
 LIMIT 24;`);
     return rows.map((row) => ({ id: row.id, ...JSON.parse(row.payloadJson), generatedAt: row.generatedAt, updatedAt: row.updatedAt }));

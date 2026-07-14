@@ -45,7 +45,7 @@ const requestHandler = async (req, res) => {
         if (session) {
             runtime.recordLoginSuccess(clientIp);
             res.writeHead(302, {
-                location: session.accountType === 'learner' ? '/study-time' : '/',
+                location: '/',
                 'set-cookie': sessionCookie(session),
             });
             res.end();
@@ -93,7 +93,7 @@ const requestHandler = async (req, res) => {
             runtime.recordLoginSuccess(clientIp);
             runtime.tableChanged();
             res.writeHead(302, {
-                location: '/study-time',
+                location: '/',
                 'set-cookie': sessionCookie(learner),
             });
             res.end();

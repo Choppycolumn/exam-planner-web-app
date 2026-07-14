@@ -9,11 +9,12 @@ import { queryDictionary } from '../features/confusing-words/dictionaryApi';
 import { openPrintWindow } from '../features/confusing-words/print';
 import { buildExport, createGroup, createWord, isDefaultConfusingWordsSeed, loadConfusingWordsExport, loadGroups, parseWords, saveGroups } from '../features/confusing-words/storage';
 import type { ConfusingWordEntry, ConfusingWordGroup, PrintMode } from '../features/confusing-words/types';
+import { useAccountSession } from '../hooks/useAccountSession';
 
 const nowISO = () => new Date().toISOString();
 const todayKey = () => new Date().toISOString().slice(0, 10);
-const BACKUP_META_KEY = 'examPlanner.confusingWords.lastBackupAt';
-const BACKUP_BASE_URL_KEY = 'examPlanner.confusingWords.backupBaseUrl';
+const backupMetaKey = (userId: number) => `examPlanner.confusingWords.lastBackupAt.user-${userId}`;
+const backupBaseUrlKey = (userId: number) => `examPlanner.confusingWords.backupBaseUrl.user-${userId}`;
 const BACKUP_INTERVAL_MS = 60 * 60 * 1000;
 
 const countWords = (items: ConfusingWordGroup[]) => items.reduce((sum, group) => sum + group.words.length, 0);
@@ -26,7 +27,13 @@ const printModeLabel: Record<PrintMode, string> = {
 };
 
 export function ConfusingWordsPage() {
-  const [initialGroups] = useState(() => loadGroups());
+  const { data: session, isLoading } = useAccountSession();
+  if (isLoading || !session) return <Page title="易混单词" subtitle="正在读取当前账户的单词库..."><div /></Page>;
+  return <ConfusingWordsWorkspace key={session.userId} userId={session.userId} />;
+}
+
+function ConfusingWordsWorkspace({ userId }: { userId: number }) {
+  const [initialGroups] = useState(() => loadGroups(userId));
   const [groups, setGroups] = useState<ConfusingWordGroup[]>(initialGroups);
   const [selectedId, setSelectedId] = useState(initialGroups[0]?.id ?? '');
   const [wordInput, setWordInput] = useState('');
@@ -36,7 +43,7 @@ export function ConfusingWordsPage() {
   const [addWordDrafts, setAddWordDrafts] = useState<Record<string, string>>({});
   const [expandedAddGroupId, setExpandedAddGroupId] = useState('');
   const [toast, setToast] = useState('');
-  const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem(BACKUP_META_KEY) || '');
+  const [lastBackupAt, setLastBackupAt] = useState(() => localStorage.getItem(backupMetaKey(userId)) || '');
   const [serverRestoreChecked, setServerRestoreChecked] = useState(false);
   const [hasLocalChanges, setHasLocalChanges] = useState(false);
   const [syncStatus, setSyncStatus] = useState('');
@@ -55,7 +62,7 @@ export function ConfusingWordsPage() {
   const persist = (next: ConfusingWordGroup[], message?: string) => {
     setGroups(next);
     setHasLocalChanges(true);
-    saveGroups(next);
+    saveGroups(next, userId);
     if (message) {
       setToast(message);
       window.setTimeout(() => setToast(''), 1600);
@@ -73,20 +80,20 @@ export function ConfusingWordsPage() {
         if (cancelled || !backup?.groups?.length) return;
         const backupWords = countWords(backup.groups);
         const localWords = countWords(initialGroups);
-        const localExport = loadConfusingWordsExport();
-        const localBackedUpAt = localStorage.getItem(BACKUP_META_KEY) || localExport?.exportedAt || '';
+        const localExport = loadConfusingWordsExport(userId);
+        const localBackedUpAt = localStorage.getItem(backupMetaKey(userId)) || localExport?.exportedAt || '';
         const serverBackedUpAt = backup.backedUpAt || backup.exportedAt || '';
         const serverIsNewer = Boolean(serverBackedUpAt && localBackedUpAt && new Date(serverBackedUpAt).getTime() > new Date(localBackedUpAt).getTime());
         const shouldUseServer = isDefaultConfusingWordsSeed(initialGroups)
           || backupWords > localWords
           || (serverIsNewer && backupWords >= localWords);
         if (shouldUseServer) {
-          saveGroups(backup.groups);
+          saveGroups(backup.groups, userId);
           setGroups(backup.groups);
           setHasLocalChanges(false);
           setSelectedId(backup.groups[0]?.id ?? '');
           if (backup.backedUpAt) {
-            localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
+            localStorage.setItem(backupMetaKey(userId), backup.backedUpAt);
             setLastBackupAt(backup.backedUpAt);
           }
           setToast('已从服务器备份恢复易混单词');
@@ -105,7 +112,7 @@ export function ConfusingWordsPage() {
     return () => {
       cancelled = true;
     };
-  }, [initialGroups]);
+  }, [initialGroups, userId]);
 
   const updateWord = (groupId: string, wordId: string, patch: Partial<ConfusingWordEntry>) => {
     setGroups((current) => {
@@ -116,7 +123,7 @@ export function ConfusingWordsPage() {
         updatedAt: nowISO(),
       } : group);
       setHasLocalChanges(true);
-      saveGroups(next);
+      saveGroups(next, userId);
       return next;
     });
   };
@@ -182,10 +189,10 @@ export function ConfusingWordsPage() {
     if (!hasLocalChanges && lastBackupAt && Date.now() - new Date(lastBackupAt).getTime() < BACKUP_INTERVAL_MS) return;
     try {
       const result = await backupConfusingWords(buildExport(groups), {
-        baseUrl: localStorage.getItem(BACKUP_BASE_URL_KEY) || '',
+        baseUrl: localStorage.getItem(backupBaseUrlKey(userId)) || '',
         syncToken: '',
       }, { source: hasLocalChanges ? 'browser-sync' : 'hourly-sync' });
-      localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
+      localStorage.setItem(backupMetaKey(userId), result.backedUpAt);
       setLastBackupAt(result.backedUpAt);
       setHasLocalChanges(false);
       setSyncStatus(`服务器同步：已备份 ${groups.length} 组 / ${result.wordCount} 个词`);
@@ -197,7 +204,7 @@ export function ConfusingWordsPage() {
       setSyncStatus('服务器同步：暂时不可用，本地数据仍可继续使用');
       // 本地优先：备份失败不打断当前学习记录。
     }
-  }, [groups, hasLocalChanges, lastBackupAt, serverRestoreChecked]);
+  }, [groups, hasLocalChanges, lastBackupAt, serverRestoreChecked, userId]);
 
   useEffect(() => {
     const firstRun = window.setTimeout(() => void performBackup(), 0);

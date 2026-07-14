@@ -4,7 +4,7 @@ export async function handlePublicApiRoutes(req, res, {
   safeSecretEqual,
   sendJson,
   readJsonBody,
-  getSessionRole,
+  getSession,
   baseState,
   normalizeReview,
   writeState,
@@ -22,16 +22,17 @@ export async function handlePublicApiRoutes(req, res, {
   normalizeConfusingWordsPayload,
   nowISO,
   saveConfusingWordsBackupPayload,
-  readState,
+  readConfusingWordsBackupPayload,
   summarizeConfusingWordsPayload,
   handleClawbotApi,
   handleTelegramWebhook,
 }) {
   if (req.url === '/api/import' && req.method === 'POST') {
     const body = await readJsonBody(req);
-    const sessionRole = getSessionRole(req.headers.cookie);
+    const session = getSession(req.headers.cookie);
+    const sessionRole = session?.role;
     const tokenAuthorized = Boolean(dataImportToken) && safeSecretEqual(body.importToken, dataImportToken);
-    if (sessionRole !== 'write' && !tokenAuthorized) {
+    if ((sessionRole !== 'write' || session?.accountType === 'learner') && !tokenAuthorized) {
       sendJson(res, { error: 'Unauthorized' }, 401);
       return true;
     }
@@ -72,8 +73,13 @@ export async function handlePublicApiRoutes(req, res, {
 
   if (req.url === '/api/break-guard/config' && ['GET', 'POST'].includes(req.method)) {
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
-    const sessionRole = getSessionRole(req.headers.cookie);
+    const session = getSession(req.headers.cookie);
+    const sessionRole = session?.role;
     const tokenAccess = requireBreakGuardToken(req, body);
+    if (session?.accountType === 'learner') {
+      sendJson(res, { error: '该学习账号不使用 Break Guard' }, 403);
+      return true;
+    }
     if (!sessionRole && !tokenAccess.ok) {
       sendJson(res, { error: tokenAccess.error }, tokenAccess.status);
       return true;
@@ -109,7 +115,9 @@ export async function handlePublicApiRoutes(req, res, {
   if (req.url?.startsWith('/api/confusing-words/backup/versions')) {
     const requestUrl = new URL(req.url, 'http://localhost');
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
-    const sessionRole = getSessionRole(req.headers.cookie);
+    const session = getSession(req.headers.cookie);
+    const sessionRole = session?.role;
+    const userId = Number(session?.userId || 1);
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {
@@ -119,7 +127,7 @@ export async function handlePublicApiRoutes(req, res, {
     const parts = requestUrl.pathname.split('/').filter(Boolean);
     const versionId = Number(parts[4] || 0);
     if (req.method === 'GET' && versionId) {
-      const payloadJson = confusingWordsRepository.findVersionPayload(versionId);
+      const payloadJson = confusingWordsRepository.findVersionPayload(versionId, userId);
       if (!payloadJson) {
         sendJson(res, { error: 'Version not found' }, 404);
         return true;
@@ -128,7 +136,7 @@ export async function handlePublicApiRoutes(req, res, {
       return true;
     }
     if (req.method === 'GET') {
-      sendJson(res, { items: listConfusingWordsBackupVersions(Number(requestUrl.searchParams.get('limit') || 24)) });
+      sendJson(res, { items: listConfusingWordsBackupVersions(Number(requestUrl.searchParams.get('limit') || 24), userId) });
       return true;
     }
     sendJson(res, { error: 'Not found' }, 404);
@@ -137,7 +145,9 @@ export async function handlePublicApiRoutes(req, res, {
 
   if (req.url === '/api/confusing-words/backup/restore' && req.method === 'POST') {
     const body = await readJsonBody(req);
-    const sessionRole = getSessionRole(req.headers.cookie);
+    const session = getSession(req.headers.cookie);
+    const sessionRole = session?.role;
+    const userId = Number(session?.userId || 1);
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {
@@ -149,29 +159,31 @@ export async function handlePublicApiRoutes(req, res, {
       return true;
     }
     const versionId = Number(body.versionId || 0);
-    const payloadJson = confusingWordsRepository.findVersionPayload(versionId);
+    const payloadJson = confusingWordsRepository.findVersionPayload(versionId, userId);
     if (!payloadJson) {
       sendJson(res, { error: 'Version not found' }, 404);
       return true;
     }
     const restored = normalizeConfusingWordsPayload(JSON.parse(payloadJson), nowISO());
-    const result = saveConfusingWordsBackupPayload({ ...restored, backedUpAt: nowISO() }, 'restore');
+    const result = saveConfusingWordsBackupPayload({ ...restored, backedUpAt: nowISO() }, 'restore', userId);
     sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
     return true;
   }
 
   if (req.url === '/api/confusing-words/backup') {
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
-    const sessionRole = getSessionRole(req.headers.cookie);
+    const session = getSession(req.headers.cookie);
+    const sessionRole = session?.role;
+    const userId = Number(session?.userId || 1);
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {
       sendJson(res, { error: 'Unauthorized' }, 401);
       return true;
     }
-    const state = readState();
+    const currentBackup = readConfusingWordsBackupPayload(userId);
     if (req.method === 'GET') {
-      sendJson(res, state.confusingWordsBackup || null);
+      sendJson(res, currentBackup || null);
       return true;
     }
     if (sessionRole === 'read') {
@@ -180,7 +192,7 @@ export async function handlePublicApiRoutes(req, res, {
     }
     if (req.method === 'POST') {
       const timestamp = nowISO();
-      const currentSummary = summarizeConfusingWordsPayload(state.confusingWordsBackup || {});
+      const currentSummary = summarizeConfusingWordsPayload(currentBackup || {});
       const nextPayload = normalizeConfusingWordsPayload({ ...body, backedUpAt: timestamp }, timestamp);
       const nextSummary = summarizeConfusingWordsPayload(nextPayload);
       if (!body.force && currentSummary.wordCount > nextSummary.wordCount && currentSummary.wordCount - nextSummary.wordCount >= 3) {
@@ -192,7 +204,7 @@ export async function handlePublicApiRoutes(req, res, {
         }, 409);
         return true;
       }
-      const result = saveConfusingWordsBackupPayload(nextPayload, body.source || 'sync');
+      const result = saveConfusingWordsBackupPayload(nextPayload, body.source || 'sync', userId);
       sendJson(res, { ok: true, backedUpAt: result.payload.backedUpAt, ...result.summary });
       return true;
     }

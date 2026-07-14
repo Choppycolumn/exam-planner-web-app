@@ -1122,17 +1122,17 @@ async function getStooqMarket(symbolItem) {
 }
 function getDailyBriefLearningSummary(date) {
     const yesterday = runtime.addDaysISO(date, -1);
-    const activeGoal = runtime.sqliteJson(`SELECT name, deadline FROM goals WHERE is_active = 1 ORDER BY id LIMIT 1;`)[0] || null;
+    const activeGoal = runtime.sqliteJson(`SELECT name, deadline FROM goals WHERE user_id = 1 AND is_active = 1 ORDER BY id LIMIT 1;`)[0] || null;
     const yesterdayReview = runtime.sqliteJson(`SELECT date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score
-FROM daily_reviews WHERE date = ${runtime.sqlString(yesterday)} LIMIT 1;`).map(runtime.normalizeReview)[0] || null;
+FROM daily_reviews WHERE user_id = 1 AND date = ${runtime.sqlString(yesterday)} LIMIT 1;`).map(runtime.normalizeReview)[0] || null;
     const todayTasks = runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt
 FROM short_term_tasks
-WHERE due_date <= ${runtime.sqlString(date)} AND is_completed = 0
+WHERE user_id = 1 AND due_date <= ${runtime.sqlString(date)} AND is_completed = 0
 ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT 8;`).map(runtime.normalizeTaskRow);
     const latestExam = runtime.sqliteJson(`SELECT date, subject_name_snapshot AS subjectName, score, full_score AS fullScore, paper_name AS paperName
-FROM mock_exam_records ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
+FROM mock_exam_records WHERE user_id = 1 ORDER BY date DESC, id DESC LIMIT 1;`)[0] || null;
     const yesterdayMinutes = Number(runtime.sqliteScalar(`SELECT COALESCE(total_minutes, 0) FROM study_daily_summaries WHERE date = ${runtime.sqlString(yesterday)};`) || 0);
     const last7Minutes = Number(runtime.sqliteScalar(`SELECT COALESCE(SUM(total_minutes), 0) FROM study_daily_summaries WHERE date BETWEEN ${runtime.sqlString(runtime.addDaysISO(date, -6))} AND ${runtime.sqlString(date)};`) || 0);
     return {

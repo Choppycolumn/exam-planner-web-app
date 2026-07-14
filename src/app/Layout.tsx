@@ -23,11 +23,7 @@ const adminNavItems = [
   { to: '/operations', label: '运维与健康', icon: ShieldCheck },
 ];
 
-const learnerNavItems = [
-  { to: '/study-time', label: '学习时间', icon: BookOpen },
-  { to: '/progress', label: '学习进度', icon: TrendingUp },
-  { to: '/study-comparison', label: '学习对比', icon: Users },
-];
+const learnerNavItems = adminNavItems.filter(({ to }) => !['/settings', '/operations'].includes(to));
 
 function AdminGoalSummary() {
   const { activeGoal } = useDashboardData();
@@ -82,7 +78,7 @@ export function Layout() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-medium text-slate-500">{formatChineseDate()}</p>
-              {session ? (isLearner ? <p className="text-sm text-slate-700">独立学习空间 · 记录仅属于当前账号</p> : <AdminGoalSummary />) : <p className="text-sm text-slate-500">正在读取账户...</p>}
+              {session ? (isLearner ? <p className="text-sm text-slate-700">独立学习空间 · 仅学习对比与另一账户共享</p> : <AdminGoalSummary />) : <p className="text-sm text-slate-500">正在读取账户...</p>}
             </div>
             <div className="flex items-center gap-2">
               {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}

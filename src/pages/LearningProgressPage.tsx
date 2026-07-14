@@ -20,7 +20,6 @@ export function LearningProgressPage() {
   });
 
   const summary = data?.summary;
-  const isLearner = data?.accountType === 'learner';
   const weeklyDelta = useMemo(() => {
     if (!summary || !summary.previous7Minutes) return null;
     return Math.round(((summary.current7Minutes - summary.previous7Minutes) / summary.previous7Minutes) * 100);
@@ -41,23 +40,21 @@ export function LearningProgressPage() {
   }, [dailyMinutes, summary?.reviewCount, summary?.studyStreakDays, summary?.targetHitDays]);
 
   return (
-    <Page title="学习进度仪表盘" subtitle={isLearner ? '集中查看近 30 天学习时长、连续性、目标达成和项目投入。' : '把近 30 天学习、复盘、任务完成和目标达成放在同一张进度面板里。'}>
+    <Page title="学习进度仪表盘" subtitle="把近 30 天学习、复盘、任务完成和目标达成放在同一张进度面板里。">
       {data ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard label="近 7 天学习" value={minutesToHoursText(summary?.current7Minutes ?? 0)} hint={weeklyDelta === null ? '暂无上周对比' : `较前 7 天 ${weeklyDelta >= 0 ? '+' : ''}${weeklyDelta}%`} icon={<TrendingUp size={20} />} />
             <MetricCard label="近 30 天学习" value={minutesToHoursText(summary?.current30Minutes ?? 0)} hint={summary?.topProject ? `最高投入：${summary.topProject.name}` : '暂无项目分布'} icon={<CalendarDays size={20} />} />
             <MetricCard label="连续学习" value={`${summary?.studyStreakDays ?? 0} 天`} hint={`目标达成率 ${percentText(targetRate)}`} icon={<Flame size={20} />} />
-            {isLearner
-              ? <MetricCard label="主要投入" value={summary?.topProject?.name ?? '暂无'} hint={summary?.topProject ? minutesToHoursText(summary.topProject.minutes) : '近 30 天无记录'} icon={<Award size={20} />} />
-              : <MetricCard label="短期任务" value={percentText(summary?.taskCompletionRate ?? null)} hint={`${summary?.completedTasks ?? 0}/${summary?.totalTasks ?? 0} 已完成`} icon={<CheckCircle2 size={20} />} />}
+            <MetricCard label="短期任务" value={percentText(summary?.taskCompletionRate ?? null)} hint={`${summary?.completedTasks ?? 0}/${summary?.totalTasks ?? 0} 已完成`} icon={<CheckCircle2 size={20} />} />
           </div>
 
           <section className="mt-5 card p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-900">个人数据仪表盘 2.0</h2>
-                <p className="mt-1 text-sm text-slate-500">{isLearner ? '把连续性、目标命中和低投入天数合成一个清晰视图。' : '把连续性、目标命中、复盘覆盖和低投入天数合成一个可执行视图。'}</p>
+                <p className="mt-1 text-sm text-slate-500">把连续性、目标命中、复盘覆盖和低投入天数合成一个可执行视图。</p>
               </div>
               <span className={`rounded-lg border px-3 py-2 text-sm font-semibold ${dashboard2.consistencyScore >= 70 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : dashboard2.consistencyScore >= 45 ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
                 稳定性 {dashboard2.consistencyScore}
@@ -75,9 +72,9 @@ export function LearningProgressPage() {
                 <p className="mt-1 text-xs text-slate-500">{minutesToHoursText(dashboard2.bestDay.minutes)}</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">{isLearner ? '目标达成天数' : '复盘覆盖率'}</p>
-                <p className="mt-1 text-lg font-semibold text-slate-950">{isLearner ? `${summary?.targetHitDays ?? 0} 天` : `${dashboard2.reviewCoverage}%`}</p>
-                <p className="mt-1 text-xs text-slate-500">{isLearner ? `统计周期 ${summary?.targetDays ?? 0} 天` : `近 30 天复盘 ${summary?.reviewCount ?? 0} 次`}</p>
+                <p className="text-xs font-semibold text-slate-500">复盘覆盖率</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950">{dashboard2.reviewCoverage}%</p>
+                <p className="mt-1 text-xs text-slate-500">近 30 天复盘 {summary?.reviewCount ?? 0} 次</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs font-semibold text-slate-500">低于目标天数</p>
@@ -87,13 +84,13 @@ export function LearningProgressPage() {
             </div>
           </section>
 
-          <div className={`mt-5 grid gap-5 ${isLearner ? '' : 'xl:grid-cols-[1.4fr_1fr]'}`}>
+          <div className="mt-5 grid gap-5 xl:grid-cols-[1.4fr_1fr]">
             <ChartBox title="近 30 天学习趋势">
               {dailyMinutes.some((item) => item.minutes > 0) ? <TrendLine data={dailyTrend} /> : <EmptyState title="暂无学习时间记录" />}
             </ChartBox>
-            {!isLearner ? <ChartBox title="复盘评分趋势">
+            <ChartBox title="复盘评分趋势">
               {reviewTrend.some((item) => item.score !== null) ? <ReviewTrendChart data={reviewTrend} /> : <EmptyState title="暂无复盘评分" />}
-            </ChartBox> : null}
+            </ChartBox>
           </div>
 
           <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_1.2fr]">
@@ -125,9 +122,9 @@ export function LearningProgressPage() {
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">{isLearner ? '活跃学习天' : '复盘覆盖'}</p>
-                <p className="mt-1 text-lg font-semibold text-slate-950">{isLearner ? `${dashboard2.activeDays} 天` : `${summary?.reviewCount ?? 0} 次`}</p>
-                <p className="mt-1 text-xs text-slate-500">{isLearner ? `活跃日均 ${minutesToHoursText(dashboard2.averageActiveMinutes)}` : `均分 ${summary?.averageReviewScore ?? '暂无'}`}</p>
+                <p className="text-xs font-semibold text-slate-500">复盘覆盖</p>
+                <p className="mt-1 text-lg font-semibold text-slate-950">{summary?.reviewCount ?? 0} 次</p>
+                <p className="mt-1 text-xs text-slate-500">均分 {summary?.averageReviewScore ?? '暂无'}</p>
               </div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs font-semibold text-slate-500">学习目标</p>

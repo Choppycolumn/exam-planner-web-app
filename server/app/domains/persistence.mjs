@@ -609,23 +609,28 @@ function writeStateToTables(state) {
     const normalized = normalizeState(state);
     const timestamp = runtime.nowISO();
     const multiUserReady = runtime.sqliteJson('PRAGMA table_info(study_projects);').some((column) => column.name === 'user_id');
+    const accountDataReady = runtime.sqliteJson('PRAGMA table_info(goals);').some((column) => column.name === 'user_id');
     const scripts = [
         'BEGIN;',
-        'DELETE FROM goals;',
-        'DELETE FROM daily_reviews;',
+        accountDataReady ? 'DELETE FROM goals WHERE user_id = 1;' : 'DELETE FROM goals;',
+        accountDataReady ? 'DELETE FROM daily_reviews WHERE user_id = 1;' : 'DELETE FROM daily_reviews;',
         multiUserReady ? 'DELETE FROM study_projects WHERE user_id = 1;' : 'DELETE FROM study_projects;',
         multiUserReady ? 'DELETE FROM study_time_records WHERE user_id = 1;' : 'DELETE FROM study_time_records;',
         'DELETE FROM study_daily_summaries;',
         'DELETE FROM study_project_daily_summaries;',
-        'DELETE FROM subjects;',
-        'DELETE FROM mock_exam_records;',
-        'DELETE FROM short_term_tasks;',
-        'DELETE FROM water_intake_records;',
+        accountDataReady ? 'DELETE FROM subjects WHERE user_id = 1;' : 'DELETE FROM subjects;',
+        accountDataReady ? 'DELETE FROM mock_exam_records WHERE user_id = 1;' : 'DELETE FROM mock_exam_records;',
+        accountDataReady ? 'DELETE FROM short_term_tasks WHERE user_id = 1;' : 'DELETE FROM short_term_tasks;',
+        accountDataReady ? 'DELETE FROM water_intake_records WHERE user_id = 1;' : 'DELETE FROM water_intake_records;',
         'DELETE FROM confusing_words_backup;',
-        'DELETE FROM problem_inbox_items;',
+        accountDataReady ? 'DELETE FROM problem_inbox_items WHERE user_id = 1;' : 'DELETE FROM problem_inbox_items;',
     ];
-    scripts.push(insertRowsSql('goals', ['id', 'name', 'description', 'deadline', 'is_active', 'type', 'notes', 'schema_version', 'created_at', 'updated_at'], normalized.goals.map((item, index) => ({
+    const goalColumns = accountDataReady
+        ? ['id', 'user_id', 'name', 'description', 'deadline', 'is_active', 'type', 'notes', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'name', 'description', 'deadline', 'is_active', 'type', 'notes', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('goals', goalColumns, normalized.goals.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         name: item.name || '',
         description: item.description || '',
         deadline: item.deadline || runtime.todayISO(),
@@ -636,8 +641,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('daily_reviews', ['id', 'date', 'summary', 'wins', 'problems', 'tomorrow_plan', 'score', 'schema_version', 'created_at', 'updated_at'], normalized.dailyReviews.map((item, index) => ({
+    const reviewColumns = accountDataReady
+        ? ['id', 'user_id', 'date', 'summary', 'wins', 'problems', 'tomorrow_plan', 'score', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'date', 'summary', 'wins', 'problems', 'tomorrow_plan', 'score', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('daily_reviews', reviewColumns, normalized.dailyReviews.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         date: item.date || runtime.todayISO(),
         summary: item.summary || '',
         wins: item.wins || '',
@@ -677,8 +686,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('subjects', ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'], normalized.subjects.map((item, index) => ({
+    const subjectColumns = accountDataReady
+        ? ['id', 'user_id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'name', 'color', 'is_active', 'sort_order', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('subjects', subjectColumns, normalized.subjects.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         name: item.name || '',
         color: item.color || runtime.subjectColors[index % runtime.subjectColors.length],
         is_active: item.isActive !== false,
@@ -687,8 +700,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('mock_exam_records', ['id', 'date', 'subject_id', 'subject_name_snapshot', 'score', 'full_score', 'paper_name', 'duration_minutes', 'wrong_count', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.mockExamRecords.map((item, index) => ({
+    const examColumns = accountDataReady
+        ? ['id', 'user_id', 'date', 'subject_id', 'subject_name_snapshot', 'score', 'full_score', 'paper_name', 'duration_minutes', 'wrong_count', 'note', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'date', 'subject_id', 'subject_name_snapshot', 'score', 'full_score', 'paper_name', 'duration_minutes', 'wrong_count', 'note', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('mock_exam_records', examColumns, normalized.mockExamRecords.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         date: item.date || runtime.todayISO(),
         subject_id: Number(item.subjectId || 0),
         subject_name_snapshot: item.subjectNameSnapshot || '',
@@ -702,8 +719,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('short_term_tasks', ['id', 'title', 'due_date', 'due_time', 'urgency', 'is_completed', 'completed_at', 'reminder_enabled', 'reminder_sent_offsets', 'reminder_last_sent_at', 'note', 'schema_version', 'created_at', 'updated_at'], normalized.shortTermTasks.map((item, index) => ({
+    const taskColumns = accountDataReady
+        ? ['id', 'user_id', 'title', 'due_date', 'due_time', 'urgency', 'is_completed', 'completed_at', 'reminder_enabled', 'reminder_sent_offsets', 'reminder_last_sent_at', 'note', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'title', 'due_date', 'due_time', 'urgency', 'is_completed', 'completed_at', 'reminder_enabled', 'reminder_sent_offsets', 'reminder_last_sent_at', 'note', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('short_term_tasks', taskColumns, normalized.shortTermTasks.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         title: item.title || '',
         due_date: item.dueDate || runtime.todayISO(),
         due_time: normalizeTaskDueTime(item.dueTime),
@@ -718,8 +739,12 @@ function writeStateToTables(state) {
         created_at: item.createdAt || timestamp,
         updated_at: item.updatedAt || timestamp,
     }))));
-    scripts.push(insertRowsSql('water_intake_records', ['id', 'date', 'cups', 'cup_ml', 'target_cups', 'schema_version', 'created_at', 'updated_at'], normalized.waterIntakeRecords.map((item, index) => ({
+    const waterColumns = accountDataReady
+        ? ['id', 'user_id', 'date', 'cups', 'cup_ml', 'target_cups', 'schema_version', 'created_at', 'updated_at']
+        : ['id', 'date', 'cups', 'cup_ml', 'target_cups', 'schema_version', 'created_at', 'updated_at'];
+    scripts.push(insertRowsSql('water_intake_records', waterColumns, normalized.waterIntakeRecords.map((item, index) => ({
         id: Number(item.id || index + 1),
+        user_id: 1,
         date: item.date || runtime.todayISO(),
         cups: Math.max(0, Number(item.cups || 0)),
         cup_ml: Math.max(1, Number(item.cupMl || 500)),
@@ -751,12 +776,14 @@ ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = exc
 function readStateFromTables() {
     const multiUserReady = runtime.sqliteJson('PRAGMA table_info(study_projects);').some((column) => column.name === 'user_id');
     const ownerClause = multiUserReady ? ' WHERE user_id = 1' : '';
+    const accountDataReady = runtime.sqliteJson('PRAGMA table_info(goals);').some((column) => column.name === 'user_id');
+    const accountOwnerClause = accountDataReady ? ' WHERE user_id = 1' : '';
     const goals = runtime.sqliteJson(`SELECT id, name, description, deadline, is_active AS isActive, type, notes,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM goals ORDER BY id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+FROM goals${accountOwnerClause} ORDER BY id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
     const dailyReviews = runtime.sqliteJson(`SELECT id, date, summary, wins, problems, tomorrow_plan AS tomorrowPlan, score,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM daily_reviews ORDER BY date DESC;`).map(runtime.normalizeReview);
+FROM daily_reviews${accountOwnerClause} ORDER BY date DESC;`).map(runtime.normalizeReview);
     const studyProjects = runtime.sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
     FROM study_projects${ownerClause} ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
@@ -765,18 +792,18 @@ schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedA
     FROM study_time_records${ownerClause} ORDER BY date DESC, project_id;`);
     const subjects = runtime.sqliteJson(`SELECT id, name, color, is_active AS isActive, sort_order AS sortOrder,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM subjects ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
+FROM subjects${accountOwnerClause} ORDER BY sort_order, id;`).map((item) => ({ ...item, isActive: Boolean(item.isActive) }));
     const mockExamRecords = runtime.sqliteJson(`SELECT id, date, subject_id AS subjectId, subject_name_snapshot AS subjectNameSnapshot, score, full_score AS fullScore,
 paper_name AS paperName, duration_minutes AS durationMinutes, wrong_count AS wrongCount, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM mock_exam_records ORDER BY date DESC, id DESC;`);
+FROM mock_exam_records${accountOwnerClause} ORDER BY date DESC, id DESC;`);
     const shortTermTasks = runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted, completed_at AS completedAt,
 reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM short_term_tasks ORDER BY due_date, due_time, id;`).map(normalizeTaskRow);
+FROM short_term_tasks${accountOwnerClause} ORDER BY due_date, due_time, id;`).map(normalizeTaskRow);
     const waterIntakeRecords = runtime.sqliteJson(`SELECT id, date, cups, cup_ml AS cupMl, target_cups AS targetCups,
 schema_version AS schemaVersion, created_at AS createdAt, updated_at AS updatedAt
-FROM water_intake_records ORDER BY date DESC;`);
+FROM water_intake_records${accountOwnerClause} ORDER BY date DESC;`);
     const confusingRows = runtime.sqliteJson('SELECT payload_json AS payloadJson FROM confusing_words_backup WHERE id = 1 LIMIT 1;');
     const confusingWordsBackup = confusingRows[0]?.payloadJson ? JSON.parse(confusingRows[0].payloadJson) : null;
     return normalizeState({ goals, dailyReviews, studyProjects, studyTimeRecords, subjects, mockExamRecords, shortTermTasks, waterIntakeRecords, confusingWordsBackup });

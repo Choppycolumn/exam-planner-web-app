@@ -49,7 +49,7 @@ export async function handleOpsRoutes(req, res, {
   }
 
   if (req.url === '/api/project-progress' && req.method === 'GET') {
-    sendJson(res, getProjectProgressPayload(sessionRole));
+    sendJson(res, getProjectProgressPayload(sessionRole, session?.userId || 1));
     return true;
   }
 

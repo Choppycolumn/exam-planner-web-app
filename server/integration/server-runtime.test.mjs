@@ -112,16 +112,22 @@ suite('production server runtime', () => {
       body: new URLSearchParams({ password: 'learner-runtime-password', confirmPassword: 'learner-runtime-password' }),
     });
     expect(registration.status).toBe(302);
-    expect(registration.headers.get('location')).toBe('/study-time');
+    expect(registration.headers.get('location')).toBe('/');
     const learnerCookie = registration.headers.get('set-cookie')?.split(';')[0] || '';
 
     const session = JSON.parse((await request(baseUrl, '/api/session', { cookie: learnerCookie })).text);
     expect(session).toMatchObject({ userId: 2, accountType: 'learner', userCount: 2, canAddUser: false });
+    expect(session.capabilities).toContain('dashboard');
+    expect(session.capabilities).not.toContain('operations');
     expect((await request(baseUrl, '/api/notifications/center', { cookie: learnerCookie })).status).toBe(403);
+    expect((await request(baseUrl, '/api/tasks/status', { cookie: learnerCookie })).status).toBe(403);
+    expect((await request(baseUrl, '/api/settings/mihomo', { cookie: learnerCookie })).status).toBe(403);
+    expect((await request(baseUrl, '/api/break-guard/config', { cookie: learnerCookie })).status).toBe(403);
+    expect((await request(baseUrl, '/api/import', { method: 'POST', cookie: learnerCookie, body: { state: {} } })).status).toBe(401);
     const projects = JSON.parse((await request(baseUrl, '/api/projects', { cookie: learnerCookie })).text).items;
     expect(projects.length).toBeGreaterThan(0);
 
-    const date = '2026-07-13';
+    const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
     const saved = await request(baseUrl, '/api/study-records/save-day', {
       method: 'POST',
       cookie: learnerCookie,
@@ -133,6 +139,58 @@ suite('production server runtime', () => {
     expect(learnerRecords).toEqual([expect.objectContaining({ minutes: 55, note: 'learner fixture' })]);
     expect(adminRecords.some((record) => record.note === 'learner fixture')).toBe(false);
 
+    const learnerGoalId = Number(JSON.parse((await request(baseUrl, '/api/goals/save', {
+      method: 'POST', cookie: learnerCookie, body: { name: '学习伙伴目标', deadline: '2026-12-20', isActive: true },
+    })).text));
+    const learnerSubjectId = Number(JSON.parse((await request(baseUrl, '/api/subjects/save', {
+      method: 'POST', cookie: learnerCookie, body: { name: '学习伙伴自设科目', color: '#0ea5e9' },
+    })).text));
+    await request(baseUrl, '/api/exams/save', {
+      method: 'POST', cookie: learnerCookie, body: { date, subjectId: learnerSubjectId, subjectNameSnapshot: '学习伙伴自设科目', score: 88, fullScore: 100, paperName: '独立模考' },
+    });
+    await request(baseUrl, '/api/tasks/save', {
+      method: 'POST', cookie: learnerCookie, body: { title: '学习伙伴任务', dueDate: date, dueTime: '20:00', reminderEnabled: true },
+    });
+    await request(baseUrl, '/api/water/save', { method: 'POST', cookie: learnerCookie, body: { date, cups: 3, cupMl: 500, targetCups: 6 } });
+    await request(baseUrl, '/api/reviews/upsert', { method: 'POST', cookie: learnerCookie, body: { date, summary: '学习伙伴复盘', score: 7 } });
+    await request(baseUrl, '/api/problem-inbox/save', { method: 'POST', cookie: learnerCookie, body: { date, text: '学习伙伴独立问题' } });
+
+    await request(baseUrl, '/api/water/save', { method: 'POST', cookie, body: { date, cups: 5, cupMl: 500, targetCups: 6 } });
+    await request(baseUrl, '/api/reviews/upsert', { method: 'POST', cookie, body: { date, summary: '主账户复盘', score: 9 } });
+
+    const learnerDashboard = JSON.parse((await request(baseUrl, '/api/dashboard', { cookie: learnerCookie })).text);
+    const adminDashboard = JSON.parse((await request(baseUrl, '/api/dashboard', { cookie })).text);
+    expect(learnerDashboard).toMatchObject({ activeGoal: { id: learnerGoalId, name: '学习伙伴目标' }, todayReview: { summary: '学习伙伴复盘' }, todayWaterRecord: { cups: 3 }, todayBrief: null });
+    expect(learnerDashboard.visibleTasks).toEqual(expect.arrayContaining([expect.objectContaining({ title: '学习伙伴任务', reminderEnabled: false })]));
+    expect(learnerDashboard.breakGuard).toBeUndefined();
+    expect(adminDashboard.todayReview.summary).toBe('主账户复盘');
+    expect(adminDashboard.todayWaterRecord.cups).toBe(5);
+    expect(adminDashboard.visibleTasks.some((task) => task.title === '学习伙伴任务')).toBe(false);
+
+    expect(JSON.parse((await request(baseUrl, '/api/goals', { cookie })).text).items.some((item) => item.name === '学习伙伴目标')).toBe(false);
+    expect(JSON.parse((await request(baseUrl, '/api/subjects', { cookie: learnerCookie })).text).items).toEqual(expect.arrayContaining([expect.objectContaining({ name: '学习伙伴自设科目' })]));
+    expect(JSON.parse((await request(baseUrl, '/api/subjects', { cookie })).text).items.some((item) => item.name === '学习伙伴自设科目')).toBe(false);
+    expect(JSON.parse((await request(baseUrl, '/api/mock-exams', { cookie: learnerCookie })).text).exams).toEqual(expect.arrayContaining([expect.objectContaining({ paperName: '独立模考' })]));
+    expect(JSON.parse((await request(baseUrl, '/api/reviews', { cookie: learnerCookie })).text).reviews).toEqual(expect.arrayContaining([expect.objectContaining({ summary: '学习伙伴复盘' })]));
+    expect(JSON.parse((await request(baseUrl, '/api/reviews', { cookie })).text).reviews.some((item) => item.summary === '学习伙伴复盘')).toBe(false);
+    expect(JSON.parse((await request(baseUrl, '/api/problem-inbox?status=all', { cookie: learnerCookie })).text).items).toEqual(expect.arrayContaining([expect.objectContaining({ text: '学习伙伴独立问题' })]));
+
+    const calendar = JSON.parse((await request(baseUrl, `/api/calendar?from=${date}&to=${date}`, { cookie: learnerCookie })).text);
+    expect(calendar.events.some((event) => event.type === 'study' && event.value === 55)).toBe(true);
+    expect(calendar.events.some((event) => event.type === 'notification')).toBe(false);
+
+    const learnerWords = { schemaVersion: 1, exportedAt: new Date().toISOString(), groups: [{ id: 'learner-words', title: 'private words', words: [] }] };
+    expect((await request(baseUrl, '/api/confusing-words/backup', { method: 'POST', cookie: learnerCookie, body: learnerWords })).status).toBe(200);
+    expect(JSON.parse((await request(baseUrl, '/api/confusing-words/backup', { cookie: learnerCookie })).text).groups[0].id).toBe('learner-words');
+    expect(JSON.parse((await request(baseUrl, '/api/confusing-words/backup', { cookie })).text)).toBeNull();
+
+    const generatedReport = await request(baseUrl, '/api/reports/generate', {
+      method: 'POST', cookie: learnerCookie, body: { kind: 'weekly', periodStart: date, periodEnd: date },
+    });
+    expect(generatedReport.status).toBe(200);
+    expect(JSON.parse(generatedReport.text).report.reviews).toEqual(expect.arrayContaining([expect.objectContaining({ summary: '学习伙伴复盘' })]));
+    expect(JSON.stringify(JSON.parse((await request(baseUrl, '/api/reports', { cookie })).text))).not.toContain('学习伙伴复盘');
+
     const comparison = JSON.parse((await request(baseUrl, '/api/study-comparison?days=7', { cookie: learnerCookie })).text);
     expect(comparison.accounts).toHaveLength(2);
     expect(comparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
@@ -140,6 +198,8 @@ suite('production server runtime', () => {
     const sqlite = new DatabaseSync(join(temporary, 'data', 'exam-planner.sqlite'), { readOnly: true });
     const storedHash = sqlite.prepare('SELECT password_hash AS passwordHash FROM user_accounts WHERE id=2').get().passwordHash;
     expect(storedHash).not.toContain('learner-runtime-password');
+    expect(sqlite.prepare("SELECT reminder_enabled AS reminderEnabled FROM short_term_tasks WHERE user_id=2 AND title='学习伙伴任务'").get().reminderEnabled).toBe(0);
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM learning_reports WHERE user_id=2').get().count).toBe(1);
     sqlite.close();
 
     const secondRegistration = await fetch(`${baseUrl}/register-learner`, {

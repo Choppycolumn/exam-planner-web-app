@@ -6,9 +6,18 @@ describe('learner API boundary', () => {
     expect(learnerCanAccess('GET', '/api/projects')).toBe(true);
     expect(learnerCanAccess('POST', '/api/study-records/save-day')).toBe(true);
     expect(learnerCanAccess('GET', '/api/study-comparison')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/dashboard')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/reviews?from=2026-07-01')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/reviews')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/mock-exams')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/calendar')).toBe(true);
+    expect(learnerCanAccess('POST', '/api/reviews/upsert')).toBe(true);
+    expect(learnerCanAccess('POST', '/api/subjects/save')).toBe(true);
     expect(learnerCanAccess('GET', '/api/notifications/center')).toBe(false);
     expect(learnerCanAccess('POST', '/api/notifications/telegram/test')).toBe(false);
     expect(learnerCanAccess('GET', '/api/operations')).toBe(false);
     expect(learnerCanAccess('GET', '/api/break-guard/config')).toBe(false);
+    expect(learnerCanAccess('GET', '/api/settings/mihomo')).toBe(false);
+    expect(learnerCanAccess('POST', '/api/error-themes/batch/run')).toBe(false);
   });
 });

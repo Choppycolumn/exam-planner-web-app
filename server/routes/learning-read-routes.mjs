@@ -34,7 +34,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/goals') {
     ensureSqliteStore();
-    sendJson(res, getGoalsList(sessionRole));
+    sendJson(res, getGoalsList(sessionRole, userId));
     return true;
   }
 
@@ -46,7 +46,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/subjects') {
     ensureSqliteStore();
-    sendJson(res, getSubjectsList(sessionRole));
+    sendJson(res, getSubjectsList(sessionRole, userId));
     return true;
   }
 
@@ -59,13 +59,13 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/dashboard/charts') {
     ensureSqliteStore();
-    sendJson(res, getDashboardChartsPayload());
+    sendJson(res, getDashboardChartsPayload(userId));
     return true;
   }
 
   if (req.url === '/api/dashboard') {
     ensureSqliteStore();
-    sendJson(res, getDashboardPayload(sessionRole));
+    sendJson(res, getDashboardPayload(sessionRole, userId, session?.accountType || 'admin'));
     return true;
   }
 
@@ -76,14 +76,14 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
     const limit = queryLimit(requestUrl.searchParams, 12, 100) ?? 12;
-    sendJson(res, { items: listProblemInboxItems({ limit, status, from, to }), readOnly: sessionRole === 'read' });
+    sendJson(res, { items: listProblemInboxItems({ limit, status, from, to }, userId), readOnly: sessionRole === 'read' });
     return true;
   }
 
   if (req.url?.startsWith('/api/reviews/prefill')) {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
-    sendJson(res, getReviewPrefill(requestUrl.searchParams.get('date') || todayISO(), sessionRole));
+    sendJson(res, getReviewPrefill(requestUrl.searchParams.get('date') || todayISO(), sessionRole, userId));
     return true;
   }
 
@@ -91,7 +91,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
     const days = Math.max(7, Math.min(120, Number(requestUrl.searchParams.get('days') || 30)));
-    sendJson(res, { ...getCachedReviewTrend(days, todayISO()), readOnly: sessionRole === 'read' });
+    sendJson(res, { ...getCachedReviewTrend(days, todayISO(), userId), readOnly: sessionRole === 'read' });
     return true;
   }
 
@@ -102,7 +102,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
     const limit = queryLimit(requestUrl.searchParams, 20, 100);
     const offset = queryOffset(requestUrl.searchParams);
-    const result = learningRepository.listReviews({ from, to, limit, offset });
+    const result = learningRepository.listReviews({ from, to, limit, offset }, userId);
     const reviews = result.reviews.map(normalizeReview);
     const total = result.total;
     sendJson(res, { reviews, total, limit, offset, readOnly: sessionRole === 'read' });
@@ -120,7 +120,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url?.startsWith('/api/mock-exams')) {
     ensureSqliteStore();
-    sendJson(res, getMockExamList(new URL(req.url, 'http://localhost'), sessionRole));
+    sendJson(res, getMockExamList(new URL(req.url, 'http://localhost'), sessionRole, userId));
     return true;
   }
 
@@ -132,14 +132,16 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/error-themes/embedding/status') {
     ensureSqliteStore();
-    const embeddingRows = learningRepository.embeddingCount();
-    sendJson(res, { ...getEmbeddingStatus(), embeddingRows, readOnly: sessionRole === 'read' });
+    const embeddingRows = session?.accountType === 'learner' ? 0 : learningRepository.embeddingCount();
+    sendJson(res, session?.accountType === 'learner'
+      ? { ...getEmbeddingStatus(), available: false, embeddingRows: 0, readOnly: true, reason: '学习账号仅分析自己的复盘趋势' }
+      : { ...getEmbeddingStatus(), embeddingRows, readOnly: sessionRole === 'read' });
     return true;
   }
 
   if (req.url === '/api/error-themes/options') {
     ensureSqliteStore();
-    sendJson(res, { themes: getErrorThemeOptions(), readOnly: sessionRole === 'read' });
+    sendJson(res, { themes: getErrorThemeOptions(), readOnly: sessionRole === 'read' || session?.accountType === 'learner' });
     return true;
   }
 
@@ -148,14 +150,25 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const requestUrl = new URL(req.url, 'http://localhost');
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || todayISO();
-    sendJson(res, { ...getCachedErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
+    sendJson(res, session?.accountType === 'learner'
+      ? {
+          periodStart: from,
+          periodEnd: to,
+          latestBatch: null,
+          summary: { occurrenceCount: 0, themeCount: 0, reviewDayCount: 0, topTheme: null },
+          themes: [],
+          timeline: [],
+          readOnly: true,
+          degradedReason: '学习账号的错因聚类尚未启用；复盘趋势仍可正常使用。',
+        }
+      : { ...getCachedErrorThemeAnalysis(from, to), readOnly: sessionRole === 'read' });
     return true;
   }
 
   if (req.url?.startsWith('/api/error-themes/detail')) {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
-    const detail = getErrorThemeDetail(
+    const detail = session?.accountType === 'learner' ? null : getErrorThemeDetail(
       requestUrl.searchParams.get('themeId'),
       requestUrl.searchParams.get('from') || '1900-01-01',
       requestUrl.searchParams.get('to') || todayISO(),
@@ -167,13 +180,13 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/error-themes/batch/status') {
     ensureSqliteStore();
-    sendJson(res, { job: currentErrorThemeJobSnapshot(), readOnly: sessionRole === 'read' });
+    sendJson(res, { job: session?.accountType === 'learner' ? null : currentErrorThemeJobSnapshot(), readOnly: sessionRole === 'read' || session?.accountType === 'learner' });
     return true;
   }
 
   if (req.url?.startsWith('/api/reports')) {
     ensureSqliteStore();
-    sendJson(res, { reports: listLearningReports() });
+    sendJson(res, { reports: listLearningReports(userId) });
     return true;
   }
 

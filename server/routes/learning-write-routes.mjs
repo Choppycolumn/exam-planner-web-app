@@ -45,9 +45,9 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
     const periodStart = body.periodStart || period.periodStart;
     const periodEnd = body.periodEnd || period.periodEnd;
     const task = await runExclusiveTask(
-      `report-${kind}-${periodStart}-${periodEnd}`,
+      `report-${userId}-${kind}-${periodStart}-${periodEnd}`,
       'manual',
-      () => generateLearningReport(kind, periodStart, periodEnd, 'manual'),
+      () => generateLearningReport(kind, periodStart, periodEnd, 'manual', userId),
       { timeoutMs: 3 * 60 * 1000 },
     );
     sendJson(res, { ok: true, report: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
@@ -62,11 +62,11 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   const directRoutes = {
-    '/api/goals/save': () => saveGoalSql(body),
+    '/api/goals/save': () => saveGoalSql(body, userId),
     '/api/projects/save': () => saveProjectSql(body, userId),
-    '/api/subjects/save': () => saveSubjectSql(body),
-    '/api/exams/save': () => saveExamSql(body),
-    '/api/tasks/save': () => saveTaskSql(body),
+    '/api/subjects/save': () => saveSubjectSql(body, userId),
+    '/api/exams/save': () => saveExamSql(body, userId),
+    '/api/tasks/save': () => saveTaskSql(body, userId),
   };
 
   if (directRoutes[req.url]) {
@@ -75,14 +75,14 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/goals/activate') {
-    learningRepository.activateGoal(Number(body.id), timestamp);
+    learningRepository.activateGoal(Number(body.id), timestamp, userId);
     tableChanged();
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/water/save') {
-    saveWaterSql(body);
+    saveWaterSql(body, userId);
     sendJson(res, { ok: true });
     return true;
   }
@@ -93,36 +93,36 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/problem-inbox/save') {
-    const id = saveProblemInboxItem(body);
+    const id = saveProblemInboxItem(body, userId);
     const item = listProblemInboxItems({
       status: 'all',
       limit: 1,
       from: body.date || '1900-01-01',
       to: body.date || '2999-12-31',
-    }).find((candidate) => candidate.id === id) || null;
+    }, userId).find((candidate) => candidate.id === id) || null;
     sendJson(res, { ok: true, id, item });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/status') {
-    setProblemInboxStatus(body.id, body.status);
+    setProblemInboxStatus(body.id, body.status, userId);
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/remove') {
-    deleteProblemInboxItem(body.id);
+    deleteProblemInboxItem(body.id, userId);
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/resolve-date') {
-    sendJson(res, resolveProblemInboxForDate(body.date || todayISO()));
+    sendJson(res, resolveProblemInboxForDate(body.date || todayISO(), userId));
     return true;
   }
 
   if (req.url === '/api/reviews/upsert') {
-    sendJson(res, upsertReviewSql(body));
+    sendJson(res, upsertReviewSql(body, userId));
     return true;
   }
 
@@ -133,12 +133,12 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   const mutations = {
-    '/api/goals/remove': () => learningRepository.removeGoal(Number(body.id)),
+    '/api/goals/remove': () => learningRepository.removeGoal(Number(body.id), userId),
     '/api/projects/remove': () => learningRepository.removeProject(Number(body.id), timestamp, userId),
-    '/api/subjects/remove': () => learningRepository.removeSubject(Number(body.id), timestamp),
-    '/api/exams/remove': () => learningRepository.removeExam(Number(body.id)),
-    '/api/tasks/remove': () => learningRepository.removeTask(Number(body.id)),
-    '/api/tasks/toggle': () => learningRepository.toggleTask(Number(body.id), Boolean(body.completed), timestamp),
+    '/api/subjects/remove': () => learningRepository.removeSubject(Number(body.id), timestamp, userId),
+    '/api/exams/remove': () => learningRepository.removeExam(Number(body.id), userId),
+    '/api/tasks/remove': () => learningRepository.removeTask(Number(body.id), userId),
+    '/api/tasks/toggle': () => learningRepository.toggleTask(Number(body.id), Boolean(body.completed), timestamp, userId),
   };
 
   if (mutations[req.url]) {

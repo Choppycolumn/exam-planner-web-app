@@ -377,13 +377,13 @@ function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         },
     };
 }
-function getCalendarPayload(sessionRole, { from, to } = {}) {
+function getCalendarPayload(sessionRole, { from, to } = {}, userId = 1, accountType = 'admin') {
     ensureSqliteStore();
     return {
         generatedAt: runtime.nowISO(),
         from,
         to,
-        events: runtime.calendarRepository.getEvents({ from, to }),
+        events: runtime.calendarRepository.getEvents({ from, to, userId, includeNotifications: accountType === 'admin' }),
         readOnly: sessionRole === 'read',
     };
 }
@@ -604,7 +604,7 @@ VALUES ('storage_backend', 'sqlite-tables', datetime('now'))
     runtime.getBackupStatus({ verifyLatest: true });
     runtime.ensureDictionaryIndex();
     runtime.ensureStudySummariesReady();
-    if (!Number(runtime.sqliteScalar('SELECT COUNT(*) FROM learning_reports;') || 0))
+    if (!Number(runtime.sqliteScalar('SELECT COUNT(*) FROM learning_reports WHERE user_id = 1;') || 0))
         runtime.ensureAutomaticReports();
     if (!runtime.reportTimerStarted)
         scheduleBackupChecks();

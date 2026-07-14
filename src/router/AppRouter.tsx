@@ -34,9 +34,9 @@ function lazyElement(element: ReactNode) {
 }
 
 function SessionIndex() {
-  const { data, isLoading } = useAccountSession();
+  const { isLoading } = useAccountSession();
   if (isLoading) return <RouteFallback />;
-  return data?.accountType === 'learner' ? <Navigate to="/study-time" replace /> : <DashboardPage />;
+  return <DashboardPage />;
 }
 
 function AdminOnlyRoute({ children }: { children: ReactNode }) {
@@ -51,21 +51,21 @@ export const router = createBrowserRouter([
     element: <Layout />,
     children: [
       { index: true, element: <SessionIndex /> },
-      { path: 'goals', element: <AdminOnlyRoute>{lazyElement(<GoalsPage />)}</AdminOnlyRoute> },
+      { path: 'goals', element: lazyElement(<GoalsPage />) },
       { path: 'study-time', element: lazyElement(<StudyTimePage />) },
-      { path: 'reviews', element: <AdminOnlyRoute>{lazyElement(<ReviewsPage />)}</AdminOnlyRoute> },
-      { path: 'review-insights', element: <AdminOnlyRoute>{lazyElement(<ReviewInsightsPage />)}</AdminOnlyRoute> },
+      { path: 'reviews', element: lazyElement(<ReviewsPage />) },
+      { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'progress', element: lazyElement(<LearningProgressPage />) },
       { path: 'study-comparison', element: lazyElement(<StudyComparisonPage />) },
       { path: 'project-progress', element: <Navigate to="/" replace /> },
-      { path: 'goal-review', element: <AdminOnlyRoute>{lazyElement(<GoalReviewPage />)}</AdminOnlyRoute> },
-      { path: 'calendar', element: <AdminOnlyRoute>{lazyElement(<CalendarPage />)}</AdminOnlyRoute> },
+      { path: 'goal-review', element: lazyElement(<GoalReviewPage />) },
+      { path: 'calendar', element: lazyElement(<CalendarPage />) },
       { path: 'notifications', element: <Navigate to="/" replace /> },
       { path: 'market-copilot', element: <Navigate to="/" replace /> },
       { path: 'task-center', element: <Navigate to="/operations" replace /> },
       { path: 'operations', element: <AdminOnlyRoute>{lazyElement(<OperationsPage />)}</AdminOnlyRoute> },
-      { path: 'mock-exams', element: <AdminOnlyRoute>{lazyElement(<MockExamsPage />)}</AdminOnlyRoute> },
-      { path: 'confusing-words', element: <AdminOnlyRoute>{lazyElement(<ConfusingWordsPage />)}</AdminOnlyRoute> },
+      { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
+      { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },
       { path: 'library', element: <Navigate to="/" replace /> },
       { path: 'library/:id/read', element: <Navigate to="/" replace /> },
       { path: 'settings', element: <AdminOnlyRoute>{lazyElement(<SettingsPage />)}</AdminOnlyRoute> },

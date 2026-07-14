@@ -199,7 +199,7 @@ function listClawbotTasks({ range = 'today', date = runtime.todayISO(), limit = 
     return runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
-WHERE is_completed = 0 AND due_date <= ${runtime.sqlString(endDate)}
+WHERE user_id = 1 AND is_completed = 0 AND due_date <= ${runtime.sqlString(endDate)}
 ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT ${Math.max(1, Math.min(50, Number(limit) || 30))};`).map(normalizeClawbotTask);
 }
@@ -208,7 +208,7 @@ function listClawbotLabelTasks({ limit = 26 } = {}) {
     return runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
-WHERE is_completed = 0
+WHERE user_id = 1 AND is_completed = 0
 ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT ${Math.max(1, Math.min(26, Number(limit) || 26))};`).map(normalizeClawbotTask);
 }
@@ -228,7 +228,7 @@ function findClawbotTasks(keyword, { includeCompleted = false, limit = 6 } = {})
         return runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
-WHERE id = ${runtime.sqlValue(Number(id))} ${statusClause}
+WHERE user_id = 1 AND id = ${runtime.sqlValue(Number(id))} ${statusClause}
 LIMIT 1;`).map(normalizeClawbotTask);
     }
     const pattern = taskSearchPattern(text);
@@ -237,7 +237,7 @@ LIMIT 1;`).map(normalizeClawbotTask);
     return runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
-WHERE title LIKE ${runtime.sqlString(pattern)} ${statusClause}
+WHERE user_id = 1 AND title LIKE ${runtime.sqlString(pattern)} ${statusClause}
 ORDER BY CASE urgency WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, due_date, due_time, id
 LIMIT ${Math.max(1, Math.min(20, Number(limit) || 6))};`).map(normalizeClawbotTask);
 }
@@ -395,7 +395,7 @@ async function executeClawbotCommand(command, req) {
         const timestamp = runtime.nowISO();
         runtime.runSqlite(`UPDATE short_term_tasks
 SET is_completed = 1, completed_at = ${runtime.sqlString(timestamp)}, updated_at = ${runtime.sqlString(timestamp)}
-WHERE id = ${runtime.sqlValue(task.id)};`);
+WHERE id = ${runtime.sqlValue(task.id)} AND user_id = 1;`);
         runtime.tableChanged();
         writeAuditEvent({ action: 'clawbot_task_complete', req, actorRole: 'clawbot', detail: { id: task.id } });
         return { ok: true, reply: `已完成待办：#${task.id} ${task.title}`, task: { ...task, isCompleted: true, completedAt: timestamp }, command };
@@ -407,7 +407,7 @@ WHERE id = ${runtime.sqlValue(task.id)};`);
         if (matches.length > 1)
             return { ok: false, reply: ambiguousClawbotReply('删除', matches), matches, command };
         const task = matches[0];
-        runtime.runSqlite(`DELETE FROM short_term_tasks WHERE id = ${runtime.sqlValue(task.id)};`);
+        runtime.runSqlite(`DELETE FROM short_term_tasks WHERE id = ${runtime.sqlValue(task.id)} AND user_id = 1;`);
         runtime.tableChanged();
         writeAuditEvent({ action: 'clawbot_task_delete', req, actorRole: 'clawbot', detail: { id: task.id } });
         return { ok: true, reply: `已删除待办：#${task.id} ${task.title}`, task, command };
@@ -952,7 +952,7 @@ function listTimedReminderTasks(scanDate) {
     return runtime.sqliteJson(`SELECT id, title, due_date AS dueDate, due_time AS dueTime, urgency, is_completed AS isCompleted,
 completed_at AS completedAt, reminder_enabled AS reminderEnabled, reminder_sent_offsets AS reminderSentOffsets, reminder_last_sent_at AS reminderLastSentAt, note
 FROM short_term_tasks
-WHERE is_completed = 0
+WHERE user_id = 1 AND is_completed = 0
   AND reminder_enabled = 1
   AND due_time <> ''
   AND due_date >= ${runtime.sqlString(scanDate)}
@@ -997,7 +997,7 @@ async function processTaskReminders() {
 SET reminder_sent_offsets = ${runtime.sqlString(JSON.stringify(nextOffsets))},
     reminder_last_sent_at = ${runtime.sqlString(timestamp)},
     updated_at = ${runtime.sqlString(timestamp)}
-WHERE id = ${runtime.sqlValue(task.id)};`);
+WHERE id = ${runtime.sqlValue(task.id)} AND user_id = 1;`);
         runtime.tableChanged();
         sent += 1;
         logStructured('info', 'task_reminder_queued', { taskId: task.id, offset, deliveryId: delivery.deliveryId });
@@ -1154,7 +1154,7 @@ async function handleTelegramUpdate(update, req) {
             if (!task)
                 return sendTelegramMessage('待办不存在或已完成。', { chatId: context.chatId });
             const nextDate = runtime.addDaysISO(task.dueDate, 1);
-            runtime.runSqlite(`UPDATE short_term_tasks SET due_date = ${runtime.sqlString(nextDate)}, updated_at = ${runtime.sqlString(runtime.nowISO())} WHERE id = ${runtime.sqlValue(task.id)};`);
+            runtime.runSqlite(`UPDATE short_term_tasks SET due_date = ${runtime.sqlString(nextDate)}, updated_at = ${runtime.sqlString(runtime.nowISO())} WHERE id = ${runtime.sqlValue(task.id)} AND user_id = 1;`);
             runtime.tableChanged();
             writeAuditEvent({ action: 'telegram_task_delay', req, actorRole: 'telegram', detail: { id: task.id, dueDate: nextDate } });
             await sendTelegramMessage(`已延期一天：#${task.id} ${task.title}｜${nextDate}`, { chatId: context.chatId });

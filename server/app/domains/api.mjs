@@ -12,7 +12,7 @@ async function handleApi(req, res) {
         safeSecretEqual: runtime.safeSecretEqual,
         sendJson: runtime.sendJson,
         readJsonBody: runtime.readJsonBody,
-        getSessionRole: runtime.getSessionRole,
+        getSession: runtime.getSession,
         baseState: runtime.baseState,
         normalizeReview: runtime.normalizeReview,
         writeState: runtime.writeState,
@@ -30,7 +30,7 @@ async function handleApi(req, res) {
         normalizeConfusingWordsPayload: runtime.normalizeConfusingWordsPayload,
         nowISO: runtime.nowISO,
         saveConfusingWordsBackupPayload: runtime.saveConfusingWordsBackupPayload,
-        readState: runtime.readState,
+        readConfusingWordsBackupPayload: runtime.readConfusingWordsBackupPayload,
         summarizeConfusingWordsPayload: runtime.summarizeConfusingWordsPayload,
         handleClawbotApi: runtime.handleClawbotApi,
         handleTelegramWebhook: runtime.handleTelegramWebhook,
@@ -53,7 +53,7 @@ async function handleApi(req, res) {
             userCount: runtime.userAccountRepository.countAccounts(),
             canAddUser: runtime.userAccountRepository.canCreateLearner(),
             capabilities: session.accountType === 'learner'
-                ? ['study-time', 'learning-progress', 'study-comparison']
+                ? ['dashboard', 'goals', 'study-time', 'reviews', 'review-insights', 'learning-progress', 'study-comparison', 'goal-review', 'calendar', 'mock-exams', 'confusing-words']
                 : ['all'],
         });
         return;
@@ -139,7 +139,7 @@ async function handleApi(req, res) {
         runtime.sendJson(res, runtime.getCalendarPayload(sessionRole, {
             from: requestUrl.searchParams.get('from') || undefined,
             to: requestUrl.searchParams.get('to') || undefined,
-        }));
+        }, session.userId || 1, session.accountType || 'admin'));
         return;
     }
     if (await runtime.handleBriefRoutes(req, res, {
