@@ -22,6 +22,9 @@ CREATE INDEX IF NOT EXISTS idx_dictionary_entries_frequency ON dictionary_entrie
     file: database.file,
     ensureSchema,
     close: database.close,
+    checkpoint() {
+      database.run('PRAGMA wal_checkpoint(TRUNCATE);');
+    },
     count() {
       ensureSchema();
       return Number(database.scalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);

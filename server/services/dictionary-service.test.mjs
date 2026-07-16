@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -38,6 +38,7 @@ INSERT INTO dictionary_entries(word,english_definition,chinese_definition,update
     });
     const result = service.ensureReady();
     expect(result.count).toBe(1);
+    expect(statSync(dictionaryFile).size).toBeGreaterThan(0);
     expect(service.find('focus')).toMatchObject({ word: 'focus', chinese_definition: '专注' });
     expect(Number(primary.scalar("SELECT COUNT(*) FROM sqlite_master WHERE name='dictionary_entries';"))).toBe(0);
     expect(backup).toHaveBeenCalledOnce();

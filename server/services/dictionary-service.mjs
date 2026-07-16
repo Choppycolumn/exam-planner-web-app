@@ -102,10 +102,12 @@ VACUUM;`);
     if (signature && repository.getMetadata('source_signature') !== signature) {
       if (legacyCount) safetyBackup = createSafetyBackup('pre-dictionary-split', 'backup before dictionary database split');
       importFromCsv(signature);
+      repository.checkpoint();
       imported = true;
     } else if (!repository.count() && legacyCount) {
       safetyBackup = createSafetyBackup('pre-dictionary-split', 'backup before dictionary database split');
       copyFromPrimary();
+      repository.checkpoint();
       migrated = true;
     }
 
@@ -115,6 +117,7 @@ VACUUM;`);
       migrated = true;
     }
 
+    repository.checkpoint();
     cache.clear();
     ready = true;
     const result = { ...status(), imported, migrated, safetyBackup: safetyBackup?.filePath || '' };
