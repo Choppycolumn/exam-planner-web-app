@@ -13,7 +13,9 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 - `src/api/`：前端请求封装、TanStack Query 缓存键。
 - `src/features/`：领域功能模块，目前保留易混词等仍在使用的能力。
 - `src/db/`：历史本地 IndexedDB/Dexie 结构与迁移能力。
-- `server/auth-static-server.mjs`：生产 Node 服务，负责静态文件、登录、API、SQLite、备份、简报和报告。
+- `server/auth-static-server.mjs`：生产 Node 组合入口，创建应用上下文并装配静态文件、登录、API、SQLite、备份、简报和报告领域。
+- `server/app/application-context.mjs`：每个进程独立创建的显式应用上下文，不再使用模块级全局 runtime 单例。
+- `server/app/domains/`：通过 `install*Domain(runtime, exposeRuntime)` 显式安装领域能力。
 - `server/embedding_worker.py`：错因主题向量提取的 Python Worker。
 - `public/`：PWA manifest、图标、service worker。
 - `scripts/`：本地启动和部署辅助脚本。
@@ -39,7 +41,7 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 1. 浏览器访问页面，Nginx 转发到 Node。
 2. Node 校验登录 Cookie。
 3. 前端通过 `/api/*` 请求数据。
-4. Node 使用 `sqlite3` CLI 读写 `data/exam-planner.sqlite`。
+4. Node 使用 SQLite 适配层读写 `data/exam-planner.sqlite`；ECDICT 查询走独立 `data/dictionary.sqlite`。
 5. 保存成功后 TanStack Query 精确失效相关 query key。
 6. TanStack Query 重新拉取页面级数据；不再叠加自定义短缓存。
 
@@ -52,4 +54,4 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 
 ## 维护边界
 
-生产服务按 `SERVICE_ROLE=web|worker` 分为 Web 请求进程和后台任务进程。路由、认证、HTTP、备份、通知与 Break Guard 领域边界已经拆出；历史 schema 和复杂数据计算仍由兼容入口编排。后续应继续抽 repository/service，不需要为拆分而迁移到另一套 Web 框架。
+生产服务按 `SERVICE_ROLE=web|worker` 分为 Web 请求进程和后台任务进程。每个进程创建自己的应用上下文，路由、认证、HTTP、备份、通知与 Break Guard 领域通过显式安装器装配，不再依赖可跨测试污染的模块级全局 runtime。历史 schema 和复杂数据计算仍由兼容入口编排，后续继续按 repository/service 边界渐进拆分。

@@ -22,8 +22,5 @@ VALUES (?, ?, datetime('now'), ?);`, [kind, filePath, note]);
       return database.json(`SELECT kind, file_path AS filePath, created_at AS createdAt, note
 FROM backup_log ORDER BY datetime(created_at) DESC LIMIT 1;`)[0] || null;
     },
-    dictionaryCount() {
-      return Number(database.scalar('SELECT COUNT(*) FROM dictionary_entries;') || 0);
-    },
   };
 }

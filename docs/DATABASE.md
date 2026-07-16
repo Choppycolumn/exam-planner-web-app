@@ -6,7 +6,13 @@
 data/exam-planner.sqlite
 ```
 
-服务端通过 `sqlite3` CLI 执行 SQL。结构创建集中在 `server/auth-static-server.mjs` 的 `ensureSqliteStore()` 和 `createStructuredTables()`。
+ECDICT 词典使用独立 SQLite：
+
+```text
+data/dictionary.sqlite
+```
+
+业务数据库通过内置 SQLite 适配层访问，ECDICT CSV 的一次性大批量导入仍使用系统 `sqlite3`。
 
 ## 核心表
 
@@ -26,13 +32,17 @@ data/exam-planner.sqlite
 - `daily_briefs`：每日简报。
 - `problem_inbox_items`：问题收集箱。
 - `precomputed_cache`：趋势、错因等预计算缓存。
-- `dictionary_entries`：ECDICT 词典索引。
 - `confusing_words_backup`：易混词浏览器备份。
 - `finance_vaults`：已停用的历史理财密文表，仅保留旧数据，不再由当前代码创建或使用。
 - `backup_log`：备份/恢复日志。
 - `library_books`、`library_text_chunks`、`library_notes`、`library_bookmarks`、`library_reading_progress`：资料库。
 - `error_theme_batches`、`error_themes`、`error_theme_occurrences`、`review_sentence_embeddings`、`error_theme_corrections`：错因主题分析。
 - `visit_events`：访问统计事件，仅保存路径、角色、脱敏访客哈希、浏览器摘要和时间。
+
+`dictionary.sqlite` 单独包含：
+
+- `dictionary_entries`：ECDICT 英汉词典索引。
+- `dictionary_metadata`：来源签名、导入时间和主库迁移时间。
 
 ## 结构版本
 
@@ -55,10 +65,13 @@ data/exam-planner.sqlite
 ## 备份策略
 
 - 手动备份：`POST /api/backups/run`
-- 每周自动备份：保留最近 12 个 weekly SQLite 快照。
+- 每日自动备份：默认保留最近 7 个。
+- 每周自动备份：默认保留最近 4 个。
+- 部署、手动、迁移及其他安全备份分别保留，数量由 `BACKUP_KEEP_*` 环境变量控制。
+- 删除旧备份前至少验证一个同类保留备份通过 `PRAGMA integrity_check`。
 - 恢复备份：恢复前自动生成 `pre-restore` 安全备份。
-- 资料库文件：如果 `data/library/files` 存在，会同步创建 tar.gz 归档。
+- 代码部署回滚包默认保留最近 5 组代码包和 systemd 单元备份。
 
 ## 大文件说明
 
-`data/ecdict.csv` 和 `dictionary_entries` 体积大，不应放入 Git。词典属于数据资产，不属于代码交接必须展开的内容。
+`data/ecdict.csv` 和 `data/dictionary.sqlite` 体积大，不应放入 Git。词典库可由 ECDICT CSV 重建；主业务库恢复不会覆盖独立词典库。

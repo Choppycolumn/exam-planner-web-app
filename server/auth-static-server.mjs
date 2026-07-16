@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statfsSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createCipheriv, createDecipheriv } from 'node:crypto';
 import { dirname, extname, join, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { connect as netConnect } from 'node:net';
@@ -40,9 +39,12 @@ import { createDailyBriefRepository } from './repositories/daily-brief-repositor
 import { createConfusingWordsRepository } from './repositories/confusing-words-repository.mjs';
 import { createBreakGuardRepository } from './repositories/break-guard-repository.mjs';
 import { createBackupRepository } from './repositories/backup-repository.mjs';
+import { createDictionaryRepository } from './repositories/dictionary-repository.mjs';
+import { createDictionaryService } from './services/dictionary-service.mjs';
 import { createUserAccountRepository } from './auth/user-account-repository.mjs';
 import { createStudyComparisonService } from './domains/study-comparison/service.mjs';
 import { createSchedulerRegistry } from './infrastructure/scheduler-registry.mjs';
+import { createSettingsCrypto } from './core/settings-crypto.mjs';
 import { addDaysISO, addYearISO, currentPeriod, endOfMonthISO, endOfWeekISO, formatDateString, localDateISO, nowISO, parseDateString, previousMonthPeriod, previousPeriod, previousWeekPeriod, startOfMonthISO, startOfWeekISO, todayISO, } from './core/date-time.mjs';
 import { createSqliteCli, runSqliteFile, sqliteIntegrityCheck, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
 import { createHttpUtils, headerString, isObjectPayload } from './http/http-utils.mjs';
@@ -51,9 +53,19 @@ import { runProcess } from './core/process-runner.mjs';
 import { createPrivilegedClient } from './privileged/client.mjs';
 import { clientHashForRequest, createSessionAuth, getClientIp, lockMessage, safeSecretEqual, sleep, } from './auth/session-auth.mjs';
 import { createRequire } from 'node:module';
-import { exposeRuntime, runtime } from './app/runtime-context.mjs';
+import { createApplicationContext } from './app/application-context.mjs';
+import { installPersistenceDomain } from './app/domains/persistence.mjs';
+import { installReportsDomain } from './app/domains/reports.mjs';
+import { installBriefDomain } from './app/domains/brief.mjs';
+import { installProxyDomain } from './app/domains/proxy.mjs';
+import { installOperationsDomain } from './app/domains/operations.mjs';
+import { installLearningDomain } from './app/domains/learning.mjs';
+import { installNotificationsDomain } from './app/domains/notifications.mjs';
+import { installApiDomain } from './app/domains/api.mjs';
+import { installBootstrapDomain } from './app/domains/bootstrap.mjs';
 
 const require = createRequire(import.meta.url);
+const { runtime, exposeRuntime } = createApplicationContext();
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const root = resolve(process.env.STATIC_ROOT || join(appRoot, 'dist'));
 const dataDir = resolve(process.env.DATA_DIR || join(appRoot, 'data'));
@@ -64,6 +76,7 @@ const libraryDir = join(dataDir, 'library');
 const libraryFilesDir = join(libraryDir, 'files');
 const migrationsDir = resolve(fileURLToPath(new URL('./migrations', import.meta.url)));
 const dictionaryFile = join(dataDir, 'ecdict.csv');
+const dictionarySqliteFile = join(dataDir, 'dictionary.sqlite');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
@@ -79,6 +92,7 @@ const httpEnabled = serviceRole !== 'worker';
 const appPassword = process.env.APP_PASSWORD;
 const readOnlyPassword = process.env.READONLY_PASSWORD || '';
 const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex');
+const settingsEncryptionSecret = process.env.SETTINGS_ENCRYPTION_KEY || (process.env.NODE_ENV === 'production' ? '' : cookieSecret);
 const cookieName = 'exam_planner_session';
 const corsOrigin = process.env.CORS_ORIGIN || '';
 const secureCookie = process.env.COOKIE_SECURE === '1';
@@ -101,7 +115,16 @@ const privilegedClient = privilegedHelperSocket ? createPrivilegedClient({ socke
 const entitySchemaVersion = 1;
 const studyTargetMinutesKey = 'study_target_minutes';
 const dailyBriefSettingsKey = 'daily_brief_settings_json';
-const settingsEncryptionKey = createHash('sha256').update(String(cookieSecret)).digest();
+const settingsCrypto = createSettingsCrypto({
+    primarySecret: settingsEncryptionSecret,
+    legacySecrets: [cookieSecret],
+    onDecryptFailure: ({ fingerprint }) => console.warn(JSON.stringify({
+        level: 'warn',
+        event: 'settings_secret_decrypt_failed',
+        fingerprint,
+        action: 're-enter the affected secret once',
+    })),
+});
 const loginFailureLimit = 3;
 const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
@@ -112,6 +135,8 @@ const dailyBriefRepository = createDailyBriefRepository(sqliteRepository);
 const confusingWordsRepository = createConfusingWordsRepository(sqliteRepository);
 const breakGuardRepository = createBreakGuardRepository(sqliteRepository);
 const backupRepository = createBackupRepository(sqliteRepository);
+const dictionaryDatabase = createSqliteRepository({ sqliteFile: dictionarySqliteFile, dataDir });
+const dictionaryRepository = createDictionaryRepository(dictionaryDatabase);
 const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers: 2 });
 const scheduler = createSchedulerRegistry({
     onError: (name, error) => console.error(JSON.stringify({
@@ -156,9 +181,7 @@ catch {
 }
 const projectColors = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
 const subjectColors = ['#2563eb', '#16a34a', '#9333ea', '#dc2626'];
-const dictionaryCache = new Map();
 let sqliteReady = false;
-let dictionaryIndexChecked = false;
 let reportTimerStarted = false;
 let reportTimer = null;
 let nightlyErrorThemeTimerStarted = false;
@@ -192,8 +215,12 @@ function validateStartupConfig() {
         fatalProblems.push('APP_PASSWORD is required in production');
     if (process.env.NODE_ENV === 'production' && !process.env.COOKIE_SECRET)
         fatalProblems.push('COOKIE_SECRET is required in production');
+    if (process.env.NODE_ENV === 'production' && !process.env.SETTINGS_ENCRYPTION_KEY)
+        fatalProblems.push('SETTINGS_ENCRYPTION_KEY is required in production');
     if (!cookieSecret || cookieSecret.length < 32)
         problems.push('COOKIE_SECRET should be at least 32 characters');
+    if (!settingsEncryptionSecret || settingsEncryptionSecret.length < 32)
+        problems.push('SETTINGS_ENCRYPTION_KEY should be at least 32 characters');
     if (!Number.isFinite(port) || port <= 0 || port > 65535)
         problems.push('PORT must be a valid TCP port');
     if (!Number.isFinite(jsonBodyMaxBytes) || jsonBodyMaxBytes < 1024)
@@ -213,7 +240,7 @@ function validateStartupConfig() {
     return { problems, fatalProblems };
 }
 
-exposeRuntime({ "createHash": () => createHash, "randomBytes": () => randomBytes, "chmodSync": () => chmodSync, "copyFileSync": () => copyFileSync, "existsSync": () => existsSync, "mkdirSync": () => mkdirSync, "readFileSync": () => readFileSync, "readdirSync": () => readdirSync, "rmSync": () => rmSync, "statfsSync": () => statfsSync, "statSync": () => statSync, "unlinkSync": () => unlinkSync, "writeFileSync": () => writeFileSync, "createCipheriv": () => createCipheriv, "createDecipheriv": () => createDecipheriv, "dirname": () => dirname, "extname": () => extname, "join": () => join, "resolve": () => resolve, "createServer": () => createServer, "netConnect": () => netConnect, "tlsConnect": () => tlsConnect, "fileURLToPath": () => fileURLToPath, "spawn": () => spawn, "spawnSync": () => spawnSync, "cpus": () => cpus, "freemem": () => freemem, "loadavg": () => loadavg, "totalmem": () => totalmem, "uptime": () => uptime, "setDefaultResultOrder": () => setDefaultResultOrder, "createSqliteRepository": () => createSqliteRepository, "createTaskRunsRepository": () => createTaskRunsRepository, "createOpsRepository": () => createOpsRepository, "createExternalApiClient": () => createExternalApiClient, "parseWorldPeRatio": () => parseWorldPeRatio, "scoreIndexPurchaseAssessment": () => scoreIndexPurchaseAssessment, "summarizeHealth": () => summarizeHealth, "resolveBackupPath": () => resolveBackupPath, "queryLimit": () => queryLimit, "queryOffset": () => queryOffset, "isTelegramAuthorized": () => isTelegramAuthorized, "readTelegramConfig": () => readTelegramConfig, "saveTelegramConfig": () => saveTelegramConfig, "telegramConfigStatus": () => telegramConfigStatus, "telegramConfirmKeyboard": () => telegramConfirmKeyboard, "telegramTaskKeyboard": () => telegramTaskKeyboard, "telegramUpdateContext": () => telegramUpdateContext, "createNotificationRepository": () => createNotificationRepository, "createNotificationQueue": () => createNotificationQueue, "createCalendarRepository": () => createCalendarRepository, "notificationChannelReadiness": () => notificationChannelReadiness, "resolveProactiveDispatch": () => resolveProactiveDispatch, "isWechatQuietHours": () => isWechatQuietHours, "nextWechatActiveAt": () => nextWechatActiveAt, "runSqlMigrations": () => runSqlMigrations, "clawbotHelpText": () => clawbotHelpText, "parseClawbotCommand": () => parseClawbotCommand, "sanitizeClientErrorPayload": () => sanitizeClientErrorPayload, "handlePublicApiRoutes": () => handlePublicApiRoutes, "handleNotificationRoutes": () => handleNotificationRoutes, "handleProxySettingsRoutes": () => handleProxySettingsRoutes, "handleOpsRoutes": () => handleOpsRoutes, "handleBriefRoutes": () => handleBriefRoutes, "handleLearningReadRoutes": () => handleLearningReadRoutes, "handleLearningWriteRoutes": () => handleLearningWriteRoutes, "createBackupService": () => createBackupService, "createBreakGuardService": () => createBreakGuardService, "addDaysISO": () => addDaysISO, "addYearISO": () => addYearISO, "currentPeriod": () => currentPeriod, "endOfMonthISO": () => endOfMonthISO, "endOfWeekISO": () => endOfWeekISO, "formatDateString": () => formatDateString, "localDateISO": () => localDateISO, "nowISO": () => nowISO, "parseDateString": () => parseDateString, "previousMonthPeriod": () => previousMonthPeriod, "previousPeriod": () => previousPeriod, "previousWeekPeriod": () => previousWeekPeriod, "startOfMonthISO": () => startOfMonthISO, "startOfWeekISO": () => startOfWeekISO, "todayISO": () => todayISO, "createSqliteCli": () => createSqliteCli, "runSqliteFile": () => runSqliteFile, "sqliteIntegrityCheck": () => sqliteIntegrityCheck, "sqlitePath": () => sqlitePath, "sqlString": () => sqlString, "sqlValue": () => sqlValue, "createHttpUtils": () => createHttpUtils, "headerString": () => headerString, "isObjectPayload": () => isObjectPayload, "createStaticAssetServer": () => createStaticAssetServer, "defaultMimeTypes": () => defaultMimeTypes, "runProcess": () => runProcess, "createPrivilegedClient": () => createPrivilegedClient, "clientHashForRequest": () => clientHashForRequest, "createSessionAuth": () => createSessionAuth, "getClientIp": () => getClientIp, "lockMessage": () => lockMessage, "safeSecretEqual": () => safeSecretEqual, "sleep": () => sleep, "createRequire": () => createRequire, "require": () => require, "appRoot": () => appRoot, "root": () => root, "dataDir": () => dataDir, "legacyDataFile": () => legacyDataFile, "sqliteFile": () => sqliteFile, "backupsDir": () => backupsDir, "libraryDir": () => libraryDir, "libraryFilesDir": () => libraryFilesDir, "migrationsDir": () => migrationsDir, "dictionaryFile": () => dictionaryFile, "loginAttemptsFile": () => loginAttemptsFile, "proxySettingsEnvFile": () => proxySettingsEnvFile, "telegramEnvFile": () => telegramEnvFile, "embeddingWorkerFile": () => embeddingWorkerFile, "openClawWeixinSenderFile": () => openClawWeixinSenderFile, "embeddingCacheDir": () => embeddingCacheDir, "smallEmbeddingModelName": () => smallEmbeddingModelName, "largeEmbeddingModelName": () => largeEmbeddingModelName, "port": () => port, "serviceRole": () => serviceRole, "backgroundJobsEnabled": () => backgroundJobsEnabled, "httpEnabled": () => httpEnabled, "appPassword": () => appPassword, "readOnlyPassword": () => readOnlyPassword, "cookieSecret": () => cookieSecret, "cookieName": () => cookieName, "corsOrigin": () => corsOrigin, "secureCookie": () => secureCookie, "clawbotSecret": () => clawbotSecret, "breakGuardToken": () => breakGuardToken, "dataImportToken": () => dataImportToken, "backupSyncToken": () => backupSyncToken, "clawbotWebhookUrl": () => clawbotWebhookUrl, "openClawChannel": () => openClawChannel, "openClawAccountDir": () => openClawAccountDir, "openClawNpmProjectsDir": () => openClawNpmProjectsDir, "openClawAccountId": () => openClawAccountId, "openClawTarget": () => openClawTarget, "openClawCli": () => openClawCli, "requestLogSlowMs": () => requestLogSlowMs, "jsonBodyMaxBytes": () => jsonBodyMaxBytes, "minFreeDiskBytes": () => minFreeDiskBytes, "privilegedHelperSocket": () => privilegedHelperSocket, "privilegedClient": () => privilegedClient, "entitySchemaVersion": () => entitySchemaVersion, "studyTargetMinutesKey": () => studyTargetMinutesKey, "dailyBriefSettingsKey": () => dailyBriefSettingsKey, "settingsEncryptionKey": () => settingsEncryptionKey, "loginFailureLimit": () => loginFailureLimit, "loginLockMs": () => loginLockMs, "loginFailureDelayMinMs": () => loginFailureDelayMinMs, "loginFailureDelaySpreadMs": () => loginFailureDelaySpreadMs, "sqliteRepository": () => sqliteRepository, "taskRunsRepository": () => taskRunsRepository, "opsRepository": () => opsRepository, "externalApiClient": () => externalApiClient, "notificationRepository": () => notificationRepository, "notificationQueue": () => notificationQueue, "telegramOpsConfirmations": () => telegramOpsConfirmations, "calendarRepository": () => calendarRepository, "runSqlite": () => runSqlite, "sqliteExecute": () => sqliteExecute, "sqliteScalar": () => sqliteScalar, "sqliteJson": () => sqliteJson, "runSqliteTransaction": () => runSqliteTransaction, "closeSqlite": () => closeSqlite, "sendJson": () => sendJson, "sendHtml": () => sendHtml, "readBody": () => readBody, "readJsonBody": () => readJsonBody, "serveStatic": () => serveStatic, "sessionAuth": () => sessionAuth, "createSessionValue": () => createSessionValue, "getSessionRole": () => getSessionRole, "isValidSession": () => isValidSession, "getLoginLock": () => getLoginLock, "recordLoginSuccess": () => recordLoginSuccess, "recordLoginFailure": () => recordLoginFailure, "loginFailureDelay": () => loginFailureDelay, "loginPage": () => loginPage, "projectColors": () => projectColors, "subjectColors": () => subjectColors, "dictionaryCache": () => dictionaryCache, "sqliteReady": () => sqliteReady, "dictionaryIndexChecked": () => dictionaryIndexChecked, "reportTimerStarted": () => reportTimerStarted, "reportTimer": () => reportTimer, "nightlyErrorThemeTimerStarted": () => nightlyErrorThemeTimerStarted, "nightlyErrorThemeTimer": () => nightlyErrorThemeTimer, "dailyBriefTimerStarted": () => dailyBriefTimerStarted, "maintenanceTimerStarted": () => maintenanceTimerStarted, "maintenanceTimer": () => maintenanceTimer, "dailyBriefTimer": () => dailyBriefTimer, "taskReminderTimerStarted": () => taskReminderTimerStarted, "taskReminderTimer": () => taskReminderTimer, "taskReminderInitialTimer": () => taskReminderInitialTimer, "notificationQueueTimerStarted": () => notificationQueueTimerStarted, "notificationQueueTimer": () => notificationQueueTimer, "startupReady": () => startupReady, "startupError": () => startupError, "workerKeepAliveTimer": () => workerKeepAliveTimer, "workerHeartbeatTimer": () => workerHeartbeatTimer, "errorThemeBatchJob": () => errorThemeBatchJob, "shuttingDown": () => shuttingDown, "nextNightlyErrorThemeAt": () => nextNightlyErrorThemeAt, "nextDailyBriefAt": () => nextDailyBriefAt, "nextMaintenanceAt": () => nextMaintenanceAt, "nextTaskReminderScanAt": () => nextTaskReminderScanAt, "dataRevision": () => dataRevision, "dashboardPayloadCache": () => dashboardPayloadCache, "statisticsSummaryCache": () => statisticsSummaryCache, "validateStartupConfig": () => validateStartupConfig }, { "sqliteReady": (value) => { sqliteReady = value; }, "dictionaryIndexChecked": (value) => { dictionaryIndexChecked = value; }, "reportTimerStarted": (value) => { reportTimerStarted = value; }, "reportTimer": (value) => { reportTimer = value; }, "nightlyErrorThemeTimerStarted": (value) => { nightlyErrorThemeTimerStarted = value; }, "nightlyErrorThemeTimer": (value) => { nightlyErrorThemeTimer = value; }, "dailyBriefTimerStarted": (value) => { dailyBriefTimerStarted = value; }, "maintenanceTimerStarted": (value) => { maintenanceTimerStarted = value; }, "maintenanceTimer": (value) => { maintenanceTimer = value; }, "dailyBriefTimer": (value) => { dailyBriefTimer = value; }, "taskReminderTimerStarted": (value) => { taskReminderTimerStarted = value; }, "taskReminderTimer": (value) => { taskReminderTimer = value; }, "taskReminderInitialTimer": (value) => { taskReminderInitialTimer = value; }, "notificationQueueTimerStarted": (value) => { notificationQueueTimerStarted = value; }, "notificationQueueTimer": (value) => { notificationQueueTimer = value; }, "startupReady": (value) => { startupReady = value; }, "startupError": (value) => { startupError = value; }, "workerKeepAliveTimer": (value) => { workerKeepAliveTimer = value; }, "workerHeartbeatTimer": (value) => { workerHeartbeatTimer = value; }, "errorThemeBatchJob": (value) => { errorThemeBatchJob = value; }, "shuttingDown": (value) => { shuttingDown = value; }, "nextNightlyErrorThemeAt": (value) => { nextNightlyErrorThemeAt = value; }, "nextDailyBriefAt": (value) => { nextDailyBriefAt = value; }, "nextMaintenanceAt": (value) => { nextMaintenanceAt = value; }, "nextTaskReminderScanAt": (value) => { nextTaskReminderScanAt = value; }, "dataRevision": (value) => { dataRevision = value; }, "dashboardPayloadCache": (value) => { dashboardPayloadCache = value; }, "statisticsSummaryCache": (value) => { statisticsSummaryCache = value; } });
+exposeRuntime({ "createHash": () => createHash, "randomBytes": () => randomBytes, "chmodSync": () => chmodSync, "copyFileSync": () => copyFileSync, "existsSync": () => existsSync, "mkdirSync": () => mkdirSync, "readFileSync": () => readFileSync, "readdirSync": () => readdirSync, "rmSync": () => rmSync, "statfsSync": () => statfsSync, "statSync": () => statSync, "unlinkSync": () => unlinkSync, "writeFileSync": () => writeFileSync, "dirname": () => dirname, "extname": () => extname, "join": () => join, "resolve": () => resolve, "createServer": () => createServer, "netConnect": () => netConnect, "tlsConnect": () => tlsConnect, "fileURLToPath": () => fileURLToPath, "spawn": () => spawn, "spawnSync": () => spawnSync, "cpus": () => cpus, "freemem": () => freemem, "loadavg": () => loadavg, "totalmem": () => totalmem, "uptime": () => uptime, "setDefaultResultOrder": () => setDefaultResultOrder, "createSqliteRepository": () => createSqliteRepository, "createTaskRunsRepository": () => createTaskRunsRepository, "createOpsRepository": () => createOpsRepository, "createExternalApiClient": () => createExternalApiClient, "parseWorldPeRatio": () => parseWorldPeRatio, "scoreIndexPurchaseAssessment": () => scoreIndexPurchaseAssessment, "summarizeHealth": () => summarizeHealth, "resolveBackupPath": () => resolveBackupPath, "queryLimit": () => queryLimit, "queryOffset": () => queryOffset, "isTelegramAuthorized": () => isTelegramAuthorized, "readTelegramConfig": () => readTelegramConfig, "saveTelegramConfig": () => saveTelegramConfig, "telegramConfigStatus": () => telegramConfigStatus, "telegramConfirmKeyboard": () => telegramConfirmKeyboard, "telegramTaskKeyboard": () => telegramTaskKeyboard, "telegramUpdateContext": () => telegramUpdateContext, "createNotificationRepository": () => createNotificationRepository, "createNotificationQueue": () => createNotificationQueue, "createCalendarRepository": () => createCalendarRepository, "notificationChannelReadiness": () => notificationChannelReadiness, "resolveProactiveDispatch": () => resolveProactiveDispatch, "isWechatQuietHours": () => isWechatQuietHours, "nextWechatActiveAt": () => nextWechatActiveAt, "runSqlMigrations": () => runSqlMigrations, "clawbotHelpText": () => clawbotHelpText, "parseClawbotCommand": () => parseClawbotCommand, "sanitizeClientErrorPayload": () => sanitizeClientErrorPayload, "handlePublicApiRoutes": () => handlePublicApiRoutes, "handleNotificationRoutes": () => handleNotificationRoutes, "handleProxySettingsRoutes": () => handleProxySettingsRoutes, "handleOpsRoutes": () => handleOpsRoutes, "handleBriefRoutes": () => handleBriefRoutes, "handleLearningReadRoutes": () => handleLearningReadRoutes, "handleLearningWriteRoutes": () => handleLearningWriteRoutes, "createBackupService": () => createBackupService, "createBreakGuardService": () => createBreakGuardService, "addDaysISO": () => addDaysISO, "addYearISO": () => addYearISO, "currentPeriod": () => currentPeriod, "endOfMonthISO": () => endOfMonthISO, "endOfWeekISO": () => endOfWeekISO, "formatDateString": () => formatDateString, "localDateISO": () => localDateISO, "nowISO": () => nowISO, "parseDateString": () => parseDateString, "previousMonthPeriod": () => previousMonthPeriod, "previousPeriod": () => previousPeriod, "previousWeekPeriod": () => previousWeekPeriod, "startOfMonthISO": () => startOfMonthISO, "startOfWeekISO": () => startOfWeekISO, "todayISO": () => todayISO, "createSqliteCli": () => createSqliteCli, "runSqliteFile": () => runSqliteFile, "sqliteIntegrityCheck": () => sqliteIntegrityCheck, "sqlitePath": () => sqlitePath, "sqlString": () => sqlString, "sqlValue": () => sqlValue, "createHttpUtils": () => createHttpUtils, "headerString": () => headerString, "isObjectPayload": () => isObjectPayload, "createStaticAssetServer": () => createStaticAssetServer, "defaultMimeTypes": () => defaultMimeTypes, "runProcess": () => runProcess, "createPrivilegedClient": () => createPrivilegedClient, "clientHashForRequest": () => clientHashForRequest, "createSessionAuth": () => createSessionAuth, "getClientIp": () => getClientIp, "lockMessage": () => lockMessage, "safeSecretEqual": () => safeSecretEqual, "sleep": () => sleep, "createRequire": () => createRequire, "require": () => require, "appRoot": () => appRoot, "root": () => root, "dataDir": () => dataDir, "legacyDataFile": () => legacyDataFile, "sqliteFile": () => sqliteFile, "backupsDir": () => backupsDir, "libraryDir": () => libraryDir, "libraryFilesDir": () => libraryFilesDir, "migrationsDir": () => migrationsDir, "dictionaryFile": () => dictionaryFile, "loginAttemptsFile": () => loginAttemptsFile, "proxySettingsEnvFile": () => proxySettingsEnvFile, "telegramEnvFile": () => telegramEnvFile, "embeddingWorkerFile": () => embeddingWorkerFile, "openClawWeixinSenderFile": () => openClawWeixinSenderFile, "embeddingCacheDir": () => embeddingCacheDir, "smallEmbeddingModelName": () => smallEmbeddingModelName, "largeEmbeddingModelName": () => largeEmbeddingModelName, "port": () => port, "serviceRole": () => serviceRole, "backgroundJobsEnabled": () => backgroundJobsEnabled, "httpEnabled": () => httpEnabled, "appPassword": () => appPassword, "readOnlyPassword": () => readOnlyPassword, "cookieSecret": () => cookieSecret, "cookieName": () => cookieName, "corsOrigin": () => corsOrigin, "secureCookie": () => secureCookie, "clawbotSecret": () => clawbotSecret, "breakGuardToken": () => breakGuardToken, "dataImportToken": () => dataImportToken, "backupSyncToken": () => backupSyncToken, "clawbotWebhookUrl": () => clawbotWebhookUrl, "openClawChannel": () => openClawChannel, "openClawAccountDir": () => openClawAccountDir, "openClawNpmProjectsDir": () => openClawNpmProjectsDir, "openClawAccountId": () => openClawAccountId, "openClawTarget": () => openClawTarget, "openClawCli": () => openClawCli, "requestLogSlowMs": () => requestLogSlowMs, "jsonBodyMaxBytes": () => jsonBodyMaxBytes, "minFreeDiskBytes": () => minFreeDiskBytes, "privilegedHelperSocket": () => privilegedHelperSocket, "privilegedClient": () => privilegedClient, "entitySchemaVersion": () => entitySchemaVersion, "studyTargetMinutesKey": () => studyTargetMinutesKey, "dailyBriefSettingsKey": () => dailyBriefSettingsKey, "settingsCrypto": () => settingsCrypto, "loginFailureLimit": () => loginFailureLimit, "loginLockMs": () => loginLockMs, "loginFailureDelayMinMs": () => loginFailureDelayMinMs, "loginFailureDelaySpreadMs": () => loginFailureDelaySpreadMs, "sqliteRepository": () => sqliteRepository, "taskRunsRepository": () => taskRunsRepository, "opsRepository": () => opsRepository, "externalApiClient": () => externalApiClient, "notificationRepository": () => notificationRepository, "notificationQueue": () => notificationQueue, "telegramOpsConfirmations": () => telegramOpsConfirmations, "calendarRepository": () => calendarRepository, "runSqlite": () => runSqlite, "sqliteExecute": () => sqliteExecute, "sqliteScalar": () => sqliteScalar, "sqliteJson": () => sqliteJson, "runSqliteTransaction": () => runSqliteTransaction, "closeSqlite": () => closeSqlite, "sendJson": () => sendJson, "sendHtml": () => sendHtml, "readBody": () => readBody, "readJsonBody": () => readJsonBody, "serveStatic": () => serveStatic, "sessionAuth": () => sessionAuth, "createSessionValue": () => createSessionValue, "getSessionRole": () => getSessionRole, "isValidSession": () => isValidSession, "getLoginLock": () => getLoginLock, "recordLoginSuccess": () => recordLoginSuccess, "recordLoginFailure": () => recordLoginFailure, "loginFailureDelay": () => loginFailureDelay, "loginPage": () => loginPage, "projectColors": () => projectColors, "subjectColors": () => subjectColors, "sqliteReady": () => sqliteReady, "reportTimerStarted": () => reportTimerStarted, "reportTimer": () => reportTimer, "nightlyErrorThemeTimerStarted": () => nightlyErrorThemeTimerStarted, "nightlyErrorThemeTimer": () => nightlyErrorThemeTimer, "dailyBriefTimerStarted": () => dailyBriefTimerStarted, "maintenanceTimerStarted": () => maintenanceTimerStarted, "maintenanceTimer": () => maintenanceTimer, "dailyBriefTimer": () => dailyBriefTimer, "taskReminderTimerStarted": () => taskReminderTimerStarted, "taskReminderTimer": () => taskReminderTimer, "taskReminderInitialTimer": () => taskReminderInitialTimer, "notificationQueueTimerStarted": () => notificationQueueTimerStarted, "notificationQueueTimer": () => notificationQueueTimer, "startupReady": () => startupReady, "startupError": () => startupError, "workerKeepAliveTimer": () => workerKeepAliveTimer, "workerHeartbeatTimer": () => workerHeartbeatTimer, "errorThemeBatchJob": () => errorThemeBatchJob, "shuttingDown": () => shuttingDown, "nextNightlyErrorThemeAt": () => nextNightlyErrorThemeAt, "nextDailyBriefAt": () => nextDailyBriefAt, "nextMaintenanceAt": () => nextMaintenanceAt, "nextTaskReminderScanAt": () => nextTaskReminderScanAt, "dataRevision": () => dataRevision, "dashboardPayloadCache": () => dashboardPayloadCache, "statisticsSummaryCache": () => statisticsSummaryCache, "validateStartupConfig": () => validateStartupConfig }, { "sqliteReady": (value) => { sqliteReady = value; }, "reportTimerStarted": (value) => { reportTimerStarted = value; }, "reportTimer": (value) => { reportTimer = value; }, "nightlyErrorThemeTimerStarted": (value) => { nightlyErrorThemeTimerStarted = value; }, "nightlyErrorThemeTimer": (value) => { nightlyErrorThemeTimer = value; }, "dailyBriefTimerStarted": (value) => { dailyBriefTimerStarted = value; }, "maintenanceTimerStarted": (value) => { maintenanceTimerStarted = value; }, "maintenanceTimer": (value) => { maintenanceTimer = value; }, "dailyBriefTimer": (value) => { dailyBriefTimer = value; }, "taskReminderTimerStarted": (value) => { taskReminderTimerStarted = value; }, "taskReminderTimer": (value) => { taskReminderTimer = value; }, "taskReminderInitialTimer": (value) => { taskReminderInitialTimer = value; }, "notificationQueueTimerStarted": (value) => { notificationQueueTimerStarted = value; }, "notificationQueueTimer": (value) => { notificationQueueTimer = value; }, "startupReady": (value) => { startupReady = value; }, "startupError": (value) => { startupError = value; }, "workerKeepAliveTimer": (value) => { workerKeepAliveTimer = value; }, "workerHeartbeatTimer": (value) => { workerHeartbeatTimer = value; }, "errorThemeBatchJob": (value) => { errorThemeBatchJob = value; }, "shuttingDown": (value) => { shuttingDown = value; }, "nextNightlyErrorThemeAt": (value) => { nextNightlyErrorThemeAt = value; }, "nextDailyBriefAt": (value) => { nextDailyBriefAt = value; }, "nextMaintenanceAt": (value) => { nextMaintenanceAt = value; }, "nextTaskReminderScanAt": (value) => { nextTaskReminderScanAt = value; }, "dataRevision": (value) => { dataRevision = value; }, "dashboardPayloadCache": (value) => { dashboardPayloadCache = value; }, "statisticsSummaryCache": (value) => { statisticsSummaryCache = value; } });
 
 exposeRuntime({
     learningRepository: () => learningRepository,
@@ -221,18 +248,34 @@ exposeRuntime({
     confusingWordsRepository: () => confusingWordsRepository,
     breakGuardRepository: () => breakGuardRepository,
     backupRepository: () => backupRepository,
+    dictionaryRepository: () => dictionaryRepository,
     userAccountRepository: () => userAccountRepository,
     getSession: () => getSession,
     scheduler: () => scheduler,
 });
 
-await import('./app/domains/persistence.mjs');
-await import('./app/domains/reports.mjs');
-await import('./app/domains/brief.mjs');
-await import('./app/domains/proxy.mjs');
-await import('./app/domains/operations.mjs');
-await import('./app/domains/learning.mjs');
-await import('./app/domains/notifications.mjs');
+let backupService = null;
+const dictionaryService = createDictionaryService({
+    repository: dictionaryRepository,
+    primaryDatabase: sqliteRepository,
+    dictionarySqliteFile,
+    sourceCsv: dictionaryFile,
+    runSqliteFile,
+    sqlitePath,
+    sqliteIntegrityCheck,
+    nowISO,
+    createSafetyBackup: (kind, note) => backupService?.createBackupFile(kind, note),
+    log: (level, event, detail) => runtime.logStructured?.(level, event, detail),
+});
+exposeRuntime({ dictionaryService: () => dictionaryService });
+
+installPersistenceDomain(runtime, exposeRuntime);
+installReportsDomain(runtime, exposeRuntime);
+installBriefDomain(runtime, exposeRuntime);
+installProxyDomain(runtime, exposeRuntime);
+installOperationsDomain(runtime, exposeRuntime);
+installLearningDomain(runtime, exposeRuntime);
+installNotificationsDomain(runtime, exposeRuntime);
 const studyComparisonService = createStudyComparisonService({
     database: sqliteRepository,
     todayISO,
@@ -240,9 +283,9 @@ const studyComparisonService = createStudyComparisonService({
     nowISO,
 });
 exposeRuntime({ studyComparisonService: () => studyComparisonService });
-await import('./app/domains/api.mjs');
+installApiDomain(runtime, exposeRuntime);
 
-const backupService = createBackupService({
+backupService = createBackupService({
     backupsDir,
     sqliteFile,
     libraryDir,
@@ -257,8 +300,17 @@ const backupService = createBackupService({
     resetSqliteRuntime: () => {
         closeSqlite();
         sqliteReady = false;
-        dictionaryIndexChecked = false;
+        dictionaryService.reset();
     },
+    retention: {
+        daily: Number(process.env.BACKUP_KEEP_DAILY || 7),
+        weekly: Number(process.env.BACKUP_KEEP_WEEKLY || 4),
+        deploy: Number(process.env.BACKUP_KEEP_DEPLOY || 5),
+        manual: Number(process.env.BACKUP_KEEP_MANUAL || 5),
+        migration: Number(process.env.BACKUP_KEEP_MIGRATION || 5),
+        other: Number(process.env.BACKUP_KEEP_OTHER || 3),
+    },
+    dictionaryStatus: () => dictionaryService.status(),
 });
 const { createBackupFile, restoreBackupFile, ensureDailyBackup, ensureWeeklyBackup, getBackupStatus, nextWeeklyBackupAt, nextDailyBackupAt, } = backupService;
 const breakGuardService = createBreakGuardService({
@@ -279,4 +331,4 @@ const { requireToken: requireBreakGuardToken, recordEvent: recordBreakGuardEvent
 
 exposeRuntime({ "backupService": () => backupService, "createBackupFile": () => createBackupFile, "restoreBackupFile": () => restoreBackupFile, "ensureDailyBackup": () => ensureDailyBackup, "ensureWeeklyBackup": () => ensureWeeklyBackup, "getBackupStatus": () => getBackupStatus, "nextWeeklyBackupAt": () => nextWeeklyBackupAt, "nextDailyBackupAt": () => nextDailyBackupAt, "breakGuardService": () => breakGuardService, "requireBreakGuardToken": () => requireBreakGuardToken, "recordBreakGuardEvent": () => recordBreakGuardEvent, "getBreakGuardSummary": () => getBreakGuardSummary, "queueBreakGuardNotification": () => queueBreakGuardNotification, "getBreakGuardScheduleConfig": () => getBreakGuardScheduleConfig, "saveBreakGuardScheduleConfig": () => saveBreakGuardScheduleConfig }, {  });
 
-await import('./app/domains/bootstrap.mjs');
+installBootstrapDomain(runtime, exposeRuntime);

@@ -55,7 +55,7 @@ describe('break guard service', () => {
     const event = service.recordEvent({
       eventId: 'schedule_lag_20260712_1',
       eventType: 'schedule_lag',
-      payload: { lessonNumber: 3, studyMinutes: 120, targetMinutes: 400 },
+      payload: { projectId: 10, studyMinutes: 120, targetMinutes: 400 },
     });
     expect(event.label).toBe('学习进度落后');
     const delivery = service.queueNotification(event);
@@ -75,7 +75,7 @@ describe('break guard service', () => {
     const event = service.recordEvent({
       eventId: 'schedule_lag_meal_pause',
       eventType: 'schedule_lag',
-      payload: { lessonNumber: 3, completedLessons: 2, dailyLessons: 8 },
+      payload: { projectId: 10, studyMinutes: 120, targetMinutes: 400 },
     });
     expect(service.queueNotification(event)).toMatchObject({ status: 'suppressed', reason: 'meal_pause' });
     expect(queued).toHaveLength(0);
@@ -88,7 +88,7 @@ describe('break guard service', () => {
     const resumed = service.recordEvent({
       eventId: 'schedule_lag_after_meal',
       eventType: 'schedule_lag',
-      payload: { lessonNumber: 4, studyMinutes: 180, targetMinutes: 400 },
+      payload: { projectId: 10, studyMinutes: 180, targetMinutes: 400 },
     });
     expect(service.queueNotification(resumed).content).toContain('180 / 400 分钟');
     expect(queued).toHaveLength(1);
@@ -96,10 +96,14 @@ describe('break guard service', () => {
 
   it('normalizes a time target and exposes active projects directly', () => {
     const { service } = fixture();
-    const result = service.saveScheduleConfig({ dailyLessons: 8, lessonMinutes: 50, dailyTargetMinutes: 360 });
+    const result = service.saveScheduleConfig({ dailyTargetMinutes: 360 });
     expect(result.config.dailyTargetMinutes).toBe(360);
-    expect(result.config.dailyLessons).toBe(1);
-    expect(result.config.lessonProjects).toEqual([10]);
+    expect(result.config).toEqual({
+      dailyTargetMinutes: 360,
+      breakMinutes: 10,
+      lagGraceMinutes: 20,
+      lagRepeatMinutes: 30,
+    });
   });
 
   it('writes completed classes into the matching study project once', () => {
@@ -107,7 +111,7 @@ describe('break guard service', () => {
     const body = {
       eventId: 'class_completed_20260712_1',
       eventType: 'class_completed',
-      payload: { lessonDate: '2026-07-12', projectId: 10, durationSeconds: 3000, lessonNumber: 1 },
+      payload: { sessionDate: '2026-07-12', projectId: 10, durationSeconds: 3000, sessionSequence: 1 },
     };
     const first = service.recordEvent(body);
     const second = service.recordEvent(body);

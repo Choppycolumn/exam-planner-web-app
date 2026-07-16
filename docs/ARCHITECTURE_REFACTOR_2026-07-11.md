@@ -34,7 +34,7 @@
 
 - `server/auth-static-server.mjs` 从 7547 行缩减为约 265 行，只负责配置、依赖装配和加载启动模块。
 - `server/app/domains/` 按持久化、报告、简报、代理、运维、学习、通知、API 与启动生命周期拆分，不再保留单一巨型入口副本。
-- 模块间共享运行状态由 `runtime-context.mjs` 暴露为带 getter/setter 的实时绑定，避免复制可变定时器和缓存状态。
+- 模块间共享运行状态已进一步替换为 `createApplicationContext()` 创建的进程级显式上下文；各领域通过安装器注入，不再引用模块级全局 `runtime-context.mjs`。
 
 ## 调度
 

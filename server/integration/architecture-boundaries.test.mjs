@@ -28,4 +28,13 @@ describe('architecture boundaries', () => {
       .filter((name) => /\bsetInterval\s*\(/.test(read(`server/app/domains/${name}`)));
     expect(offenders).toEqual([]);
   });
+
+  it('does not use a module-global runtime service locator', () => {
+    const serverFiles = [
+      'server/auth-static-server.mjs',
+      ...readdirSync(resolve(root, 'server/app/domains')).filter((name) => name.endsWith('.mjs')).map((name) => `server/app/domains/${name}`),
+    ];
+    expect(serverFiles.filter((file) => /runtime-context\.mjs/.test(read(file)))).toEqual([]);
+    expect(read('server/app/application-context.mjs')).toContain('createApplicationContext');
+  });
 });

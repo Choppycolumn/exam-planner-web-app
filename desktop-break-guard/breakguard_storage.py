@@ -52,21 +52,23 @@ class BreakGuardStore:
                     sent_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_event_outbox_due ON event_outbox(status, next_attempt_at);
-                CREATE TABLE IF NOT EXISTS lesson_records (
+                CREATE TABLE IF NOT EXISTS study_sessions (
                     session_id TEXT PRIMARY KEY,
-                    lesson_date TEXT NOT NULL,
-                    lesson_number INTEGER NOT NULL,
+                    session_date TEXT NOT NULL,
+                    sequence_number INTEGER NOT NULL,
+                    project_id INTEGER NOT NULL DEFAULT 0,
+                    project_name TEXT NOT NULL DEFAULT '',
                     started_at REAL NOT NULL,
                     ended_at REAL NOT NULL,
                     duration_seconds INTEGER NOT NULL,
                     created_at REAL NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_lesson_records_date ON lesson_records(lesson_date, lesson_number);
-                CREATE TABLE IF NOT EXISTS daily_schedule_state (
-                    lesson_date TEXT PRIMARY KEY,
+                CREATE INDEX IF NOT EXISTS idx_study_sessions_date ON study_sessions(session_date, sequence_number);
+                CREATE TABLE IF NOT EXISTS daily_study_state (
+                    session_date TEXT PRIMARY KEY,
                     paused_label TEXT NOT NULL DEFAULT '',
-                    selected_lesson INTEGER NOT NULL DEFAULT 1,
-                    last_lag_lesson INTEGER NOT NULL DEFAULT 0,
+                    selected_project_id INTEGER NOT NULL DEFAULT 0,
+                    last_lag_project_id INTEGER NOT NULL DEFAULT 0,
                     last_lag_at REAL,
                     pause_started_at REAL,
                     last_pause_started_at REAL,
@@ -74,12 +76,39 @@ class BreakGuardStore:
                     updated_at REAL NOT NULL
                 );
             """)
-            columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_schedule_state)")}
-            if "selected_lesson" not in columns:
-                connection.execute("ALTER TABLE daily_schedule_state ADD COLUMN selected_lesson INTEGER NOT NULL DEFAULT 1")
-            for column in ("pause_started_at", "last_pause_started_at", "last_pause_ended_at"):
-                if column not in columns:
-                    connection.execute(f"ALTER TABLE daily_schedule_state ADD COLUMN {column} REAL")
+            legacy_sessions = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lesson_records'"
+            ).fetchone()[0]
+            if legacy_sessions:
+                connection.execute(
+                    """INSERT OR IGNORE INTO study_sessions(
+                        session_id,session_date,sequence_number,project_id,project_name,
+                        started_at,ended_at,duration_seconds,created_at
+                    )
+                    SELECT session_id,lesson_date,lesson_number,0,'',
+                        started_at,ended_at,duration_seconds,created_at
+                    FROM lesson_records"""
+                )
+                connection.execute("DROP TABLE lesson_records")
+
+            legacy_state = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='daily_schedule_state'"
+            ).fetchone()[0]
+            if legacy_state:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_schedule_state)")}
+                pause_started = "pause_started_at" if "pause_started_at" in columns else "NULL"
+                last_pause_started = "last_pause_started_at" if "last_pause_started_at" in columns else "NULL"
+                last_pause_ended = "last_pause_ended_at" if "last_pause_ended_at" in columns else "NULL"
+                connection.execute(
+                    f"""INSERT OR IGNORE INTO daily_study_state(
+                        session_date,paused_label,selected_project_id,last_lag_project_id,last_lag_at,
+                        pause_started_at,last_pause_started_at,last_pause_ended_at,updated_at
+                    )
+                    SELECT lesson_date,paused_label,0,0,last_lag_at,
+                        {pause_started},{last_pause_started},{last_pause_ended},updated_at
+                    FROM daily_schedule_state"""
+                )
+                connection.execute("DROP TABLE daily_schedule_state")
 
     def load_runtime_state(self, key: str) -> dict | None:
         with self.lock, self._connection() as connection:
@@ -106,75 +135,84 @@ class BreakGuardStore:
     def clear_session(self) -> None:
         self.clear_runtime_state("active_session")
 
-    def load_course_session(self) -> dict | None:
-        return self.load_runtime_state("active_course")
+    def load_study_session(self) -> dict | None:
+        current = self.load_runtime_state("active_study")
+        if current:
+            return current
+        legacy = self.load_runtime_state("active_course")
+        if legacy:
+            self.save_runtime_state("active_study", legacy)
+            self.clear_runtime_state("active_course")
+        return legacy
 
-    def save_course_session(self, payload: dict) -> None:
-        self.save_runtime_state("active_course", payload)
+    def save_study_session(self, payload: dict) -> None:
+        self.save_runtime_state("active_study", payload)
 
-    def clear_course_session(self) -> None:
+    def clear_study_session(self) -> None:
+        self.clear_runtime_state("active_study")
         self.clear_runtime_state("active_course")
 
-    def add_lesson_record(self, payload: dict) -> None:
+    def add_study_session(self, payload: dict) -> None:
         with self.lock, self._connection() as connection:
             connection.execute(
-                "INSERT OR IGNORE INTO lesson_records(session_id,lesson_date,lesson_number,started_at,ended_at,duration_seconds,created_at) VALUES(?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO study_sessions(session_id,session_date,sequence_number,project_id,project_name,started_at,ended_at,duration_seconds,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 (
-                    payload["session_id"], payload["lesson_date"], payload["lesson_number"],
+                    payload["session_id"], payload["session_date"], payload["sequence_number"],
+                    payload["project_id"], payload["project_name"],
                     payload["started_at"], payload["ended_at"], payload["duration_seconds"], time.time(),
                 ),
             )
 
-    def daily_lesson_summary(self, lesson_date: str) -> dict:
+    def daily_study_summary(self, session_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(
-                "SELECT COUNT(DISTINCT lesson_number) AS completed_lessons, COALESCE(SUM(duration_seconds),0) AS study_seconds FROM lesson_records WHERE lesson_date = ?",
-                (lesson_date,),
+                "SELECT COUNT(*) AS session_count, COALESCE(SUM(duration_seconds),0) AS study_seconds FROM study_sessions WHERE session_date = ?",
+                (session_date,),
             ).fetchone()
-        return {"completed_lessons": int(row[0]), "study_seconds": int(row[1])}
+        return {"session_count": int(row[0]), "study_seconds": int(row[1])}
 
-    def completed_lesson_numbers(self, lesson_date: str) -> set[int]:
+    def next_study_sequence(self, session_date: str) -> int:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT COALESCE(MAX(sequence_number),0)+1 FROM study_sessions WHERE session_date = ?",
+                (session_date,),
+            ).fetchone()
+        return max(1, int(row[0]))
+
+    def list_daily_study_sessions(self, session_date: str) -> list[dict]:
         with self.lock, self._connection() as connection:
             rows = connection.execute(
-                "SELECT DISTINCT lesson_number FROM lesson_records WHERE lesson_date = ?",
-                (lesson_date,),
-            ).fetchall()
-        return {int(row[0]) for row in rows}
-
-    def list_daily_lessons(self, lesson_date: str) -> list[dict]:
-        with self.lock, self._connection() as connection:
-            rows = connection.execute(
-                "SELECT session_id,lesson_number,started_at,ended_at,duration_seconds FROM lesson_records WHERE lesson_date = ? ORDER BY lesson_number,started_at",
-                (lesson_date,),
+                "SELECT session_id,sequence_number,project_id,project_name,started_at,ended_at,duration_seconds FROM study_sessions WHERE session_date = ? ORDER BY sequence_number,started_at",
+                (session_date,),
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def daily_schedule_state(self, lesson_date: str) -> dict:
+    def daily_study_state(self, session_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(
-                "SELECT paused_label,selected_lesson,last_lag_lesson,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at FROM daily_schedule_state WHERE lesson_date = ?",
-                (lesson_date,),
+                "SELECT paused_label,selected_project_id,last_lag_project_id,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at FROM daily_study_state WHERE session_date = ?",
+                (session_date,),
             ).fetchone()
         return dict(row) if row else {
             "paused_label": "",
-            "selected_lesson": 1,
-            "last_lag_lesson": 0,
+            "selected_project_id": 0,
+            "last_lag_project_id": 0,
             "last_lag_at": None,
             "pause_started_at": None,
             "last_pause_started_at": None,
             "last_pause_ended_at": None,
         }
 
-    def update_daily_schedule_state(self, lesson_date: str, **changes) -> None:
-        current = {**self.daily_schedule_state(lesson_date), **changes}
+    def update_daily_study_state(self, session_date: str, **changes) -> None:
+        current = {**self.daily_study_state(session_date), **changes}
         with self.lock, self._connection() as connection:
             connection.execute(
-                "INSERT INTO daily_schedule_state(lesson_date,paused_label,selected_lesson,last_lag_lesson,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(lesson_date) DO UPDATE SET paused_label=excluded.paused_label,selected_lesson=excluded.selected_lesson,last_lag_lesson=excluded.last_lag_lesson,last_lag_at=excluded.last_lag_at,pause_started_at=excluded.pause_started_at,last_pause_started_at=excluded.last_pause_started_at,last_pause_ended_at=excluded.last_pause_ended_at,updated_at=excluded.updated_at",
+                "INSERT INTO daily_study_state(session_date,paused_label,selected_project_id,last_lag_project_id,last_lag_at,pause_started_at,last_pause_started_at,last_pause_ended_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(session_date) DO UPDATE SET paused_label=excluded.paused_label,selected_project_id=excluded.selected_project_id,last_lag_project_id=excluded.last_lag_project_id,last_lag_at=excluded.last_lag_at,pause_started_at=excluded.pause_started_at,last_pause_started_at=excluded.last_pause_started_at,last_pause_ended_at=excluded.last_pause_ended_at,updated_at=excluded.updated_at",
                 (
-                    lesson_date,
+                    session_date,
                     current["paused_label"],
-                    current["selected_lesson"],
-                    current["last_lag_lesson"],
+                    current["selected_project_id"],
+                    current["last_lag_project_id"],
                     current["last_lag_at"],
                     current["pause_started_at"],
                     current["last_pause_started_at"],

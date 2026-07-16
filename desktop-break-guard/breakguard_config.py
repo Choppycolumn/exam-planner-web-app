@@ -13,13 +13,9 @@ class Config:
     server_url: str
     token: str
     break_minutes: int = 10
-    daily_lessons: int = 8
-    lesson_minutes: int = 50
     daily_target_minutes: int = 400
-    day_start: str = "08:00"
     lag_grace_minutes: int = 20
     lag_repeat_minutes: int = 30
-    lesson_projects: list[int] = field(default_factory=list)
     available_projects: list[dict] = field(default_factory=list)
     notify_after_seconds: int = 60
     unfocused_after_seconds: int = 300
@@ -43,13 +39,9 @@ class Config:
         config = cls(
             server_url=str(raw.get("server_url", "")).rstrip("/"), token=token,
             break_minutes=max(1, int(raw.get("break_minutes", 10))),
-            daily_lessons=legacy_daily_lessons,
-            lesson_minutes=legacy_lesson_minutes,
             daily_target_minutes=max(30, min(960, int(raw.get("daily_target_minutes", legacy_daily_lessons * legacy_lesson_minutes)))),
-            day_start=str(raw.get("day_start", "08:00")),
             lag_grace_minutes=max(0, min(180, int(raw.get("lag_grace_minutes", 20)))),
             lag_repeat_minutes=max(5, min(180, int(raw.get("lag_repeat_minutes", 30)))),
-            lesson_projects=[int(value) for value in raw.get("lesson_projects", []) if str(value).isdigit()][:12],
             available_projects=[
                 {"id": int(item.get("id", 0)), "name": str(item.get("name", "")), "color": str(item.get("color", "#2563eb"))}
                 for item in raw.get("available_projects", []) if isinstance(item, dict) and int(item.get("id", 0)) > 0
@@ -61,9 +53,6 @@ class Config:
             verify_tls=bool(raw.get("verify_tls", True)),
             window_geometry=str(raw.get("window_geometry", "")),
         )
-        if config.available_projects:
-            config.lesson_projects = [int(project["id"]) for project in config.available_projects[:12]]
-            config.daily_lessons = len(config.lesson_projects)
         config.save()
         if source == LEGACY_CONFIG_FILE and LEGACY_CONFIG_FILE.exists() and raw.get("token"):
             try:

@@ -126,14 +126,10 @@ export interface BreakGuardSummary {
 }
 
 export interface BreakGuardScheduleConfig {
-  dailyLessons: number;
-  lessonMinutes: number;
   dailyTargetMinutes: number;
   breakMinutes: number;
-  dayStart: string;
   lagGraceMinutes: number;
   lagRepeatMinutes: number;
-  lessonProjects: number[];
 }
 
 export interface BreakGuardProject {

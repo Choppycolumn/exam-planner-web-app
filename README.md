@@ -26,7 +26,7 @@
 - 易混单词卡：输入一组英文易混词，自动查询并生成英文-中文释义卡片
 - 打印默写版：为易混单词生成适合打印的复习页面
 - 设置页：数据导出、易混单词导入导出、服务器备份设置、一键清空
-- 服务器备份：结构化 SQLite 主库、每周自动快照、手动备份与恢复
+- 服务器备份：结构化 SQLite 主库、每日/每周自动快照、分类保留、手动备份与恢复
 - 自动学习报告：服务器生成周报、月报，汇总学习时间、复盘、任务、喝水和模考
 - 学习进度仪表盘：近 30 天趋势、目标达成、复盘评分与任务完成
 - 项目进展看板：按项目查看投入、占比、最近活跃和短期趋势
@@ -68,8 +68,8 @@
 - 旧版浏览器 IndexedDB 数据可通过迁移页导入服务器。
 - 易混单词模块本地优先，保存在当前浏览器 `localStorage`。
 - 易混单词支持每小时向服务器上传备份快照，也支持手动导入导出 JSON。
-- 服务器每周自动创建一次 SQLite 快照，并保留最近 12 个周备份；设置页可手动备份和恢复。
-- 服务器端 ECDICT 英汉词典已导入 SQLite 索引，查词不依赖外部 API。
+- 服务器每日和每周自动创建 SQLite 快照，并按 daily、weekly、deploy、manual、migration 分类保留；设置页可手动备份和恢复。
+- 服务器端 ECDICT 英汉词典保存在独立的 `data/dictionary.sqlite`，查词不依赖外部 API，也不再拖大主业务库和每次业务备份。
 - 删除学习项目或科目不会破坏历史记录，历史数据保留名称快照。
 
 服务器 SQLite 拆分为以下核心表：
@@ -83,9 +83,10 @@
 - `short_term_tasks`
 - `water_intake_records`
 - `confusing_words_backup`
-- `dictionary_entries`
 - `backup_log`
 - `learning_reports`
+
+ECDICT 的 `dictionary_entries` 与导入元数据位于独立的 `data/dictionary.sqlite`。
 
 浏览器本地仍保留 Dexie/IndexedDB 结构和迁移能力，便于后续扩展。
 

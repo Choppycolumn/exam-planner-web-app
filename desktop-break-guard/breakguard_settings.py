@@ -149,17 +149,14 @@ class ScheduleSettingsDialog:
 
     def adjust(self, key: str, delta: int, minimum: int, maximum: int) -> None:
         value = self.values[key] + delta
-        if key == "day_start_minutes":
-            value %= 1440
-        else:
-            value = max(minimum, min(maximum, value))
+        value = max(minimum, min(maximum, value))
         self.values[key] = value
         self._refresh_value(key)
 
     def _refresh_value(self, key: str) -> None:
         item, unit = self.value_items[key]
         value = self.values[key]
-        text = f"{value // 60:02d}:{value % 60:02d}" if key == "day_start_minutes" else f"{value} {unit}".strip()
+        text = f"{value} {unit}".strip()
         self.canvas.itemconfigure(item, text=text)
 
     def save_timing(self) -> None:

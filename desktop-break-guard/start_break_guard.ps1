@@ -3,8 +3,19 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $app = Join-Path $scriptDir "break_guard.py"
 $packagedApp = Join-Path $scriptDir "dist\BreakGuard.exe"
 if (Test-Path $packagedApp) {
-  Start-Process -FilePath $packagedApp -WorkingDirectory $scriptDir -WindowStyle Hidden
-  exit 0
+  $signature = Get-AuthenticodeSignature -FilePath $packagedApp
+  $canRunPackagedApp = $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid
+} else {
+  $canRunPackagedApp = $false
+}
+if ($canRunPackagedApp) {
+  try {
+    Start-Process -FilePath $packagedApp -WorkingDirectory $scriptDir -WindowStyle Hidden -ErrorAction Stop
+    exit 0
+  } catch {
+    # Smart App Control can reject an unsigned local build. The signed Python
+    # runtime provides the same tray application without weakening Windows policy.
+  }
 }
 $pythonwCommand = Get-Command pythonw.exe -ErrorAction SilentlyContinue
 $pythonw = if ($pythonwCommand) { $pythonwCommand.Source } else { $null }

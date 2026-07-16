@@ -40,7 +40,7 @@ for _ in $(seq 1 20); do [[ -S "$TEST_DATA_DIR/privileged.sock" ]] && break; sle
 [[ -S "$TEST_DATA_DIR/privileged.sock" ]] || { cat "$TEST_DATA_DIR/helper.log" >&2; exit 1; }
 curl --unix-socket "$TEST_DATA_DIR/privileged.sock" -fsS http://localhost/health >/dev/null
 
-PORT=18080 DATA_DIR="$TEST_DATA_DIR" STATIC_ROOT="$STAGE_DIR/dist" PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" APP_PASSWORD='deployment-smoke-only' COOKIE_SECRET='deployment-smoke-cookie-secret-000000000000' BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/server/web.mjs" >"$TEST_DATA_DIR/server.log" 2>&1 &
+PORT=18080 DATA_DIR="$TEST_DATA_DIR" STATIC_ROOT="$STAGE_DIR/dist" PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" APP_PASSWORD='deployment-smoke-only' COOKIE_SECRET='deployment-smoke-cookie-secret-000000000000' SETTINGS_ENCRYPTION_KEY='deployment-smoke-settings-key-000000000000' BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/server/web.mjs" >"$TEST_DATA_DIR/server.log" 2>&1 &
 TEST_PID="$!"
 for _ in $(seq 1 20); do
   if "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080 >/dev/null 2>&1; then break; fi
@@ -90,7 +90,12 @@ import subprocess
 import sys
 
 target = sys.argv[1]
-keys = {'APP_PASSWORD', 'COOKIE_SECRET', 'BREAK_GUARD_TOKEN', 'CLAWBOT_SECRET', 'STUDY_PET_API_TOKEN'}
+keys = {
+    'APP_PASSWORD', 'COOKIE_SECRET', 'SETTINGS_ENCRYPTION_KEY',
+    'BREAK_GUARD_TOKEN', 'CLAWBOT_SECRET', 'STUDY_PET_API_TOKEN',
+    'BACKUP_KEEP_DAILY', 'BACKUP_KEEP_WEEKLY', 'BACKUP_KEEP_DEPLOY',
+    'BACKUP_KEEP_MANUAL', 'BACKUP_KEEP_MIGRATION', 'BACKUP_KEEP_OTHER',
+}
 values = {}
 if os.path.exists(target):
     with open(target, encoding='utf-8') as stream:
@@ -107,7 +112,7 @@ for item in shlex.split(raw):
     key, separator, value = item.partition('=')
     if separator and key in keys and value:
         values[key] = value
-missing = {'APP_PASSWORD', 'COOKIE_SECRET'} - values.keys()
+missing = {'APP_PASSWORD', 'COOKIE_SECRET', 'SETTINGS_ENCRYPTION_KEY'} - values.keys()
 if missing:
     raise SystemExit(f"missing required runtime credentials: {', '.join(sorted(missing))}")
 temporary = target + '.tmp'
@@ -172,6 +177,27 @@ deploy_and_verify() {
   systemctl is-active --quiet exam-planner-worker || return 1
 }
 
+prune_deploy_backups() {
+  local keep_count="${DEPLOY_CODE_BACKUP_KEEP:-5}"
+  local candidates=()
+  local item resolved
+  mapfile -t candidates < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 \
+    \( -type f -name 'code-pre-*.tgz' -o -type d -name 'units-pre-*' \) \
+    -printf '%T@ %p\n' | sort -nr | awk '{print $2}')
+  for item in "${candidates[@]:$((keep_count * 2))}"; do
+    resolved="$(readlink -f -- "$item")"
+    case "$resolved" in
+      "$BACKUP_DIR"/code-pre-*.tgz|"$BACKUP_DIR"/units-pre-*)
+        rm -rf -- "$resolved"
+        ;;
+      *)
+        echo "refusing to prune unexpected deployment backup path: $resolved" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
 if ! deploy_and_verify; then
   systemctl stop exam-planner-privileged 2>/dev/null || true
   systemctl stop exam-planner-worker 2>/dev/null || true
@@ -186,5 +212,6 @@ if ! deploy_and_verify; then
   exit 1
 fi
 
+prune_deploy_backups
 rm -f -- "$PACKAGE_FILE"
 echo "deployment_ok backup=$BACKUP_FILE"

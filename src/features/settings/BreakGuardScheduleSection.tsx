@@ -3,14 +3,10 @@ import { Clock3, GraduationCap, Save } from 'lucide-react';
 import { serverApi, type BreakGuardScheduleConfig, type BreakGuardScheduleResponse } from '../../api/client';
 
 const defaults: BreakGuardScheduleConfig = {
-  dailyLessons: 8,
-  lessonMinutes: 50,
   dailyTargetMinutes: 400,
   breakMinutes: 10,
-  dayStart: '08:00',
   lagGraceMinutes: 20,
   lagRepeatMinutes: 30,
-  lessonProjects: [],
 };
 
 interface BreakGuardScheduleSectionProps {

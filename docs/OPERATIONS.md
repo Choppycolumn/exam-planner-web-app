@@ -44,11 +44,20 @@ nginx -t
 - 前端页面错误摘要保留 120 天。
 - 后台任务运行记录保留 180 天。
 
+备份使用分类保留策略：
+
+- daily 7 份、weekly 4 份。
+- deploy 5 份、manual 5 份、migration 5 份、other 3 份。
+- 每类只在至少一个保留文件通过完整性校验后删除溢出文件。
+- 部署脚本另外保留最近 5 组代码回滚包与 systemd 单元备份。
+
 ## 安全基线
 
 已经完成：
 
 - `.env.example` 只列变量名，不写真实密钥。
+- `SETTINGS_ENCRYPTION_KEY` 与登录 Cookie 密钥分离，生产环境缺失时拒绝启动。
+- 设置页密文使用带版本的 AES-256-GCM；旧密文解密成功后自动迁移，失败告警按密文指纹去重。
 - `remote-audit/`、zip、临时报告加入 `.gitignore`。
 - 前端 API 错误统一解析。
 - CORS 可通过 `CORS_ORIGIN` 收窄；默认保留 `*` 以兼容本地易混词跨源备份。
@@ -56,13 +65,7 @@ nginx -t
 - 前端页面错误上报会移除 URL 查询参数，并脱敏 Cookie、Token、Password、Secret、Authorization。
 - 访问统计不保存明文 IP。
 
-仍建议继续做：
-
-- 生产 systemd 不要使用 root 用户运行。
-- Cookie 在 HTTPS 下追加 `Secure`。
-- 减小 CORS 范围，避免长期使用 `*`。
-- 把真实 secret 从 systemd 主文件迁移到权限更严格的 EnvironmentFile。
-- 对恢复备份、清空数据等高风险操作增加二次确认和操作审计。
+生产服务使用专用 `examplanner` 用户，真实密钥来自权限受限的 `/etc/exam-planner/runtime.env`。仍建议持续收窄 CORS，并定期演练备份恢复。
 
 ## 备份恢复注意
 

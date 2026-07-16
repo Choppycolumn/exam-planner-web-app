@@ -52,12 +52,12 @@ GROUP BY event_type;`, [date]);
 overdue_seconds AS overdueSeconds, created_at AS createdAt
 FROM break_guard_events ORDER BY created_at DESC, id DESC LIMIT ?;`, [limit]);
     },
-    appendStudyTime({ lessonDate, projectId, durationSeconds, lessonNumber }) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(lessonDate || ''))) return null;
+    appendStudyTime({ sessionDate, projectId, durationSeconds, sessionSequence }) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) return null;
       const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = 1 AND is_active = 1 LIMIT 1;', [projectId])[0];
       if (!project) return null;
       const minutes = Math.max(1, Math.min(24 * 60, Math.round(Number(durationSeconds || 0) / 60)));
-      const note = `Break Guard 第 ${Math.max(1, Number(lessonNumber || 1))} 节`;
+      const note = `Break Guard 学习记录 #${Math.max(1, Number(sessionSequence || 1))}`;
       database.execute(`INSERT INTO study_time_records
 (date,project_id,project_name_snapshot,minutes,note,schema_version,created_at,updated_at,user_id)
 VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'),1)
@@ -65,8 +65,8 @@ ON CONFLICT(date,project_id) DO UPDATE SET
   minutes=study_time_records.minutes+excluded.minutes,
   project_name_snapshot=excluded.project_name_snapshot,
   note=trim(study_time_records.note || CASE WHEN study_time_records.note <> '' THEN '；' ELSE '' END || excluded.note),
-  updated_at=datetime('now');`, [lessonDate, project.id, project.name, minutes, note]);
-      return { lessonDate, projectId: Number(project.id), projectName: project.name, minutes, lessonNumber: Number(lessonNumber || 1) };
+  updated_at=datetime('now');`, [sessionDate, project.id, project.name, minutes, note]);
+      return { sessionDate, projectId: Number(project.id), projectName: project.name, minutes, sessionSequence: Number(sessionSequence || 1) };
     },
   };
 }

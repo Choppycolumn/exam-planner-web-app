@@ -24,20 +24,14 @@ export function createBreakGuardService({
   cancelScheduleLagNotifications = () => {},
 }) {
   function normalizeScheduleConfig(input = {}) {
-    const projects = repository.listActiveProjects();
-    const legacyDailyLessons = Math.max(1, Math.min(12, Math.round(Number(input.dailyLessons || 8))));
-    const lessonMinutes = Math.max(10, Math.min(180, Math.round(Number(input.lessonMinutes || 50))));
-    const lessonProjects = projects.slice(0, 12).map((project) => project.id);
-    const dailyLessons = Math.max(1, lessonProjects.length || legacyDailyLessons);
+    const legacyTarget = Math.max(30, Math.min(960, Math.round(
+      Number(input.dailyLessons || 8) * Number(input.lessonMinutes || 50),
+    )));
     return {
-      dailyLessons,
-      lessonMinutes,
-      dailyTargetMinutes: Math.max(30, Math.min(960, Math.round(Number(input.dailyTargetMinutes || legacyDailyLessons * lessonMinutes)))),
+      dailyTargetMinutes: Math.max(30, Math.min(960, Math.round(Number(input.dailyTargetMinutes || legacyTarget)))),
       breakMinutes: Math.max(1, Math.min(60, Math.round(Number(input.breakMinutes || 10)))),
-      dayStart: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(input.dayStart || '')) ? String(input.dayStart) : '08:00',
       lagGraceMinutes: Math.max(0, Math.min(180, Math.round(Number(input.lagGraceMinutes ?? 20)))),
       lagRepeatMinutes: Math.max(5, Math.min(180, Math.round(Number(input.lagRepeatMinutes || 30)))),
-      lessonProjects,
     };
   }
 
@@ -99,12 +93,12 @@ export function createBreakGuardService({
     if (event.eventType === 'schedule_config_updated') schedule = saveScheduleConfig(event.payload);
     if (event.eventType === 'class_completed') {
       studyRecord = repository.appendStudyTime({
-        lessonDate: event.payload?.lessonDate,
+        sessionDate: event.payload?.sessionDate || event.payload?.lessonDate,
         projectId: Number(event.payload?.projectId || 0),
         durationSeconds: Number(event.payload?.durationSeconds || 0),
-        lessonNumber: Number(event.payload?.lessonNumber || 0),
+        sessionSequence: Number(event.payload?.sessionSequence || event.payload?.lessonNumber || 0),
       });
-      if (studyRecord) refreshStudySummariesForDate?.(studyRecord.lessonDate);
+      if (studyRecord) refreshStudySummariesForDate?.(studyRecord.sessionDate);
     }
     if (['lunch', 'dinner', 'meal'].includes(event.eventType)) {
       cancelScheduleLagNotifications();
@@ -149,9 +143,7 @@ export function createBreakGuardService({
     const text = isUnfocused
       ? `休息结束后已超过 ${Math.max(5, Math.round(event.overdueSeconds / 60))} 分钟仍未取消，已记录一次不专注。`
       : isScheduleLag
-        ? Number(event.payload?.targetMinutes || 0) > 0
-          ? `今日已学 ${Number(event.payload?.studyMinutes || 0)} / ${Number(event.payload?.targetMinutes || 0)} 分钟，当前学习时长尚未达标。请回到 Break Guard 调整今天的学习节奏。`
-          : `当前完成 ${Number(event.payload?.completedLessons || 0)} / ${Number(event.payload?.dailyLessons || 0)} 节。请回到 Break Guard 调整今天的学习节奏。`
+        ? `今日已学 ${Number(event.payload?.studyMinutes || 0)} / ${Number(event.payload?.targetMinutes || 0)} 分钟，当前学习时长尚未达标。请回到 Break Guard 调整今天的学习节奏。`
         : '课间休息已经结束，请回到学习并在桌面悬浮窗结束休息。';
     return queueProactiveNotification({
       eventKey: `break-guard:${event.eventType}:${event.eventId || event.createdAt}`,

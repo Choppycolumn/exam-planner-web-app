@@ -14,8 +14,18 @@ export function createBackupService({
   redactSecretText,
   ensureSqliteStore,
   resetSqliteRuntime,
+  retention = {},
+  dictionaryStatus = () => ({ count: 0, indexedAt: null, sizeBytes: 0 }),
 }) {
   let backupVerificationCache = null;
+  const retentionPolicy = {
+    daily: Math.max(1, Number(retention.daily || 7)),
+    weekly: Math.max(1, Number(retention.weekly || 4)),
+    deploy: Math.max(1, Number(retention.deploy || 5)),
+    manual: Math.max(1, Number(retention.manual || 5)),
+    migration: Math.max(1, Number(retention.migration || 5)),
+    other: Math.max(1, Number(retention.other || 3)),
+  };
 
   function persistBackupVerification(result) {
     backupVerificationCache = result;
@@ -60,6 +70,7 @@ export function createBackupService({
     if (kind === 'daily') {
       repository.setMetadata('last_daily_backup_at', nowISO());
     }
+    applyRetentionPolicy();
     return { kind, filePath, libraryArchivePath, createdAt: nowISO() };
   }
 
@@ -78,9 +89,53 @@ export function createBackupService({
   function listBackupFiles() {
     if (!existsSync(backupsDir)) return [];
     return readdirSync(backupsDir)
-      .filter((name) => /^exam-planner-[a-z-]+-.+\.sqlite$/.test(name))
+      .filter((name) => name.endsWith('.sqlite'))
       .map(backupFileToRecord)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  function retentionCategory(fileName) {
+    if (/exam-planner-daily-/i.test(fileName)) return 'daily';
+    if (/exam-planner-weekly-/i.test(fileName)) return 'weekly';
+    if (/pre-deploy/i.test(fileName)) return 'deploy';
+    if (/manual/i.test(fileName)) return 'manual';
+    if (/^pre-|migration|pre-/i.test(fileName)) return 'migration';
+    return 'other';
+  }
+
+  function applyRetentionPolicy() {
+    const files = listBackupFiles();
+    const grouped = Object.groupBy(files, (file) => retentionCategory(file.fileName));
+    const removed = [];
+    const skipped = [];
+    for (const [category, categoryFiles] of Object.entries(grouped)) {
+      const keepCount = retentionPolicy[category] || retentionPolicy.other;
+      const keep = categoryFiles.slice(0, keepCount);
+      const overflow = categoryFiles.slice(keepCount);
+      if (!overflow.length) continue;
+      const verified = keep.some((file) => {
+        try {
+          return sqliteIntegrityCheck(join(backupsDir, file.fileName)) === 'ok';
+        } catch {
+          return false;
+        }
+      });
+      if (!verified) {
+        skipped.push({ category, reason: 'no verified retained backup', count: overflow.length });
+        continue;
+      }
+      for (const file of overflow) {
+        try {
+          unlinkSync(join(backupsDir, file.fileName));
+          removed.push(file.fileName);
+        } catch (error) {
+          skipped.push({ category, fileName: file.fileName, reason: redactSecretText(error.message || String(error)) });
+        }
+      }
+    }
+    const result = { checkedAt: nowISO(), policy: retentionPolicy, removed, skipped };
+    repository.setMetadata('last_backup_retention_json', JSON.stringify(result));
+    return result;
   }
 
   function restoreBackupFile(fileName) {
@@ -107,33 +162,13 @@ export function createBackupService({
   }
 
   function cleanupWeeklyBackups(keepCount = 12) {
-    if (!existsSync(backupsDir)) return;
-    const weeklyBackups = readdirSync(backupsDir)
-      .filter((name) => /^exam-planner-weekly-.*\.sqlite$/.test(name))
-      .sort()
-      .reverse();
-    for (const name of weeklyBackups.slice(keepCount)) {
-      try {
-        unlinkSync(join(backupsDir, name));
-      } catch {
-        // A stale backup failing to delete should not block the app.
-      }
-    }
+    retentionPolicy.weekly = Math.max(1, Number(keepCount || retentionPolicy.weekly));
+    return applyRetentionPolicy();
   }
 
   function cleanupDailyBackups(keepCount = 14) {
-    if (!existsSync(backupsDir)) return;
-    const dailyBackups = readdirSync(backupsDir)
-      .filter((name) => /^exam-planner-daily-.*\.sqlite$/.test(name))
-      .sort()
-      .reverse();
-    for (const name of dailyBackups.slice(keepCount)) {
-      try {
-        unlinkSync(join(backupsDir, name));
-      } catch {
-        // A stale backup failing to delete should not block the app.
-      }
-    }
+    retentionPolicy.daily = Math.max(1, Number(keepCount || retentionPolicy.daily));
+    return applyRetentionPolicy();
   }
 
   function ensureDailyBackup() {
@@ -141,7 +176,7 @@ export function createBackupService({
     const oneDayMs = 24 * 60 * 60 * 1000;
     if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneDayMs) {
       createBackupFile('daily', 'automatic daily backup');
-      cleanupDailyBackups();
+      applyRetentionPolicy();
     }
   }
 
@@ -150,7 +185,7 @@ export function createBackupService({
     const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
     if (!lastBackupAt || Date.now() - new Date(lastBackupAt).getTime() >= oneWeekMs) {
       createBackupFile('weekly', 'automatic weekly backup');
-      cleanupWeeklyBackups();
+      applyRetentionPolicy();
     }
   }
 
@@ -175,12 +210,18 @@ export function createBackupService({
     ensureSqliteStore();
     const backups = listBackupFiles();
     const lastBackup = repository.latestBackup();
-    const dictionaryCount = repository.dictionaryCount();
+    const dictionary = dictionaryStatus();
     const lastWeeklyBackupAt = repository.getMetadata('last_weekly_backup_at');
     const lastDailyBackupAt = repository.getMetadata('last_daily_backup_at');
-    const dictionaryIndexedAt = repository.getMetadata('dictionary_indexed_at');
+    let lastRetention = null;
+    try {
+      const raw = repository.getMetadata('last_backup_retention_json');
+      lastRetention = raw ? JSON.parse(raw) : null;
+    } catch {
+      lastRetention = null;
+    }
     return {
-      storage: 'sqlite-tables',
+      storage: 'split-sqlite',
       sqliteFile,
       sqliteSizeBytes: existsSync(sqliteFile) ? statSync(sqliteFile).size : 0,
       backupCount: backups.length,
@@ -189,8 +230,11 @@ export function createBackupService({
       latestVerification: latestBackupVerification(backups, { force: verifyLatest }),
       lastDailyBackupAt: lastDailyBackupAt || null,
       lastWeeklyBackupAt: lastWeeklyBackupAt || null,
-      dictionaryCount,
-      dictionaryIndexedAt: dictionaryIndexedAt || null,
+      dictionaryCount: Number(dictionary.count || 0),
+      dictionaryIndexedAt: dictionary.indexedAt || null,
+      dictionary,
+      retentionPolicy,
+      lastRetention,
     };
   }
 
@@ -214,6 +258,7 @@ export function createBackupService({
     restoreBackupFile,
     cleanupWeeklyBackups,
     cleanupDailyBackups,
+    applyRetentionPolicy,
     ensureDailyBackup,
     ensureWeeklyBackup,
     getBackupStatus,

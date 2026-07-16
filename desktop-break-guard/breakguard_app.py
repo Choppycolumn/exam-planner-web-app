@@ -1,125 +1,35 @@
 from __future__ import annotations
 
-import ctypes
 import queue
-import re
-import sys
 import time
-from tkinter import BOTH, Canvas, Tk, Toplevel, messagebox
+from tkinter import Canvas, Tk, Toplevel, messagebox
 
 from breakguard_config import Config
 from breakguard_instance import SingleInstance
 from breakguard_logging import log_error
 from breakguard_runtime import DATABASE_FILE, ICON_FILE
-from breakguard_schedule import CoursePlanner
 from breakguard_settings import ScheduleSettingsDialog
-from breakguard_state import BreakStateMachine, fmt_seconds, utc_iso
+from breakguard_state import BreakStateMachine, utc_iso
 from breakguard_storage import BreakGuardStore
+from breakguard_study import StudyPlanner
 from breakguard_sync import SyncWorker
 from breakguard_tray import WindowsTrayIcon
-from liquid_style import LIQUID, LiquidPainter, draw_vertical_gradient, rounded_rect
-
-IS_WINDOWS = sys.platform.startswith("win") and hasattr(ctypes, "windll")
-
-
-def default_geometry(width: int, height: int) -> str:
-    if not IS_WINDOWS:
-        return f"{width}x{height}+80+80"
-    screen_w = ctypes.windll.user32.GetSystemMetrics(0)
-    screen_h = ctypes.windll.user32.GetSystemMetrics(1)
-    return f"{width}x{height}+{max(12, screen_w - width - 36)}+{max(12, min(72, screen_h - height - 36))}"
+from breakguard_view import ViewMixin
+from breakguard_widgets import CanvasButton, bring_to_front, clamp_window_to_screen, geometry_with_size, saved_window_size
+from breakguard_window import WindowMixin
+from liquid_style import LIQUID
 
 
-def clamp_window_to_screen(root: Tk, width: int, height: int) -> None:
-    screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-    x = max(0, min(root.winfo_x(), max(0, screen_w - width)))
-    y = max(0, min(root.winfo_y(), max(0, screen_h - height)))
-    root.geometry(f"{width}x{height}+{x}+{y}")
-
-
-def geometry_with_size(saved: str, width: int, height: int) -> str:
-    match = re.match(r"^\d+x\d+([+-]\d+)([+-]\d+)$", str(saved or ""))
-    return f"{width}x{height}{match.group(1)}{match.group(2)}" if match else default_geometry(width, height)
-
-
-def saved_window_size(saved: str, minimum_width: int, minimum_height: int) -> tuple[int, int]:
-    match = re.match(r"^(\d+)x(\d+)[+-]\d+[+-]\d+$", str(saved or ""))
-    if not match:
-        return minimum_width, minimum_height
-    return max(minimum_width, int(match.group(1))), max(minimum_height, int(match.group(2)))
-
-
-def bring_to_front(window) -> None:
-    try:
-        window.deiconify()
-        window.lift()
-        window.focus_force()
-        window.attributes("-topmost", True)
-        if IS_WINDOWS:
-            hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
-            ctypes.windll.user32.ShowWindow(hwnd, 5)
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            ctypes.windll.user32.MessageBeep(0xFFFFFFFF)
-    except Exception as exc:
-        log_error("bring window to front failed", exc)
-
-
-class CanvasButton:
-    def __init__(self, canvas: Canvas, tag: str, command, visual: dict[str, str] | None = None):
-        self.canvas, self.command = canvas, command
-        self.visual = visual or {}
-        self.hovered = self.pressed = False
-        canvas.tag_bind(tag, "<Enter>", self.enter)
-        canvas.tag_bind(tag, "<Leave>", self.leave)
-        canvas.tag_bind(tag, "<ButtonPress-1>", self.press)
-        canvas.tag_bind(tag, "<ButtonRelease-1>", self.release)
-
-    def enter(self, _event) -> None:
-        self.hovered = True
-        self.canvas.configure(cursor="hand2")
-        self._paint("hover")
-
-    def leave(self, _event) -> None:
-        self.hovered = self.pressed = False
-        self.canvas.configure(cursor="")
-        self._paint("normal")
-
-    def press(self, _event) -> None:
-        self.pressed = True
-        self._paint("pressed")
-
-    def release(self, _event) -> None:
-        should_run = self.pressed and self.hovered
-        self.pressed = False
-        self._paint("hover" if self.hovered else "normal")
-        if should_run:
-            self.canvas.after_idle(self.command)
-
-    def _paint(self, state: str) -> None:
-        if self.visual.get("surface") and self.visual.get(state):
-            self.canvas.itemconfigure(self.visual["surface"], fill=self.visual[state])
-
-    def set_palette(self, normal: str, hover: str, pressed: str, foreground: str) -> None:
-        self.visual.update({"normal": normal, "hover": hover, "pressed": pressed})
-        self.canvas.itemconfigure(self.visual.get("surface", ""), fill=normal)
-        self.canvas.itemconfigure(self.visual.get("label", ""), fill=foreground)
-        if self.visual.get("shine"):
-            self.canvas.itemconfigure(self.visual["shine"], state="normal" if foreground == "#ffffff" else "hidden")
-
-
-class BreakGuardApp:
+class BreakGuardApp(WindowMixin, ViewMixin):
     def __init__(self, instance: SingleInstance, tray_actions: "queue.Queue[str]"):
         self.instance = instance
         self.tray_actions = tray_actions
         self.config = Config.load()
         self.store = BreakGuardStore(DATABASE_FILE)
         self.machine = BreakStateMachine(self.store, self.config.break_minutes * 60, self.config.notify_after_seconds, self.config.unfocused_after_seconds)
-        self.planner = CoursePlanner(
+        self.planner = StudyPlanner(
             self.store,
-            self.config.daily_lessons,
-            self.config.lesson_minutes,
             self.config.break_minutes,
-            self.config.day_start,
             self.config.lag_grace_minutes,
             self.config.lag_repeat_minutes,
             self.config.daily_target_minutes,
@@ -185,496 +95,67 @@ class BreakGuardApp:
         self.refresh_view_state()
         self.poll_queues()
         self.tick()
-
-    def enable_acrylic(self) -> None:
-        if not IS_WINDOWS:
-            return
-        try:
-            self.root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
-
-            corner = ctypes.c_int(2)
-            backdrop = ctypes.c_int(2)
-            dark = ctypes.c_int(1 if LIQUID.bg_top.startswith("#0") else 0)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(corner), ctypes.sizeof(corner))
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 38, ctypes.byref(backdrop), ctypes.sizeof(backdrop))
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark))
-            region = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, self.width + 1, self.height + 1, 34, 34)
-            ctypes.windll.user32.SetWindowRgn(hwnd, region, True)
-        except Exception as exc:
-            log_error("acrylic enable failed", exc)
-
-    def hide_from_taskbar(self) -> None:
-        if not IS_WINDOWS:
-            return
-        try:
-            self.root.update_idletasks()
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            get_long, set_long = ctypes.windll.user32.GetWindowLongPtrW, ctypes.windll.user32.SetWindowLongPtrW
-            style = get_long(hwnd, -20)
-            set_long(hwnd, -20, (style & ~0x00040000) | 0x00000080)
-            self.root.withdraw()
-            self.root.after(10, self.root.deiconify)
-        except Exception as exc:
-            log_error("taskbar style update failed", exc)
-
-    def build_ui(self) -> None:
-        for child in self.root.winfo_children():
-            child.destroy()
-        self.button_commands = []
-        self.buttons = {}
-        self.timer_item = self.subtitle_item = self.status_item = self.state_dot = None
-        self.progress_item = self.target_item = None
-        if self.compact_mode:
-            self.build_compact_ui()
-            return
-        canvas = Canvas(self.root, width=self.width, height=self.height, bg=LIQUID.bg_bottom, highlightthickness=0)
-        self.canvas = canvas
-        canvas.pack(fill=BOTH, expand=True)
-        painter = LiquidPainter(canvas)
-        painter.background(self.width, self.height)
-        painter.glass_panel(8, 8, self.width - 8, self.height - 8)
-        right = self.width - 28
-        center = self.width / 2
-        self.state_dot = painter.status_dot(29, 31, LIQUID.success)
-        canvas.create_text(50, 37, anchor="w", text="Break Guard", fill=LIQUID.text_primary, font=LIQUID.font_title)
-        canvas.create_text(50, 57, anchor="w", text="每日学习 · 专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        close_visual = painter.icon_button(self.width - 54, 22, 32, "×", "btn_close")
-        close_visual["label"] = "btn_close__label"
-        close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
-        self.button_commands.append(close_button)
-        self.buttons["btn_close"] = close_button
-        canvas.create_text(28, 87, anchor="w", text="选择科目开始学习，结束后自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
-
-        rounded_rect(canvas, 28, 106, right, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
-        canvas.create_text(46, 127, anchor="w", text="今日学习", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.progress_item = canvas.create_text(right - 18, 127, anchor="e", text="0 分钟 / 目标", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
-        self.progress_track_width = max(1, right - 64)
-        rounded_rect(canvas, 46, 149, right - 18, 159, 5, fill=LIQUID.neutral_soft, outline="")
-        self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
-        self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        canvas.create_text(28, 210, anchor="w", text="今日课程", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        canvas.create_text(right, 210, anchor="e", text="点击科目即可切换", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
-        self.draw_schedule()
-
-        vertical_offset = (self.schedule_rows - 2) * 54
-        timer_top = 334 + vertical_offset
-        painter.timer_well(28, timer_top, right, timer_top + 104)
-        self.timer_item = canvas.create_text(center, timer_top + 41, text="选择课程", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 28, "bold"))
-        self.subtitle_item = canvas.create_text(center, timer_top + 82, text="准备开始今天的学习", fill=LIQUID.text_secondary, font=LIQUID.font_status)
-
-        action_top = timer_top + 121
-        settings_width = 118
-        primary_width = self.width - 186
-        self.add_button(28, action_top, primary_width, 50, "开始学习", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
-        self.add_button(self.width - 146, action_top, settings_width, 50, "学习设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
-        canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        chip_width = (self.width - 80) // 3
-        self.add_button(28, action_top + 88, chip_width, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
-        self.add_button(40 + chip_width, action_top + 88, chip_width, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
-        compact_action = self.enter_compact_mode if self.planner.session else self.hide_to_tray
-        compact_label = "专注小窗" if self.planner.session else "收起"
-        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, compact_label, "btn_min", compact_action, LIQUID.control_bg, LIQUID.text_secondary)
-
-        status_top = action_top + 141
-        rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
-        canvas.create_oval(40, status_top + 10, 48, status_top + 18, fill=LIQUID.success, outline="")
-        self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=max(260, self.width - 100))
-
-    def build_compact_ui(self) -> None:
-        canvas = Canvas(self.root, width=self.width, height=self.height, bg=LIQUID.bg_bottom, highlightthickness=0)
-        self.canvas = canvas
-        canvas.pack(fill=BOTH, expand=True)
-        painter = LiquidPainter(canvas)
-        painter.background(self.width, self.height)
-        painter.glass_panel(8, 8, self.width - 8, self.height - 8)
-        self.state_dot = painter.status_dot(27, 26, LIQUID.accent)
-        session = self.planner.session
-        course_title = session.project_name if session else "学习计时"
-        canvas.create_text(47, 31, anchor="w", text=course_title[:18], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        canvas.create_text(47, 52, anchor="w", text="专注小窗 · 正在自动记录", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
-
-        expand_visual = painter.icon_button(self.width - 86, 20, 28, "↗", "btn_expand")
-        expand_visual["label"] = "btn_expand__label"
-        expand_button = CanvasButton(canvas, "btn_expand", self.exit_compact_mode, expand_visual)
-        self.button_commands.append(expand_button)
-        self.buttons["btn_expand"] = expand_button
-        close_visual = painter.icon_button(self.width - 50, 20, 28, "×", "btn_close")
-        close_visual["label"] = "btn_close__label"
-        close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
-        self.button_commands.append(close_button)
-        self.buttons["btn_close"] = close_button
-
-        self.timer_item = canvas.create_text(34, 103, anchor="w", text="00:00", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 34, "bold"))
-        self.subtitle_item = canvas.create_text(36, 137, anchor="w", text="已开始自动计时", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8, "bold"))
-        self.add_button(self.width - 154, 82, 124, 58, "结束课程", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
-
-    def schedule_row_count(self) -> int:
-        project_count = max(1, min(12, len(self.config.available_projects)))
-        return max(1, (project_count + 1) // 2)
-
-    def preferred_height(self) -> int:
-        return max(586, 640 + (self.schedule_rows - 2) * 54)
-
-    def enter_compact_mode(self) -> None:
-        if self.compact_mode:
-            return
-        self.normal_width, self.normal_height = self.width, self.height
-        self.normal_geometry = f"{self.normal_width}x{self.normal_height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
-        self.config.window_geometry = self.normal_geometry
-        self.config.save()
-        right_edge = self.root.winfo_x() + self.normal_width
-        top = self.root.winfo_y()
-        self.compact_mode = True
-        self.width, self.height = 360, 168
-        self.root.geometry(f"{self.width}x{self.height}+{max(0, right_edge - self.width)}+{max(0, top)}")
-        self.build_ui()
-        self.enable_acrylic()
-        clamp_window_to_screen(self.root, self.width, self.height)
-        self.refresh_view_state()
-
-    def exit_compact_mode(self) -> None:
-        if not self.compact_mode:
-            return
-        self.compact_mode = False
-        self.width, self.height = self.normal_width, self.normal_height
-        self.root.geometry(geometry_with_size(self.normal_geometry, self.width, self.height))
-        self.build_ui()
-        self.enable_acrylic()
-        clamp_window_to_screen(self.root, self.width, self.height)
-        self.refresh_view_state()
-
-    def draw_schedule(self) -> None:
-        if self.canvas is None:
-            return
-        self.canvas.delete("schedule_dynamic")
-        projects = self.config.available_projects[:12]
-        if not projects:
-            self.canvas.create_text(28, 247, anchor="w", text="等待从网站同步学习项目", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 9), tags="schedule_dynamic")
-            return
-        gap = 10
-        tile_width = max(120, (self.width - 66) // 2)
-        selected_lesson = self.planner.selected_lesson()
-        for index, project in enumerate(projects):
-            lesson_number = index + 1
-            row, column = divmod(index, 2)
-            x, y = 28 + column * (tile_width + gap), 226 + row * 54
-            active = bool(self.planner.session and int(self.planner.session.project_id) == int(project["id"]))
-            selected = lesson_number == selected_lesson
-            fill = LIQUID.accent_soft if active or selected else LIQUID.control_bg
-            foreground = LIQUID.accent if active or selected else LIQUID.text_primary
-            marker = "●" if active else "▶" if selected else "○"
-            lesson_tag = f"lesson_slot_{lesson_number}"
-            tags = ("schedule_dynamic", lesson_tag)
-            project_name = (project.get("name") or "未命名课程")[:10]
-            rounded_rect(
-                self.canvas, x, y, x + tile_width, y + 46, 14,
-                fill=fill,
-                outline=LIQUID.accent if active or selected else LIQUID.panel_border_soft,
-                width=2 if active or selected else 1,
-                tags=tags,
-            )
-            self.canvas.create_text(x + 16, y + 23, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
-            self.canvas.create_text(x + 31, y + 16, anchor="w", text=project_name, fill=foreground, font=("Microsoft YaHei UI", 9, "bold"), tags=tags)
-            state_text = "学习中" if active else "当前课程" if selected else "点击选择"
-            self.canvas.create_text(x + 31, y + 33, anchor="w", text=state_text, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
-            self.canvas.tag_bind(lesson_tag, "<ButtonRelease-1>", lambda _event, number=lesson_number: self.select_current_lesson(number))
-            self.canvas.tag_bind(lesson_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
-            self.canvas.tag_bind(lesson_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
-
-    def add_button(self, x, y, width, height, text, tag, command, fill, foreground, primary=False) -> None:
-        visual = LiquidPainter(self.canvas).button(x, y, width, height, text, tag, fill, foreground, primary=primary)
-        visual["label"] = f"{tag}__label"
-        button = CanvasButton(self.canvas, tag, command, visual)
-        self.button_commands.append(button)
-        self.buttons[tag] = button
-
-    def start_drag(self, event) -> None:
-        edge = self.resize_hit_test(event.x, event.y)
-        if edge:
-            self.resize_edge = edge
-            self.resize_origin = (
-                event.x_root,
-                event.y_root,
-                self.root.winfo_x(),
-                self.root.winfo_y(),
-                self.root.winfo_width(),
-                self.root.winfo_height(),
-            )
-            self.resize_target = None
-            self.show_resize_preview()
-            return
-        header_limit = self.width - (100 if self.compact_mode else 64)
-        header_height = 72 if self.compact_mode else 96
-        if event.widget is self.canvas and event.y < header_height and event.x < header_limit:
-            self.dragging = True
-            self.drag_offset = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
-
-    def drag(self, event) -> None:
-        if self.resize_edge and self.resize_origin:
-            now = time.monotonic()
-            if now - self.last_resize_update >= 0.025:
-                self.last_resize_update = now
-                self.apply_resize(event.x_root, event.y_root)
-        elif self.dragging:
-            self.root.geometry(f"+{event.x_root - self.drag_offset[0]}+{event.y_root - self.drag_offset[1]}")
-
-    def apply_resize(self, pointer_x: int, pointer_y: int) -> None:
-        if not self.resize_edge or not self.resize_origin:
-            return
-        start_x, start_y, window_x, window_y, window_width, window_height = self.resize_origin
-        delta_x, delta_y = pointer_x - start_x, pointer_y - start_y
-        x, y, width, height = window_x, window_y, window_width, window_height
-        if "e" in self.resize_edge:
-            width = max(self.minimum_width, window_width + delta_x)
-        if "s" in self.resize_edge:
-            height = max(self.minimum_height, window_height + delta_y)
-        if "w" in self.resize_edge:
-            width = max(self.minimum_width, window_width - delta_x)
-            x = window_x + window_width - width
-        if "n" in self.resize_edge:
-            height = max(self.minimum_height, window_height - delta_y)
-            y = window_y + window_height - height
-        self.resize_target = (x, y, width, height)
-        if self.resize_preview and self.resize_preview.winfo_exists():
-            self.resize_preview.geometry(f"{width}x{height}+{x}+{y}")
-            self.resize_preview.update_idletasks()
-            if self.resize_preview_canvas is not None and self.resize_preview_border is not None:
-                self.resize_preview_canvas.coords(self.resize_preview_border, 2, 2, width - 3, height - 3)
-
-    def show_resize_preview(self) -> None:
-        self.close_resize_preview()
-        try:
-            preview = Toplevel(self.root)
-            preview.withdraw()
-            preview.overrideredirect(True)
-            preview.attributes("-topmost", True)
-            preview.configure(bg="#ff00ff")
-            if IS_WINDOWS:
-                preview.attributes("-transparentcolor", "#ff00ff")
-            canvas = Canvas(preview, bg="#ff00ff", highlightthickness=0)
-            canvas.pack(fill=BOTH, expand=True)
-            border = canvas.create_rectangle(
-                2, 2, self.root.winfo_width() - 3, self.root.winfo_height() - 3,
-                outline=LIQUID.accent, width=3,
-            )
-            preview.geometry(
-                f"{self.root.winfo_width()}x{self.root.winfo_height()}+{self.root.winfo_x()}+{self.root.winfo_y()}"
-            )
-            preview.deiconify()
-            preview.lift()
-            self.resize_preview = preview
-            self.resize_preview_canvas = canvas
-            self.resize_preview_border = border
-        except Exception as exc:
-            self.resize_preview = None
-            self.resize_preview_canvas = None
-            self.resize_preview_border = None
-            log_error("resize preview failed", exc)
-
-    def close_resize_preview(self) -> None:
-        preview = self.resize_preview
-        self.resize_preview = None
-        self.resize_preview_canvas = None
-        self.resize_preview_border = None
-        if preview is not None:
-            try:
-                if preview.winfo_exists():
-                    preview.destroy()
-            except Exception:
-                pass
-
-    def stop_drag(self, event) -> None:
-        if self.resize_edge:
-            current_status = self.canvas.itemcget(self.status_item, "text") if self.canvas is not None and self.status_item else ""
-            self.apply_resize(event.x_root, event.y_root)
-            target = self.resize_target
-            self.close_resize_preview()
-            self.resize_edge = ""
-            self.resize_origin = None
-            self.resize_target = None
-            if target:
-                x, y, width, height = target
-                self.root.geometry(f"{width}x{height}+{x}+{y}")
-            self.root.update_idletasks()
-            self.width = max(self.minimum_width, self.root.winfo_width())
-            self.height = max(self.minimum_height, self.root.winfo_height())
-            self.normal_width, self.normal_height = self.width, self.height
-            self.root.geometry(f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}")
-            self.build_ui()
-            self.enable_acrylic()
-            clamp_window_to_screen(self.root, self.width, self.height)
-            self.refresh_view_state()
-            if current_status:
-                self.set_status(current_status)
-            self.persist_window_geometry()
-            self.update_resize_cursor(event)
-            return
-        if not self.dragging:
-            return
-        self.dragging = False
-        clamp_window_to_screen(self.root, self.width, self.height)
-        self.persist_window_geometry()
-
-    def resize_hit_test(self, x: int, y: int) -> str:
-        if self.compact_mode:
-            return ""
-        margin = 9
-        horizontal = "w" if x <= margin else "e" if x >= self.width - margin else ""
-        vertical = "n" if y <= margin else "s" if y >= self.height - margin else ""
-        return vertical + horizontal
-
-    def update_resize_cursor(self, event) -> None:
-        if self.canvas is None or self.dragging or self.resize_edge:
-            return
-        edge = self.resize_hit_test(event.x, event.y)
-        cursors = {
-            "n": "size_ns", "s": "size_ns", "e": "size_we", "w": "size_we",
-            "ne": "size_ne_sw", "sw": "size_ne_sw", "nw": "size_nw_se", "se": "size_nw_se",
-        }
-        try:
-            self.canvas.configure(cursor=cursors.get(edge, ""))
-        except Exception:
-            self.canvas.configure(cursor="sizing" if edge else "")
-
-    def persist_window_geometry(self) -> None:
-        if self.compact_mode:
-            return
-        self.normal_width, self.normal_height = self.width, self.height
-        self.normal_geometry = f"{self.width}x{self.height}+{self.root.winfo_x()}+{self.root.winfo_y()}"
-        self.config.window_geometry = self.normal_geometry
-        self.config.save()
-
-    def set_status(self, text: str) -> None:
-        if self.canvas is not None and self.status_item is not None:
-            self.canvas.itemconfigure(self.status_item, text=text)
-
-    def set_timer(self, text: str, subtitle: str) -> None:
-        if self.canvas is not None and self.timer_item is not None:
-            self.canvas.itemconfigure(self.timer_item, text=text)
-        if self.canvas is not None and self.subtitle_item is not None:
-            self.canvas.itemconfigure(self.subtitle_item, text=subtitle)
-
-    def set_tone(self, tone: str) -> None:
-        if self.canvas is not None and self.state_dot is not None:
-            color = {"idle": LIQUID.success, "running": LIQUID.accent, "warning": LIQUID.danger, "meal": LIQUID.warning}.get(tone, LIQUID.success)
-            self.canvas.itemconfigure(self.state_dot, fill=color)
-
-    def set_action_emphasis(self, running: bool) -> None:
-        primary = self.buttons.get("btn_primary")
-        if not primary:
-            return
-        primary.set_palette(LIQUID.accent, LIQUID.accent_hover, LIQUID.accent_pressed, "#ffffff")
-
-    def update_progress(self) -> dict:
-        summary = self.planner.summary()
-        if self.canvas is None:
-            return summary
-        study_minutes = summary["study_seconds"] // 60
-        target_minutes = summary["target_minutes"]
-        self.canvas.itemconfigure(self.progress_item, text=f"{self.format_minutes(study_minutes)} / {self.format_minutes(target_minutes)}")
-        pause_text = f" · {summary['paused_label']}中" if summary["paused_label"] else ""
-        self.canvas.itemconfigure(self.target_item, text=f"已学 {study_minutes} 分钟 · 目标 {target_minutes} 分钟{pause_text}")
-        self.canvas.delete("progress_fill")
-        width = max(1, int(self.progress_track_width * summary["progress"]))
-        self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
-        self.draw_schedule()
-        return summary
-
-    @staticmethod
-    def format_minutes(minutes: int) -> str:
-        minutes = max(0, int(minutes))
-        hours, remainder = divmod(minutes, 60)
-        return f"{hours}小时{remainder:02d}分" if hours else f"{remainder}分钟"
-
-    def project_for_lesson(self, lesson_number: int) -> dict:
+    def project_ids(self) -> list[int]:
+        return [int(project["id"]) for project in self.config.available_projects[:12] if int(project.get("id", 0)) > 0]
+    def project_by_id(self, project_id: int) -> dict:
         projects = [project for project in self.config.available_projects if int(project.get("id", 0)) > 0]
         if not projects:
             return {"id": 0, "name": "待分配", "color": "#64748b"}
-        index = max(0, int(lesson_number) - 1)
-        project_id = self.config.lesson_projects[index] if index < len(self.config.lesson_projects) else projects[index % len(projects)]["id"]
-        return next((project for project in projects if int(project["id"]) == int(project_id)), projects[index % len(projects)])
-
-    def normalize_lesson_projects(self) -> None:
-        projects = self.config.available_projects[:12]
-        if not projects:
-            self.config.lesson_projects = []
-            self.config.daily_lessons = 1
-            return
-        self.config.lesson_projects = [int(project["id"]) for project in projects]
-        self.config.daily_lessons = len(projects)
-
-    def select_current_lesson(self, lesson_number: int) -> None:
+        return next((project for project in projects if int(project["id"]) == int(project_id)), projects[0])
+    def select_current_project(self, project_id: int) -> None:
         if self.planner.session:
             self.set_status("课程进行中，结束后再切换当前课程")
             return
-        selected = self.planner.select_lesson(lesson_number)
-        project = self.project_for_lesson(selected)
+        selected = self.planner.select_project(project_id)
+        project = self.project_by_id(selected)
         self.set_status(f"已选择课程：{project['name']}")
         self.refresh_view_state()
-
     def schedule_config_payload(self) -> dict:
-        self.normalize_lesson_projects()
         return {
-            "dailyLessons": self.config.daily_lessons,
-            "lessonMinutes": self.config.lesson_minutes,
             "dailyTargetMinutes": self.config.daily_target_minutes,
             "breakMinutes": self.config.break_minutes,
-            "dayStart": self.config.day_start,
             "lagGraceMinutes": self.config.lag_grace_minutes,
             "lagRepeatMinutes": self.config.lag_repeat_minutes,
-            "lessonProjects": self.config.lesson_projects,
         }
-
     def sync_schedule_config(self) -> None:
         payload = self.schedule_config_payload()
         event_id = f"schedule_config_{int(time.time() * 1000)}"
         self.client.post_event("schedule_config_updated", event_id, note="桌面端更新每日学习设置", payload=payload)
-
     def apply_remote_schedule(self, message: dict) -> None:
         config = message.get("config") or {}
         projects = message.get("projects") or []
-        legacy_lessons = max(1, min(12, int(config.get("dailyLessons", self.config.daily_lessons))))
-        legacy_minutes = max(10, min(180, int(config.get("lessonMinutes", self.config.lesson_minutes))))
-        self.config.daily_lessons = legacy_lessons
-        self.config.lesson_minutes = legacy_minutes
-        self.config.daily_target_minutes = max(30, min(960, int(config.get("dailyTargetMinutes", self.config.daily_target_minutes or legacy_lessons * legacy_minutes))))
+        self.config.daily_target_minutes = max(30, min(960, int(config.get("dailyTargetMinutes", self.config.daily_target_minutes))))
         self.config.break_minutes = max(1, min(60, int(config.get("breakMinutes", self.config.break_minutes))))
-        self.config.day_start = str(config.get("dayStart", self.config.day_start))
         self.config.lag_grace_minutes = max(0, min(180, int(config.get("lagGraceMinutes", self.config.lag_grace_minutes))))
         self.config.lag_repeat_minutes = max(5, min(180, int(config.get("lagRepeatMinutes", self.config.lag_repeat_minutes))))
         self.config.available_projects = [
             {"id": int(item["id"]), "name": str(item["name"]), "color": str(item.get("color", "#2563eb"))}
             for item in projects if isinstance(item, dict) and item.get("id") and item.get("name")
         ]
-        self.normalize_lesson_projects()
         self.config.save()
         self.on_schedule_settings_saved(sync=False)
         self.set_status("已从网站同步课程与每日学习目标")
-
     def primary_action(self) -> None:
         if self.planner.session:
-            self.finish_course(auto=False)
+            self.finish_study(auto=False)
         elif self.machine.session:
             self.cancel_break()
         else:
-            self.start_course()
-
-    def start_course(self) -> None:
+            self.start_study()
+    def start_study(self) -> None:
         if self.machine.session:
             self.set_status("请先结束当前休息")
             return
-        next_lesson = self.planner.summary()["next_lesson"]
-        project = self.project_for_lesson(next_lesson)
+        summary = self.planner.summary(available_project_ids=self.project_ids())
+        project = self.project_by_id(summary["selected_project_id"])
         if int(project.get("id", 0)) <= 0:
             self.set_status("尚未同步到课程，请稍后再试")
             self.client.last_config_pull = 0.0
             self.client.wake_event.set()
             return
-        session = self.planner.start_course(
+        session = self.planner.start_study(
             project_id=project["id"],
             project_name=project["name"],
-            lesson_number=next_lesson,
         )
         self.hide_fullscreen()
         self.client.post_event(
@@ -683,21 +164,19 @@ class BreakGuardApp:
             startedAt=session.started_iso,
             note=f"开始学习：{session.project_name}",
             payload={
-                "lessonNumber": session.lesson_number,
-                "dailyLessons": self.config.daily_lessons,
+                "sessionSequence": session.sequence_number,
                 "projectId": session.project_id,
                 "projectName": session.project_name,
-                "lessonDate": session.lesson_date,
+                "sessionDate": session.session_date,
             },
         )
         self.set_status(f"{session.project_name} 已开始自动计时")
         self.enter_compact_mode()
-
-    def finish_course(self, auto: bool = False) -> None:
+    def finish_study(self, auto: bool = False) -> None:
         session = self.planner.session
         if not session:
             return
-        completed, duration = self.planner.complete_course()
+        completed, duration = self.planner.complete_study()
         self.client.post_event(
             "class_completed",
             f"{completed.session_id}_class_completed",
@@ -705,12 +184,11 @@ class BreakGuardApp:
             endedAt=utc_iso(),
             note=f"{completed.project_name}{'到时自动' if auto else '手动'}结束学习",
             payload={
-                "lessonNumber": completed.lesson_number,
+                "sessionSequence": completed.sequence_number,
                 "durationSeconds": duration,
-                "dailyLessons": self.config.daily_lessons,
                 "projectId": completed.project_id,
                 "projectName": completed.project_name,
-                "lessonDate": completed.lesson_date,
+                "sessionDate": completed.session_date,
             },
         )
         break_session = self.machine.start()
@@ -723,20 +201,15 @@ class BreakGuardApp:
         self.exit_compact_mode()
         self.set_status(f"{completed.project_name}学习完成，自动休息 {self.config.break_minutes} 分钟")
         self.refresh_view_state()
-
     def open_schedule_settings(self) -> None:
         if self.settings_dialog and self.settings_dialog.window.winfo_exists():
             bring_to_front(self.settings_dialog.window)
             return
         self.settings_dialog = ScheduleSettingsDialog(self.root, self.config, self.on_schedule_settings_saved)
-
     def on_schedule_settings_saved(self, sync: bool = True) -> None:
         self.machine.break_seconds = self.config.break_minutes * 60
         self.planner.configure(
-            self.config.daily_lessons,
-            self.config.lesson_minutes,
             self.config.break_minutes,
-            self.config.day_start,
             self.config.lag_grace_minutes,
             self.config.lag_repeat_minutes,
             self.config.daily_target_minutes,
@@ -764,14 +237,12 @@ class BreakGuardApp:
             self.sync_schedule_config()
         self.set_status("每日学习设置已更新")
         self.refresh_view_state()
-
     def start_break(self) -> None:
         session = self.machine.start()
         self.client.post_event("break_started", f"{session.session_id}_started", startedAt=session.started_iso, note="学习结束后手动开始休息")
         self.set_tone("running")
         self.set_status("休息开始，保持 10 分钟")
         self.refresh_view_state()
-
     def cancel_break(self) -> None:
         session = self.machine.session
         if not session:
@@ -784,7 +255,6 @@ class BreakGuardApp:
         self.hide_fullscreen()
         self.set_status("休息结束，可以选择课程继续学习")
         self.refresh_view_state()
-
     def meal(self, kind: str) -> None:
         if self.planner.session or self.machine.session:
             self.set_status("请先结束当前课程或休息，再进入吃饭暂停")
@@ -797,193 +267,10 @@ class BreakGuardApp:
         self.set_tone("meal")
         self.set_status(f"{label}暂停中；开始学习时自动恢复进度提醒")
         self.refresh_view_state()
-
-    def hide_to_tray(self) -> None:
-        if self.exiting:
-            return
-        if not self.tray.available:
-            self.set_status("托盘不可用，已阻止隐藏以免窗口丢失")
-            self.root.lift()
-            return
-        self.hidden_to_tray = True
-        self.root.withdraw()
-
-    def show_window(self) -> None:
-        self.hidden_to_tray = False
-        self.build_ui()
-        self.root.deiconify()
-        self.root.lift()
-        clamp_window_to_screen(self.root, self.width, self.height)
-        self.refresh_view_state()
-
-    def toggle_window(self) -> None:
-        if self.hidden_to_tray or not self.root.winfo_viewable():
-            self.show_window()
-        else:
-            self.hide_to_tray()
-
-    def reset_window_position(self) -> None:
-        self.compact_mode = False
-        self.width = self.minimum_width
-        self.height = self.minimum_height
-        self.normal_width, self.normal_height = self.width, self.height
-        self.config.window_geometry = ""
-        self.config.save()
-        self.root.geometry(default_geometry(self.width, self.height))
-        self.normal_geometry = default_geometry(self.width, self.height)
-        self.show_window()
-        self.set_status("窗口位置已重置")
-
-    def show_fullscreen(self, overtime: int) -> None:
-        if self.fullscreen and self.fullscreen.winfo_exists():
-            if self.fullscreen_kind != "break":
-                self.hide_fullscreen()
-            else:
-                if self.fullscreen_timer_item is not None:
-                    self.fullscreen_canvas.itemconfigure(self.fullscreen_timer_item, text=f"已经超时 {fmt_seconds(overtime)}，现在回到学习。")
-                if time.time() - self.last_fullscreen_raise >= 10:
-                    bring_to_front(self.fullscreen)
-                    self.last_fullscreen_raise = time.time()
-                return
-        window = Toplevel(self.root)
-        self.fullscreen = window
-        self.fullscreen_kind = "break"
-        window.attributes("-fullscreen", True)
-        window.attributes("-topmost", True)
-        window.protocol("WM_DELETE_WINDOW", self.cancel_break)
-        width, height = window.winfo_screenwidth(), window.winfo_screenheight()
-        canvas = Canvas(window, width=width, height=height, bg="#08111f", highlightthickness=0, name="canvas")
-        self.fullscreen_canvas = canvas
-        canvas.pack(fill=BOTH, expand=True)
-        draw_vertical_gradient(canvas, width, height, "#08111f", "#17243a")
-        card_w, card_h = min(760, width - 80), 390
-        x1, y1 = (width - card_w) // 2, max(120, (height - card_h) // 2)
-        x2, y2 = x1 + card_w, y1 + card_h
-        rounded_rect(canvas, x1 + 5, y1 + 10, x2 + 5, y2 + 10, 44, fill="#050b14", outline="")
-        rounded_rect(canvas, x1, y1, x2, y2, 44, fill="#172237", outline="#64748b", width=1)
-        rounded_rect(canvas, x1 + 7, y1 + 7, x2 - 7, y2 - 7, 38, fill="#1d2a40", outline="#334155", width=1)
-        rounded_rect(canvas, width / 2 - 92, y1 + 34, width / 2 + 92, y1 + 68, 17, fill="#3f1f2a", outline="#fb7185", width=1)
-        canvas.create_text(width / 2, y1 + 51, text="休息计时已结束", fill="#fda4af", font=("Microsoft YaHei UI", 11, "bold"))
-        canvas.create_text(width / 2, y1 + 128, text="现在回来", fill="#f8fafc", font=("Microsoft YaHei UI", 52, "bold"))
-        self.fullscreen_timer_item = canvas.create_text(width / 2, y1 + 196, text=f"已经超时 {fmt_seconds(overtime)}，现在回到学习。", fill="#e2e8f0", font=("Microsoft YaHei UI", 22, "bold"))
-        canvas.create_text(width / 2, y1 + 244, text="超过 5 分钟仍未确认，网站会记录一次不专注。", fill="#94a3b8", font=("Microsoft YaHei UI", 12))
-        tag, button_w, button_h = "fullscreen_back", 210, 60
-        button_x, button_y = int(width / 2 - button_w / 2), y1 + 292
-        rounded_rect(canvas, button_x + 2, button_y + 4, button_x + button_w + 2, button_y + button_h + 4, 30, fill="#050b14", outline="", tags=tag)
-        rounded_rect(canvas, button_x, button_y, button_x + button_w, button_y + button_h, 30, fill="#f8fafc", outline="#ffffff", width=1, tags=(tag, f"{tag}__surface"))
-        canvas.create_text(width / 2, button_y + button_h / 2, text="结束休息", fill="#111827", font=("Microsoft YaHei UI", 16, "bold"), tags=(tag, f"{tag}__label"))
-        self.button_commands.append(CanvasButton(canvas, tag, self.cancel_break, {
-            "surface": f"{tag}__surface",
-            "label": f"{tag}__label",
-            "normal": "#f8fafc",
-            "hover": "#e0ecff",
-            "pressed": "#cbdcf4",
-        }))
-        window.bind("<Escape>", lambda _event: self.cancel_break())
-        window.after(50, lambda: bring_to_front(window))
-        self.last_fullscreen_raise = time.time()
-
-    def show_progress_warning(self, snapshot: dict) -> None:
-        if self.fullscreen and self.fullscreen.winfo_exists():
-            if self.fullscreen_kind == "break":
-                return
-            bring_to_front(self.fullscreen)
-            return
-        window = Toplevel(self.root)
-        self.fullscreen = window
-        self.fullscreen_kind = "lag"
-        window.attributes("-fullscreen", True)
-        window.attributes("-topmost", True)
-        window.protocol("WM_DELETE_WINDOW", self.hide_fullscreen)
-        width, height = window.winfo_screenwidth(), window.winfo_screenheight()
-        canvas = Canvas(window, width=width, height=height, bg="#0b1020", highlightthickness=0)
-        self.fullscreen_canvas = canvas
-        canvas.pack(fill=BOTH, expand=True)
-        draw_vertical_gradient(canvas, width, height, "#0b1020", "#24152f")
-        card_w, card_h = min(820, width - 80), 430
-        x1, y1 = (width - card_w) // 2, max(100, (height - card_h) // 2)
-        x2, y2 = x1 + card_w, y1 + card_h
-        rounded_rect(canvas, x1 + 6, y1 + 12, x2 + 6, y2 + 12, 46, fill="#050711", outline="")
-        rounded_rect(canvas, x1, y1, x2, y2, 46, fill="#211a32", outline="#a78bfa", width=1)
-        rounded_rect(canvas, width / 2 - 100, y1 + 34, width / 2 + 100, y1 + 70, 18, fill="#3a2540", outline="#f59e0b", width=1)
-        canvas.create_text(width / 2, y1 + 52, text="学习进度提醒", fill="#fbbf24", font=("Microsoft YaHei UI", 11, "bold"))
-        canvas.create_text(width / 2, y1 + 130, text="今天的学习时长还未达标", fill="#f8fafc", font=("Microsoft YaHei UI", 42, "bold"))
-        canvas.create_text(
-            width / 2, y1 + 198,
-            text=f"距离上次学习结束已 {snapshot['inactive_minutes']} 分钟\n今日已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟，请确认是否继续",
-            fill="#ddd6fe", font=("Microsoft YaHei UI", 17, "bold"), justify="center",
-        )
-        canvas.create_text(width / 2, y1 + 266, text="这不是惩罚，只是把今天重新拉回轨道。", fill="#a5b4fc", font=("Microsoft YaHei UI", 12))
-        self._fullscreen_button(canvas, int(width / 2 - 220), y1 + 312, 250, 64, "现在开始学习", "lag_start", self.start_course, "#f8fafc", "#111827")
-        self._fullscreen_button(canvas, int(width / 2 + 50), y1 + 312, 170, 64, "稍后提醒", "lag_later", self.hide_fullscreen, "#332945", "#e9d5ff")
-        window.bind("<Escape>", lambda _event: self.hide_fullscreen())
-        window.after(50, lambda: bring_to_front(window))
-        self.last_fullscreen_raise = time.time()
-
-    def _fullscreen_button(self, canvas, x, y, width, height, text, tag, command, fill, foreground) -> None:
-        rounded_rect(canvas, x + 2, y + 4, x + width + 2, y + height + 4, height // 2, fill="#050711", outline="", tags=tag)
-        rounded_rect(canvas, x, y, x + width, y + height, height // 2, fill=fill, outline="#ffffff", width=1, tags=(tag, f"{tag}__surface"))
-        canvas.create_text(x + width / 2, y + height / 2, text=text, fill=foreground, font=("Microsoft YaHei UI", 14, "bold"), tags=(tag, f"{tag}__label"))
-        self.button_commands.append(CanvasButton(canvas, tag, command, {
-            "surface": f"{tag}__surface", "label": f"{tag}__label",
-            "normal": fill, "hover": LIQUID.control_hover, "pressed": LIQUID.control_pressed,
-        }))
-
-    def hide_fullscreen(self) -> None:
-        if self.fullscreen and self.fullscreen.winfo_exists():
-            self.fullscreen.destroy()
-        self.fullscreen = None
-        self.fullscreen_canvas = None
-        self.fullscreen_timer_item = None
-        self.fullscreen_kind = ""
-
-    def refresh_view_state(self) -> None:
-        if self.compact_mode:
-            self.refresh_compact_view()
-            return
-        summary = self.update_progress()
-        snapshot = self.machine.snapshot()
-        self.set_action_emphasis(True)
-        if self.planner.session:
-            elapsed = self.planner.course_elapsed()
-            started_text = time.strftime("%H:%M", time.localtime(self.planner.session.started_at))
-            self.set_timer(fmt_seconds(elapsed), f"{self.planner.session.project_name} · {started_text} 开始 · 正在记录")
-            self.set_tone("running")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="结束学习并休息")
-        elif snapshot["running"] and snapshot["remaining"] > 0:
-            self.set_timer(fmt_seconds(snapshot["remaining"]), "课间休息中，到时会全屏提醒")
-            self.set_tone("running")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="提前结束休息")
-        elif snapshot["running"]:
-            self.set_timer(f"+{fmt_seconds(snapshot['overtime'])}", "休息已结束，请回来")
-            self.set_tone("warning")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="结束休息")
-        else:
-            project = self.project_for_lesson(summary["next_lesson"])
-            label = f"开始学习 {project['name']}" if int(project.get("id", 0)) else "等待课程同步"
-            self.set_timer(project["name"], f"{summary['paused_label']}暂停中" if summary["paused_label"] else "点击后开始记录学习时间")
-            self.set_tone("idle")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text=label)
-
-    def refresh_compact_view(self) -> None:
-        session = self.planner.session
-        if not session or self.canvas is None:
-            return
-        elapsed = self.planner.course_elapsed()
-        started_text = time.strftime("%H:%M", time.localtime(session.started_at))
-        self.set_timer(fmt_seconds(elapsed), f"{started_text} 开始 · 已自动记录")
-        self.set_tone("running")
-        self.canvas.itemconfigure("btn_primary__label", text="结束课程")
-
-    def update_course_state(self) -> None:
+    def update_study_state(self) -> None:
         if not self.planner.session:
             return
         self.refresh_view_state()
-
     def update_break_state(self) -> None:
         snapshot = self.machine.snapshot()
         if not snapshot["running"]:
@@ -1001,22 +288,19 @@ class BreakGuardApp:
             self.client.post_event("unfocused", f"{session.session_id}_unfocused", startedAt=session.started_iso, overdueSeconds=snapshot["overtime"], note="休息结束 5 分钟后仍未取消")
             self.machine.mark_unfocused_recorded()
             self.set_status("不专注记录已进入同步队列")
-
     def update_schedule_lag(self) -> None:
         if self.machine.session or self.planner.session:
             return
-        snapshot = self.planner.lag_snapshot()
+        snapshot = self.planner.lag_snapshot(available_project_ids=self.project_ids())
         if not snapshot.get("due"):
             return
-        self.planner.mark_lag_reminded(snapshot["lesson_number"])
+        self.planner.mark_lag_reminded(snapshot["project_id"])
         self.client.post_event(
             "schedule_lag",
-            f"schedule_lag_{self.planner.summary()['date']}_{snapshot['lesson_number']}_{int(time.time() // (self.config.lag_repeat_minutes * 60))}",
+            f"schedule_lag_{self.planner.summary(available_project_ids=self.project_ids())['date']}_{snapshot['project_id']}_{int(time.time() // (self.config.lag_repeat_minutes * 60))}",
             note=f"每日学习时长未达标，已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟",
             payload={
-                "lessonNumber": snapshot["lesson_number"],
-                "completedLessons": snapshot["completed_lessons"],
-                "dailyLessons": snapshot["daily_lessons"],
+                "projectId": snapshot["project_id"],
                 "studyMinutes": snapshot["study_minutes"],
                 "targetMinutes": snapshot["target_minutes"],
                 "behindMinutes": snapshot["behind_minutes"],
@@ -1024,17 +308,15 @@ class BreakGuardApp:
         )
         self.set_status("学习时长未达标，已触发强提醒并同步网站")
         self.show_progress_warning(snapshot)
-
     def tick(self) -> None:
         try:
-            self.update_course_state()
+            self.update_study_state()
             self.update_break_state()
             self.update_schedule_lag()
         except Exception as exc:
             log_error("timer tick failed", exc)
         if not self.exiting:
             self.root.after(1000, self.tick)
-
     def poll_queues(self) -> None:
         actions = {"show": self.show_window, "hide": self.hide_to_tray, "toggle": self.toggle_window, "reset": self.reset_window_position, "quit": self.quit_app, "test_fullscreen": lambda: self.show_fullscreen(0)}
         while True:
@@ -1057,7 +339,6 @@ class BreakGuardApp:
                 self.set_status(str(message))
         if not self.exiting:
             self.root.after(100, self.poll_queues)
-
     def quit_app(self) -> None:
         if self.exiting:
             return
@@ -1068,7 +349,6 @@ class BreakGuardApp:
         self.tray.remove()
         self.instance.close()
         self.root.destroy()
-
     def run(self) -> None:
         self.root.mainloop()
 
