@@ -19,10 +19,11 @@ import { queryLimit, queryOffset } from './modules/api-helpers.mjs';
 import { isTelegramAuthorized, readTelegramConfig, saveTelegramConfig, telegramConfigStatus, telegramConfirmKeyboard, telegramTaskKeyboard, telegramUpdateContext } from './modules/telegram-bot.mjs';
 import { createNotificationRepository } from './modules/notification-repository.mjs';
 import { createNotificationQueue } from './modules/notification-queue.mjs';
+import { createNotificationChannelHealth } from './modules/notification-channel-health.mjs';
 import { createCalendarRepository } from './modules/calendar-repository.mjs';
 import { notificationChannelReadiness, resolveProactiveDispatch } from './modules/notification-dispatcher.mjs';
 import { isWechatQuietHours, nextWechatActiveAt } from './modules/notification-policy.mjs';
-import { runSqlMigrations } from './modules/migration-runner.mjs';
+import { migrationStatus, runSqlMigrations } from './modules/migration-runner.mjs';
 import { clawbotHelpText, parseClawbotCommand } from './modules/clawbot-command-parser.mjs';
 import { sanitizeClientErrorPayload } from './modules/client-error-sanitizer.mjs';
 import { handlePublicApiRoutes } from './routes/public-api-routes.mjs';
@@ -44,7 +45,9 @@ import { createDictionaryService } from './services/dictionary-service.mjs';
 import { createUserAccountRepository } from './auth/user-account-repository.mjs';
 import { createStudyComparisonService } from './domains/study-comparison/service.mjs';
 import { createSchedulerRegistry } from './infrastructure/scheduler-registry.mjs';
+import { createResourceBudget } from './infrastructure/resource-budget.mjs';
 import { createSettingsCrypto } from './core/settings-crypto.mjs';
+import { readSystemResources } from './core/system-resources.mjs';
 import { addDaysISO, addYearISO, currentPeriod, endOfMonthISO, endOfWeekISO, formatDateString, localDateISO, nowISO, parseDateString, previousMonthPeriod, previousPeriod, previousWeekPeriod, startOfMonthISO, startOfWeekISO, todayISO, } from './core/date-time.mjs';
 import { createSqliteCli, runSqliteFile, sqliteIntegrityCheck, sqlitePath, sqlString, sqlValue } from './core/sqlite-cli.mjs';
 import { createHttpUtils, headerString, isObjectPayload } from './http/http-utils.mjs';
@@ -65,7 +68,7 @@ import { installApiDomain } from './app/domains/api.mjs';
 import { installBootstrapDomain } from './app/domains/bootstrap.mjs';
 
 const require = createRequire(import.meta.url);
-const { runtime, exposeRuntime } = createApplicationContext();
+const { runtime, exposeRuntime, installDomain } = createApplicationContext();
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const root = resolve(process.env.STATIC_ROOT || join(appRoot, 'dist'));
 const dataDir = resolve(process.env.DATA_DIR || join(appRoot, 'data'));
@@ -143,14 +146,24 @@ const scheduler = createSchedulerRegistry({
         level: 'error', event: 'scheduled_job_failed', name, error: String(error?.message || error),
     })),
 });
+const resourceBudget = createResourceBudget({
+    maxConcurrent: Math.max(1, Number(process.env.BACKGROUND_TASK_CONCURRENCY || 1)),
+    minAvailableMemoryBytes: Math.max(32 * 1024 * 1024, Number(process.env.BACKGROUND_MIN_AVAILABLE_MEMORY_BYTES || 96 * 1024 * 1024)),
+    maxLoadPerCpu: Math.max(0.5, Number(process.env.BACKGROUND_MAX_LOAD_PER_CPU || 1.5)),
+    readResources: readSystemResources,
+});
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
 const externalApiClient = createExternalApiClient();
 const notificationRepository = createNotificationRepository(sqliteRepository);
+const notificationChannelHealth = createNotificationChannelHealth({
+    repository: notificationRepository,
+});
 const notificationQueue = createNotificationQueue({
     repository: notificationRepository,
     sendProactive: (text, delivery) => runtime.sendProactiveNotification(text, delivery),
     notifyEvent: (payload) => runtime.notifyEvent(payload),
+    channelHealth: notificationChannelHealth,
     log: (level, event, detail) => runtime.logStructured(level, event, detail),
 });
 const telegramOpsConfirmations = new Map();
@@ -252,6 +265,9 @@ exposeRuntime({
     userAccountRepository: () => userAccountRepository,
     getSession: () => getSession,
     scheduler: () => scheduler,
+    resourceBudget: () => resourceBudget,
+    notificationChannelHealth: () => notificationChannelHealth,
+    migrationStatus: () => migrationStatus,
 });
 
 let backupService = null;
@@ -269,13 +285,13 @@ const dictionaryService = createDictionaryService({
 });
 exposeRuntime({ dictionaryService: () => dictionaryService });
 
-installPersistenceDomain(runtime, exposeRuntime);
-installReportsDomain(runtime, exposeRuntime);
-installBriefDomain(runtime, exposeRuntime);
-installProxyDomain(runtime, exposeRuntime);
-installOperationsDomain(runtime, exposeRuntime);
-installLearningDomain(runtime, exposeRuntime);
-installNotificationsDomain(runtime, exposeRuntime);
+installDomain('persistence', installPersistenceDomain);
+installDomain('reports', installReportsDomain);
+installDomain('brief', installBriefDomain);
+installDomain('proxy', installProxyDomain);
+installDomain('operations', installOperationsDomain);
+installDomain('learning', installLearningDomain);
+installDomain('notifications', installNotificationsDomain);
 const studyComparisonService = createStudyComparisonService({
     database: sqliteRepository,
     todayISO,
@@ -283,7 +299,7 @@ const studyComparisonService = createStudyComparisonService({
     nowISO,
 });
 exposeRuntime({ studyComparisonService: () => studyComparisonService });
-installApiDomain(runtime, exposeRuntime);
+installDomain('api', installApiDomain);
 
 backupService = createBackupService({
     backupsDir,
@@ -331,4 +347,4 @@ const { requireToken: requireBreakGuardToken, recordEvent: recordBreakGuardEvent
 
 exposeRuntime({ "backupService": () => backupService, "createBackupFile": () => createBackupFile, "restoreBackupFile": () => restoreBackupFile, "ensureDailyBackup": () => ensureDailyBackup, "ensureWeeklyBackup": () => ensureWeeklyBackup, "getBackupStatus": () => getBackupStatus, "nextWeeklyBackupAt": () => nextWeeklyBackupAt, "nextDailyBackupAt": () => nextDailyBackupAt, "breakGuardService": () => breakGuardService, "requireBreakGuardToken": () => requireBreakGuardToken, "recordBreakGuardEvent": () => recordBreakGuardEvent, "getBreakGuardSummary": () => getBreakGuardSummary, "queueBreakGuardNotification": () => queueBreakGuardNotification, "getBreakGuardScheduleConfig": () => getBreakGuardScheduleConfig, "saveBreakGuardScheduleConfig": () => saveBreakGuardScheduleConfig }, {  });
 
-installBootstrapDomain(runtime, exposeRuntime);
+installDomain('bootstrap', installBootstrapDomain);

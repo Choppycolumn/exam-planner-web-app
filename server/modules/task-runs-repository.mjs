@@ -1,4 +1,17 @@
 export function createTaskRunsRepository(sqlite) {
+  const start = ({ taskName, trigger, startedAt, metadata = {} }) => Number(sqlite.scalar(`INSERT INTO task_runs
+(task_name, trigger, status, started_at, metadata_json)
+VALUES (?, ?, 'running', ?, ?)
+RETURNING id;`, [taskName, trigger, startedAt, JSON.stringify(metadata || {})]) || 0);
+
+  const complete = (id, { finishedAt, durationMs, metadata = {} }) => sqlite.execute(`UPDATE task_runs
+SET status = 'completed', finished_at = ?, duration_ms = ?, metadata_json = ?
+WHERE id = ?;`, [finishedAt, durationMs, JSON.stringify(metadata || {}), Number(id)]);
+
+  const fail = (id, { finishedAt, durationMs, error = '' }) => sqlite.execute(`UPDATE task_runs
+SET status = 'failed', finished_at = ?, duration_ms = ?, error = ?
+WHERE id = ?;`, [finishedAt, durationMs, error, Number(id)]);
+
   const listLatest = (limit = 12) => {
     const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
     return sqlite.json(`SELECT id, task_name AS taskName, trigger, status, started_at AS startedAt, finished_at AS finishedAt,
@@ -51,5 +64,5 @@ LIMIT 12;`);
     };
   };
 
-  return { listLatest, getMetrics };
+  return { start, complete, fail, listLatest, getMetrics };
 }

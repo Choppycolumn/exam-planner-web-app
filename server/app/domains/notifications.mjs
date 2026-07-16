@@ -1,3 +1,5 @@
+import { createTaskRunner } from '../../domains/tasks/task-runner.mjs';
+
 export function installNotificationsDomain(runtime, exposeRuntime) {
     function logStructured(level, event, fields = {}) {
         const payload = { level, event, at: runtime.nowISO(), ...fields };
@@ -49,51 +51,14 @@ export function installNotificationsDomain(runtime, exposeRuntime) {
             return null;
         }
     }
-    const activeTaskLocks = new Set();
-    function lastTaskRuns(limit = 12) {
-        try {
-            return runtime.taskRunsRepository.listLatest(limit);
-        }
-        catch {
-            return [];
-        }
-    }
-    async function runExclusiveTask(taskName, trigger, taskFn, { timeoutMs = 15 * 60 * 1000, metadata = {} } = {}) {
-        runtime.ensureSqliteStore();
-        if (activeTaskLocks.has(taskName)) {
-            return { ok: false, skipped: true, reason: 'already running', taskName };
-        }
-        activeTaskLocks.add(taskName);
-        const startedAt = runtime.nowISO();
-        const startedMs = Date.now();
-        const taskId = Number(runtime.sqliteScalar(`INSERT INTO task_runs (task_name, trigger, status, started_at, metadata_json)
-    VALUES (${runtime.sqlString(taskName)}, ${runtime.sqlString(trigger)}, 'running', ${runtime.sqlString(startedAt)}, ${runtime.sqlString(JSON.stringify(metadata || {}))})
-    RETURNING id;`) || 0);
-        let timeoutId;
-        try {
-            const timeout = new Promise((_, reject) => {
-                timeoutId = setTimeout(() => reject(new Error(`${taskName} timed out after ${timeoutMs}ms`)), timeoutMs);
-                timeoutId.unref?.();
-            });
-            const result = await Promise.race([Promise.resolve().then(taskFn), timeout]);
-            const durationMs = Date.now() - startedMs;
-            runtime.runSqlite(`UPDATE task_runs SET status = 'completed', finished_at = ${runtime.sqlString(runtime.nowISO())}, duration_ms = ${runtime.sqlValue(durationMs)}, metadata_json = ${runtime.sqlString(JSON.stringify({ ...(metadata || {}), result: result ?? null }))}
-    WHERE id = ${runtime.sqlValue(taskId)};`);
-            return { ok: true, taskName, taskId, durationMs, result };
-        }
-        catch (error) {
-            const durationMs = Date.now() - startedMs;
-            const message = runtime.redactSecretText(error.message || String(error));
-            runtime.runSqlite(`UPDATE task_runs SET status = 'failed', finished_at = ${runtime.sqlString(runtime.nowISO())}, duration_ms = ${runtime.sqlValue(durationMs)}, error = ${runtime.sqlString(message)}
-    WHERE id = ${runtime.sqlValue(taskId)};`);
-            throw error;
-        }
-        finally {
-            if (timeoutId)
-                clearTimeout(timeoutId);
-            activeTaskLocks.delete(taskName);
-        }
-    }
+    const taskRunner = createTaskRunner({
+        ensureStore: () => runtime.ensureSqliteStore(),
+        repository: runtime.taskRunsRepository,
+        resourceBudget: runtime.resourceBudget,
+        nowISO: runtime.nowISO,
+        redact: runtime.redactSecretText,
+    });
+    const { activeTaskLocks, lastTaskRuns, runExclusiveTask } = taskRunner;
     function clawbotRequestSecret(req, requestUrl, body = {}) {
         const auth = runtime.headerString(req, 'authorization');
         const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';

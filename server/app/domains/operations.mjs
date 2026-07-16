@@ -40,7 +40,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
         }
     }
     function scheduleDailyMaintenance() {
-        const { delay, nextAt } = chinaWallClockDelay('03:20');
+        const { delay, nextAt } = chinaWallClockDelay(process.env.MAINTENANCE_TIME || '04:20');
         runtime.nextMaintenanceAt = nextAt;
         runtime.setRuntimeMetadata('worker_next_maintenance_at', runtime.nextMaintenanceAt);
         runtime.maintenanceTimer = runtime.scheduler.scheduleOnce('daily-maintenance', delay, async () => {
@@ -85,6 +85,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
     }
     function getRuntimeStatus() {
         const memory = process.memoryUsage();
+        const resourceBudget = runtime.resourceBudget.snapshot();
         return {
             uptimeSeconds: Math.round(runtime.uptime()),
             processUptimeSeconds: Math.round(process.uptime()),
@@ -93,6 +94,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
             memory: {
                 totalBytes: runtime.totalmem(),
                 freeBytes: runtime.freemem(),
+                availableBytes: resourceBudget.availableMemoryBytes,
                 processRssBytes: memory.rss,
                 heapUsedBytes: memory.heapUsed,
                 heapTotalBytes: memory.heapTotal,
@@ -100,6 +102,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
             disk: getDiskStatus(),
             database: runtime.sqliteRepository.metrics(),
             scheduler: runtime.scheduler.snapshot(),
+            resourceBudget,
             nodeVersion: process.version,
         };
     }
@@ -145,6 +148,19 @@ export function installOperationsDomain(runtime, exposeRuntime) {
         addCheck('external-api', externalApis.openCircuits.length ? 'warn' : 'ok', {
             openCircuitCount: externalApis.openCircuits.length,
         });
+        const channelHealth = runtime.notificationChannelHealth.snapshot(runtime.notificationRepository.listChannels())
+            .filter((channel) => channel.enabled);
+        const degradedChannels = channelHealth.filter((channel) => channel.status !== 'normal' || channel.circuitOpen);
+        addCheck('notification-channels', degradedChannels.length ? 'warn' : 'ok', {
+            enabledCount: channelHealth.length,
+            degradedCount: degradedChannels.length,
+            channels: degradedChannels.map((channel) => ({
+                channelKey: channel.channelKey,
+                status: channel.status,
+                circuitOpenUntil: channel.circuitOpenUntil,
+                action: channel.action,
+            })),
+        });
         const unified = runtime.summarizeHealth(checks.map((check) => ({
             id: check.name,
             title: check.name,
@@ -189,6 +205,17 @@ export function installOperationsDomain(runtime, exposeRuntime) {
         }
         catch (error) {
             add('sqlite', false, { error: runtime.redactSecretText(error.message || String(error)) });
+        }
+        try {
+            const migrations = runtime.migrationStatus({ sqlite: runtime.sqliteRepository, migrationsDir: runtime.migrationsDir });
+            add('migrations', migrations.pending.length === 0 && migrations.mismatched.length === 0, {
+                applied: migrations.applied,
+                pending: migrations.pending.length,
+                mismatched: migrations.mismatched.length,
+            });
+        }
+        catch (error) {
+            add('migrations', false, { error: runtime.redactSecretText(error.message || String(error)) });
         }
         const ok = checks.every((check) => check.ok);
         return { ok, status: ok ? 'ready' : 'not_ready', serviceRole: runtime.serviceRole, generatedAt: runtime.nowISO(), checks };
@@ -269,6 +296,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
                 metrics: taskMetrics,
             },
             runtime: getRuntimeStatus(),
+            migrations: runtime.migrationStatus({ sqlite: runtime.sqliteRepository, migrationsDir: runtime.migrationsDir }),
             worker: runtime.workerHeartbeatStatus(),
             unifiedHealth: getHealthPayload().unified,
             externalApis: runtime.externalApiClient.status(),
@@ -280,7 +308,10 @@ export function installOperationsDomain(runtime, exposeRuntime) {
             sqlite: runtime.sqliteRepository,
             migrationsDir: runtime.migrationsDir,
             currentVersion,
-            shouldApply: (_fileName, version) => ![19, 20].includes(version),
+            shouldApply: (fileName) => ![
+                '019_market_copilot_v1.sql',
+                '020_market_copilot_ledger_refactor.sql',
+            ].includes(fileName),
             setVersion: (version) => runtime.runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
     VALUES ('structured_schema_version', ${runtime.sqlString(String(version))}, datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`),
@@ -288,6 +319,11 @@ export function installOperationsDomain(runtime, exposeRuntime) {
         if (applied.length) {
             runtime.logStructured('info', 'sqlite_migrations_applied', { applied });
         }
+        const status = runtime.migrationStatus({ sqlite: runtime.sqliteRepository, migrationsDir: runtime.migrationsDir });
+        if (status.pending.length || status.mismatched.length) {
+            throw new Error(`Database migration state is incomplete: pending=${status.pending.length}, mismatched=${status.mismatched.length}`);
+        }
+        return status;
     }
     function ensureTaskReminderColumns() {
         const existing = new Set(runtime.sqliteJson('PRAGMA table_info(short_term_tasks);').map((column) => column.name));
@@ -328,6 +364,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
                 updatedAt: runtime.nowISO(),
             },
         ];
+        const channelHealth = runtime.notificationChannelHealth.snapshot(channels);
         return {
             generatedAt: runtime.nowISO(),
             channels,
@@ -339,6 +376,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
             events: runtime.notificationRepository.listEvents({ status, limit: 80 }),
             deliveries: runtime.notificationRepository.listDeliveries(80),
             metrics: runtime.notificationRepository.metrics(),
+            channelHealth,
             wechatClawbot,
             bark: runtime.resolveBarkConfig(),
             telegram: runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)),

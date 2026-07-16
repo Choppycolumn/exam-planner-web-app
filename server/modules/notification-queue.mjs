@@ -6,6 +6,7 @@ export function createNotificationQueue({
   repository,
   sendProactive,
   notifyEvent,
+  channelHealth = null,
   log = () => {},
   retryDelaysMs = DEFAULT_RETRY_DELAYS_MS,
   now = () => new Date(),
@@ -46,6 +47,20 @@ export function createNotificationQueue({
         limit: 10,
       })) {
         processed += 1;
+        const gate = channelHealth?.beforeSend(delivery.channelKey);
+        if (gate && !gate.allowed && gate.nextAttemptAt) {
+          repository.deferDelivery(delivery.id, {
+            nextAttemptAt: gate.nextAttemptAt,
+            reason: 'channel circuit open',
+          });
+          log('info', 'proactive_notification_channel_deferred', {
+            deliveryId: delivery.id,
+            eventId: delivery.eventId,
+            channelKey: delivery.channelKey,
+            nextAttemptAt: gate.nextAttemptAt,
+          });
+          continue;
+        }
         repository.markDeliverySending(delivery.id, now().toISOString());
         let result;
         try {
@@ -66,6 +81,7 @@ export function createNotificationQueue({
           continue;
         }
         if (result?.ok) {
+          channelHealth?.recordSuccess(delivery.channelKey);
           repository.markDeliveryAccepted(delivery.id, {
             attemptedAt: now().toISOString(),
             response: { request: delivery.payload, result },
@@ -76,9 +92,13 @@ export function createNotificationQueue({
 
         const attemptCount = delivery.attemptCount + 1;
         const policy = classifyNotificationFailure(result?.error || '');
+        const healthResult = channelHealth?.recordFailure(delivery.channelKey, policy, result?.error || '');
         const canRetry = policy.retryable && attemptCount < delivery.maxAttempts;
         const retryDelay = retryDelaysMs[Math.max(0, attemptCount - 1)] ?? retryDelaysMs.at(-1) ?? 60_000;
-        const nextAttemptAt = canRetry ? new Date(now().getTime() + retryDelay).toISOString() : null;
+        const retryAt = new Date(now().getTime() + retryDelay).toISOString();
+        const nextAttemptAt = canRetry
+          ? [retryAt, healthResult?.circuitOpenUntil].filter(Boolean).sort().at(-1)
+          : null;
         const error = String(result?.error || '主动推送失败');
         repository.markDeliveryFailed(delivery.id, {
           attemptedAt: now().toISOString(),

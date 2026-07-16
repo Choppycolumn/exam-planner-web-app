@@ -60,6 +60,8 @@ export function OperationsPage() {
   const notifications = notificationsQuery.data;
   const unifiedHealth = status?.unifiedHealth;
   const wechatReady = Boolean(notifications?.wechatClawbot?.enabled && notifications.wechatClawbot.configured && notifications.wechatClawbot.targetConfigured && notifications.wechatClawbot.hasContextToken);
+  const enabledNotificationChannels = notifications?.channelHealth?.filter((channel) => channel.enabled) ?? [];
+  const degradedNotificationChannels = enabledNotificationChannels.filter((channel) => channel.status !== 'normal' || channel.circuitOpen);
   const diskAvailable = status?.runtime.disk?.availableBytes ?? 0;
   const diskOk = !status?.runtime.disk || diskAvailable >= 2 * 1024 * 1024 * 1024;
   const taskOk = (status?.tasks?.metrics?.failed ?? 0) === 0 && !(status?.maintenance.lastError || status?.maintenance.lastPrecomputeError);
@@ -109,6 +111,13 @@ export function OperationsPage() {
     { label: 'SQLite', ok: Boolean(status?.backup.sqliteSizeBytes), detail: `数据库 ${formatBytes(status?.backup.sqliteSizeBytes ?? 0)}` },
     { label: '磁盘空间', ok: diskOk, detail: status?.runtime.disk ? `剩余 ${formatBytes(diskAvailable)}，已用 ${status.runtime.disk.usedPercent}` : '未读取到磁盘信息' },
     { label: '微信推送', ok: wechatReady, detail: wechatReady ? `下次简报 ${formatDateTime(notifications?.wechatClawbot?.nextPushAt)}` : 'ClawBot 微信链路需检查' },
+    {
+      label: '通知通道',
+      ok: degradedNotificationChannels.length === 0,
+      detail: degradedNotificationChannels.length
+        ? `${degradedNotificationChannels.map((channel) => channel.name).join('、')} 已降级`
+        : `${enabledNotificationChannels.length} 个通道正常`,
+    },
     { label: '每日简报', ok: briefOk, detail: status?.dailyBrief.latest ? `${status.dailyBrief.latest.date} · ${status.dailyBrief.latest.status}` : '暂无简报' },
     { label: '后台任务', ok: taskOk, detail: `失败 ${status?.tasks?.metrics?.failed ?? 0} 次，运行中 ${status?.tasks?.metrics?.running ?? 0}` },
     { label: '日志健康', ok: logOk, detail: `5xx ${logs?.apiMetrics?.serverErrors ?? 0} 次，日志源 ${logs?.sources.filter((source) => source.available).length ?? 0}/${logs?.sources.length ?? 0}` },
@@ -169,7 +178,7 @@ export function OperationsPage() {
 
       <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="CPU 负载" value={status?.runtime.loadAverage?.[0]?.toFixed(2) ?? '--'} hint={`${status?.runtime.cpuCount ?? '--'} 核心`} icon={<Activity size={20} />} />
-        <MetricCard label="进程内存" value={formatBytes(status?.runtime.memory.processRssBytes ?? 0)} hint={`可用 ${formatBytes(status?.runtime.memory.freeBytes ?? 0)}`} icon={<HardDrive size={20} />} />
+        <MetricCard label="进程内存" value={formatBytes(status?.runtime.memory.processRssBytes ?? 0)} hint={`可用 ${formatBytes(status?.runtime.memory.availableBytes ?? status?.runtime.memory.freeBytes ?? 0)}`} icon={<HardDrive size={20} />} />
         <MetricCard label="任务运行" value={status?.tasks?.metrics?.total ?? 0} hint={`近 24 小时 ${status?.tasks?.metrics?.last24h ?? 0} 次`} icon={<Clock3 size={20} />} />
         <MetricCard label="页面错误" value={logs?.clientErrors?.metrics.last24h ?? 0} hint={`最近 ${formatDateTime(logs?.clientErrors?.metrics.latestAt)}`} icon={<FileWarning size={20} />} />
       </div>

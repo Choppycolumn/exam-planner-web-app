@@ -416,6 +416,7 @@ export interface RuntimeStatus {
   memory: {
     totalBytes: number;
     freeBytes: number;
+    availableBytes?: number;
     processRssBytes: number;
     heapUsedBytes: number;
     heapTotalBytes: number;
@@ -427,6 +428,18 @@ export interface RuntimeStatus {
     usedPercent: string;
     mount: string;
   } | null;
+  resourceBudget?: {
+    maxConcurrent: number;
+    active: string[];
+    waiting: string[];
+    availableMemoryBytes: number;
+    minAvailableMemoryBytes: number;
+    loadPerCpu: number;
+    maxLoadPerCpu: number;
+    memoryOk: boolean;
+    loadOk: boolean;
+    healthy: boolean;
+  };
   nodeVersion: string;
 }
 
@@ -605,6 +618,21 @@ export interface NotificationCenterResponse {
   events: NotificationEvent[];
   deliveries: NotificationDelivery[];
   metrics: { total: number; open: number; warnings: number; critical: number };
+  channelHealth?: Array<{
+    channelKey: string;
+    type: string;
+    name: string;
+    enabled: boolean;
+    status: 'normal' | 'degraded' | 'failed' | string;
+    circuitOpen: boolean;
+    circuitOpenUntil: string | null;
+    consecutiveFailures: number;
+    lastSuccessAt: string | null;
+    lastFailureAt: string | null;
+    acceptedLast24h: number;
+    failedLast24h: number;
+    action: string;
+  }>;
   notificationSemantics?: { reply: string; proactive: string };
   channelPlan: Record<string, { enabled: boolean; requiredEnv: string[]; method: string }>;
   readOnly?: boolean;

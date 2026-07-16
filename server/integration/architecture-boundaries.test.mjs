@@ -36,5 +36,21 @@ describe('architecture boundaries', () => {
     ];
     expect(serverFiles.filter((file) => /runtime-context\.mjs/.test(read(file)))).toEqual([]);
     expect(read('server/app/application-context.mjs')).toContain('createApplicationContext');
+    expect(read('server/app/application-context.mjs')).toContain('createDomainContext');
+    expect(read('server/auth-static-server.mjs')).toContain("installDomain('brief'");
+  });
+
+  it('keeps extracted brief settings and task execution outside giant compatibility domains', () => {
+    expect(read('server/domains/brief/settings-service.mjs')).toContain('createBriefSettingsService');
+    expect(read('server/domains/tasks/task-runner.mjs')).toContain('createTaskRunner');
+    expect(read('server/app/domains/brief.mjs').length).toBeLessThan(70_000);
+    expect(read('server/app/domains/notifications.mjs').length).toBeLessThan(70_000);
+  });
+
+  it('uses versioned releases and a persistent migration ledger', () => {
+    expect(read('scripts/remote-deploy.sh')).toContain('RELEASES_DIR');
+    expect(read('scripts/remote-deploy.sh')).toContain('CURRENT_LINK');
+    expect(read('infra/systemd/exam-planner.service')).toContain('/opt/exam-planner/current/server/web.mjs');
+    expect(read('server/modules/migration-runner.mjs')).toContain('schema_migrations');
   });
 });

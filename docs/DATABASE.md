@@ -62,6 +62,16 @@ data/dictionary.sqlite
 - 12：访问统计。
 - 13：后台任务运行记录、审计事件、慢接口/错误接口日志。
 
+## 迁移账本
+
+所有 SQL 迁移由 `server/modules/migration-runner.mjs` 统一执行，并记录到 `schema_migrations`：
+
+- 以完整文件名为主键，因此允许历史上相同数字前缀的迁移共存。
+- 保存 SHA-256 校验和，已执行迁移被修改时拒绝启动。
+- 记录 applied、baseline、skipped 状态和执行时长。
+- `/ready` 会检查待执行迁移和校验和不一致。
+- 已停用的历史理财迁移按文件名明确标记为 skipped，不再依赖模糊的版本号跳过。
+
 ## 备份策略
 
 - 手动备份：`POST /api/backups/run`

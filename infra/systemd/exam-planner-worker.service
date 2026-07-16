@@ -9,16 +9,26 @@ Type=simple
 User=examplanner
 Group=examplanner
 SupplementaryGroups=adm systemd-journal
-WorkingDirectory=/opt/exam-planner
+WorkingDirectory=/opt/exam-planner/current
 Environment=NODE_ENV=production
+Environment=NODE_OPTIONS=--max-old-space-size=224
+Environment=DATA_DIR=/opt/exam-planner/data
+Environment=STATIC_ROOT=/opt/exam-planner/current/dist
 Environment=TELEGRAM_ENV_FILE=/opt/exam-planner/data/telegram.env
 Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
 EnvironmentFile=-/etc/exam-planner/runtime.env
 EnvironmentFile=-/etc/exam-planner/bark.env
-ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/server/worker.mjs
+ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/current/server/worker.mjs
 Restart=always
 RestartSec=10
 TimeoutStopSec=20
+MemoryAccounting=true
+MemoryHigh=300M
+MemoryMax=400M
+TasksMax=64
+CPUWeight=60
+Nice=5
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true

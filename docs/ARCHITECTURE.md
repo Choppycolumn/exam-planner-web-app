@@ -14,8 +14,13 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 - `src/features/`：领域功能模块，目前保留易混词等仍在使用的能力。
 - `src/db/`：历史本地 IndexedDB/Dexie 结构与迁移能力。
 - `server/auth-static-server.mjs`：生产 Node 组合入口，创建应用上下文并装配静态文件、登录、API、SQLite、备份、简报和报告领域。
-- `server/app/application-context.mjs`：每个进程独立创建的显式应用上下文，不再使用模块级全局 runtime 单例。
-- `server/app/domains/`：通过 `install*Domain(runtime, exposeRuntime)` 显式安装领域能力。
+- `server/app/application-context.mjs`：每个进程独立创建应用上下文，并为每个领域生成只包含声明能力的受限代理。
+- `server/app/domains/`：组合层兼容领域；通过 `installDomain()` 注入受限依赖。
+- `server/domains/brief/settings-service.mjs`：简报与英语计划设置、密文迁移和规范化。
+- `server/domains/tasks/task-runner.mjs`：后台任务互斥、超时、资源预算和运行记录。
+- `server/infrastructure/resource-budget.mjs`：后台重任务的内存、负载和并发闸门。
+- `server/modules/notification-channel-health.mjs`：通知通道健康与熔断。
+- `server/modules/migration-runner.mjs`：基于文件名和校验和的统一迁移账本。
 - `server/embedding_worker.py`：错因主题向量提取的 Python Worker。
 - `public/`：PWA manifest、图标、service worker。
 - `scripts/`：本地启动和部署辅助脚本。
@@ -54,4 +59,4 @@ Exam Planner 是一个个人学习与任务管理 Web App。当前架构是 Reac
 
 ## 维护边界
 
-生产服务按 `SERVICE_ROLE=web|worker` 分为 Web 请求进程和后台任务进程。每个进程创建自己的应用上下文，路由、认证、HTTP、备份、通知与 Break Guard 领域通过显式安装器装配，不再依赖可跨测试污染的模块级全局 runtime。历史 schema 和复杂数据计算仍由兼容入口编排，后续继续按 repository/service 边界渐进拆分。
+生产服务按 `SERVICE_ROLE=web|worker` 分为 Web 请求进程和后台任务进程。每个领域只获得自身代码实际声明的上下文能力，动态访问未声明能力会立即失败。简报设置、后台任务、通知健康和迁移已从兼容大文件抽离；历史 schema 首次引导仍保留兼容层，之后的结构变化统一进入迁移账本。

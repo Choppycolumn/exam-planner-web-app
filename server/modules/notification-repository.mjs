@@ -53,6 +53,20 @@ function normalizeDelivery(row) {
 }
 
 export function createNotificationRepository(sqlite) {
+  const normalizeHealth = (row) => row ? {
+    channelKey: row.channelKey,
+    status: row.status,
+    consecutiveFailures: Number(row.consecutiveFailures || 0),
+    successCount: Number(row.successCount || 0),
+    failureCount: Number(row.failureCount || 0),
+    lastSuccessAt: row.lastSuccessAt || null,
+    lastFailureAt: row.lastFailureAt || null,
+    circuitOpenUntil: row.circuitOpenUntil || null,
+    lastError: row.lastError || '',
+    action: row.action || '',
+    updatedAt: row.updatedAt,
+  } : null;
+
   const listChannels = () => sqlite.json(`SELECT id, channel_key AS channelKey, type, name, enabled,
 config_json AS configJson, created_at AS createdAt, updated_at AS updatedAt
 FROM notification_channels
@@ -192,6 +206,57 @@ FROM notification_events;`)[0] || {};
     };
   };
 
+  const healthSelect = `SELECT channel_key AS channelKey, status,
+consecutive_failures AS consecutiveFailures, success_count AS successCount,
+failure_count AS failureCount, last_success_at AS lastSuccessAt,
+last_failure_at AS lastFailureAt, circuit_open_until AS circuitOpenUntil,
+last_error AS lastError, action, updated_at AS updatedAt
+FROM notification_channel_health`;
+
+  const getChannelHealth = (channelKey) => normalizeHealth(sqlite.json(`${healthSelect}
+WHERE channel_key = ? LIMIT 1;`, [channelKey])[0]);
+
+  const listChannelHealth = () => sqlite.json(`${healthSelect}
+ORDER BY channel_key;`).map(normalizeHealth);
+
+  const saveChannelHealth = (health) => sqlite.execute(`INSERT INTO notification_channel_health (
+channel_key, status, consecutive_failures, success_count, failure_count,
+last_success_at, last_failure_at, circuit_open_until, last_error, action, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(channel_key) DO UPDATE SET
+status=excluded.status,
+consecutive_failures=excluded.consecutive_failures,
+success_count=excluded.success_count,
+failure_count=excluded.failure_count,
+last_success_at=excluded.last_success_at,
+last_failure_at=excluded.last_failure_at,
+circuit_open_until=excluded.circuit_open_until,
+last_error=excluded.last_error,
+action=excluded.action,
+updated_at=excluded.updated_at;`, [
+    health.channelKey,
+    health.status,
+    health.consecutiveFailures,
+    health.successCount,
+    health.failureCount,
+    health.lastSuccessAt,
+    health.lastFailureAt,
+    health.circuitOpenUntil,
+    health.lastError,
+    health.action,
+    health.updatedAt,
+  ]);
+
+  const channelDeliveryMetrics = () => sqlite.json(`SELECT channel_key AS channelKey,
+SUM(CASE WHEN status = 'accepted' AND updated_at >= datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS acceptedLast24h,
+SUM(CASE WHEN status IN ('failed', 'retrying') AND updated_at >= datetime('now', '-24 hours') THEN 1 ELSE 0 END) AS failedLast24h
+FROM notification_deliveries
+GROUP BY channel_key;`).map((row) => ({
+    channelKey: row.channelKey,
+    acceptedLast24h: Number(row.acceptedLast24h || 0),
+    failedLast24h: Number(row.failedLast24h || 0),
+  }));
+
   return {
     listChannels,
     listEvents,
@@ -207,5 +272,9 @@ FROM notification_events;`)[0] || {};
     requeueDelivery,
     cancelPendingDeliveriesByEventPrefix,
     metrics,
+    getChannelHealth,
+    listChannelHealth,
+    saveChannelHealth,
+    channelDeliveryMetrics,
   };
 }

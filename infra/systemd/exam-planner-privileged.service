@@ -7,12 +7,18 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=examplanner
-WorkingDirectory=/opt/exam-planner
+WorkingDirectory=/opt/exam-planner/current
 Environment=NODE_ENV=production
 Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
-ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/server/privileged-helper.mjs
+ExecStart=/opt/node-v22.22.3-linux-x64/bin/node /opt/exam-planner/current/server/privileged-helper.mjs
 Restart=always
 RestartSec=5
+MemoryAccounting=true
+MemoryHigh=80M
+MemoryMax=128M
+TasksMax=32
+CPUWeight=40
+OOMPolicy=stop
 RuntimeDirectory=exam-planner
 RuntimeDirectoryMode=0750
 UMask=0007
