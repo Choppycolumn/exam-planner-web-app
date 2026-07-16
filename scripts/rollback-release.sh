@@ -9,7 +9,10 @@ requested="${1:-previous}"
 original="$(readlink -f -- "$CURRENT_LINK")"
 
 if [[ "$requested" == previous ]]; then
-  target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | awk -v current="$original" '$2 != current { print $2; exit }')"
+  target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -printf '%f %p\n' | sort -r | awk -v current="$original" '$2 != current { print $2; exit }')"
+  if [[ -z "$target" ]]; then
+    target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name 'legacy-*' -printf '%T@ %p\n' | sort -nr | awk -v current="$original" '$2 != current { print $2; exit }')"
+  fi
 else
   target="$(readlink -f -- "$RELEASES_DIR/$requested")"
 fi
