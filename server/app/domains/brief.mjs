@@ -259,7 +259,7 @@ export function installBriefDomain(runtime, exposeRuntime) {
             parsed = {};
         }
         const settings = normalizeDailyBriefSettings(parsed);
-        if ((parsed.email?.password && !parsed.email.passwordEncrypted) || encryptedSecret?.needsMigration) {
+        if ((parsed.email?.password && !parsed.email.passwordEncrypted) || encryptedSecret?.needsMigration || encryptedSecret?.ok === false) {
             runtime.runSqlite(`UPDATE app_metadata SET value = ${runtime.sqlString(JSON.stringify(storedDailyBriefSettings(settings)))}, updated_at = datetime('now') WHERE key = ${runtime.sqlString(runtime.dailyBriefSettingsKey)};`);
         }
         return includeSecret ? settings : publicDailyBriefSettings(settings);
