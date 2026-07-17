@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/exam-planner}"
 APP_NODE_BIN="${APP_NODE_BIN:-/opt/node-v22.22.3-linux-x64/bin/node}"
+NGINX_COMMON_CONFIG="${NGINX_COMMON_CONFIG:-/etc/nginx/snippets/exam-planner-common.conf}"
 PACKAGE_FILE="${1:?deployment package path is required}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/exam-planner-deploy-backups}"
 RELEASES_DIR="$APP_DIR/releases"
@@ -171,6 +172,41 @@ configure_service_roles() {
   systemctl enable exam-planner exam-planner-worker exam-planner-privileged >/dev/null
 }
 
+configure_nginx_assets() {
+  local backup_file="$UNIT_BACKUP_DIR/exam-planner-common.conf"
+  [[ -f "$NGINX_COMMON_CONFIG" ]] || {
+    echo "Nginx common configuration is missing: $NGINX_COMMON_CONFIG" >&2
+    return 1
+  }
+  if grep -Fq 'root /opt/exam-planner/current/dist;' "$NGINX_COMMON_CONFIG"; then
+    nginx -t >/dev/null
+    return
+  fi
+  cp -a "$NGINX_COMMON_CONFIG" "$backup_file"
+  sed -i -E 's#alias /opt/exam-planner/(current/)?dist/assets/;#root /opt/exam-planner/current/dist;#' "$NGINX_COMMON_CONFIG"
+  if ! grep -Fq 'root /opt/exam-planner/current/dist;' "$NGINX_COMMON_CONFIG" || ! nginx -t >/dev/null; then
+    cp -a "$backup_file" "$NGINX_COMMON_CONFIG"
+    nginx -t >/dev/null || true
+    echo "Nginx asset path could not be migrated to the current release symlink" >&2
+    return 1
+  fi
+  systemctl reload nginx
+}
+
+verify_nginx_assets() {
+  local asset downloaded="$TEST_DATA_DIR/nginx-asset"
+  asset="$(grep -o '/assets/[^"[:space:]]*\.js' "$CURRENT_LINK/dist/index.html" | head -n 1)"
+  [[ "$asset" == /assets/*.js ]] || {
+    echo "built index does not reference a JavaScript asset" >&2
+    return 1
+  }
+  curl --max-time 10 -fsS -H 'Host: 127.0.0.1' "http://127.0.0.1:8088$asset" -o "$downloaded" || return 1
+  cmp -s "$CURRENT_LINK/dist$asset" "$downloaded" || {
+    echo "Nginx did not serve the JavaScript asset from the active release" >&2
+    return 1
+  }
+}
+
 start_and_verify() {
   systemctl start exam-planner-privileged || return 1
   for _ in $(seq 1 20); do [[ -S /run/exam-planner/privileged.sock ]] && break; sleep 0.2; done
@@ -181,6 +217,7 @@ start_and_verify() {
     sleep 1
   done
   "$APP_NODE_BIN" "$CURRENT_LINK/scripts/production-smoke.mjs" http://127.0.0.1:8080 >/dev/null || return 1
+  verify_nginx_assets || return 1
   systemctl start exam-planner-worker || return 1
   systemctl is-active --quiet exam-planner-worker || return 1
 }
@@ -225,6 +262,7 @@ prune_deploy_backups() {
 ensure_runtime_user
 migrate_inline_secrets
 prepare_previous_release
+configure_nginx_assets
 mv -- "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=""
 chown -R root:root "$RELEASE_DIR"

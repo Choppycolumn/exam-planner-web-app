@@ -83,6 +83,16 @@ suite('production server runtime', () => {
     expect(JSON.parse((await request(baseUrl, '/ready')).text).ok).toBe(true);
     expect((await request(baseUrl, '/')).text).toContain('type="password"');
     expect((await request(baseUrl, '/api/state')).status).toBe(401);
+    const unauthenticatedAsset = await request(baseUrl, '/assets/app.js');
+    expect(unauthenticatedAsset.status).toBe(401);
+    expect(unauthenticatedAsset.headers.get('content-type')).toContain('text/plain');
+    expect(unauthenticatedAsset.text).not.toContain('<!doctype html>');
+    const authenticatedAsset = await request(baseUrl, '/assets/app.js', { cookie });
+    expect(authenticatedAsset.status).toBe(200);
+    expect(authenticatedAsset.headers.get('content-type')).toContain('text/javascript');
+    const missingAsset = await request(baseUrl, '/assets/missing-build.js', { cookie });
+    expect(missingAsset.status).toBe(404);
+    expect(missingAsset.text).not.toContain('<!doctype html>');
   });
 
   it('persists a task through the real HTTP and SQLite stack', async () => {

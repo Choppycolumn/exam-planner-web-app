@@ -40,6 +40,7 @@ npm run build
 - 监听地址：`127.0.0.1:8080`
 - systemd 服务：`exam-planner`
 - 反向代理：Nginx
+- 静态资源根目录：`/opt/exam-planner/current/dist`（必须跟随 `current`，不能固定到旧版 `dist`）
 - 公网：80 跳转 443，443 反代到 8080
 - HTTPS：Certbot/Let's Encrypt
 - Docker：未发现
@@ -65,7 +66,7 @@ Telegram Bot 可以在通知中心配置。Webhook URL 填写网站 HTTPS 根地
 3. 服务器在临时目录执行语法、健康、认证写入和 Break Guard 幂等测试。
 4. 创建并校验部署前 SQLite 快照。
 5. 候选包移动到新的版本目录，以原子软链接切换 `current`。
-6. 启动 Web 和 Worker，验证 `/health` 与 `/ready`。
+6. 启动 Web 和 Worker，验证 `/health`、`/ready`，并逐字节核对 Nginx 返回的主 JavaScript 与当前版本构建产物一致。
 7. 失败时把 `current` 立即切回上一版本；共享数据目录不会被版本切换覆盖。
 
 手动回滚：

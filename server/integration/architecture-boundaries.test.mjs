@@ -48,8 +48,12 @@ describe('architecture boundaries', () => {
   });
 
   it('uses versioned releases and a persistent migration ledger', () => {
-    expect(read('scripts/remote-deploy.sh')).toContain('RELEASES_DIR');
-    expect(read('scripts/remote-deploy.sh')).toContain('CURRENT_LINK');
+    const deployScript = read('scripts/remote-deploy.sh');
+    expect(deployScript).toContain('RELEASES_DIR');
+    expect(deployScript).toContain('CURRENT_LINK');
+    expect(deployScript).toContain('verify_nginx_assets');
+    expect(read('server/nginx-exam-planner.conf')).toContain('root /opt/exam-planner/current/dist;');
+    expect(read('server/nginx-exam-planner.conf')).not.toContain('alias /opt/exam-planner/dist/assets/;');
     expect(read('infra/systemd/exam-planner.service')).toContain('/opt/exam-planner/current/server/web.mjs');
     expect(read('server/modules/migration-runner.mjs')).toContain('schema_migrations');
   });

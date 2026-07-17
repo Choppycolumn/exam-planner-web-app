@@ -176,6 +176,15 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
         }
         const pageSession = runtime.getSession(req.headers.cookie);
         if (!pageSession) {
+            if (requestPath.startsWith('/assets/')) {
+                res.writeHead(401, {
+                    'content-type': 'text/plain; charset=utf-8',
+                    'cache-control': 'no-store',
+                    'x-content-type-options': 'nosniff',
+                });
+                res.end('Authentication required');
+                return;
+            }
             runtime.sendHtml(res, renderLoginPage());
             return;
         }

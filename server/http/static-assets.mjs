@@ -27,6 +27,16 @@ export function createStaticAssetServer({ root, mimeTypes = defaultMimeTypes }) 
       res.end('Forbidden');
       return;
     }
+    const isAssetPath = decodedPath.startsWith('/assets/');
+    if (isAssetPath && !existsSync(filePath)) {
+      res.writeHead(404, {
+        'content-type': 'text/plain; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      });
+      res.end('Not found');
+      return;
+    }
     if (!existsSync(filePath) || decodedPath.endsWith('/')) {
       filePath = join(root, 'index.html');
     }
