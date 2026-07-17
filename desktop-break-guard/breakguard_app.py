@@ -46,7 +46,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.normal_width, self.normal_height = saved_window_size(self.config.window_geometry, self.minimum_width, self.minimum_height)
         self.normal_geometry = geometry_with_size(self.config.window_geometry, self.normal_width, self.normal_height)
         self.compact_mode = bool(self.planner.session)
-        self.width, self.height = (360, 168) if self.compact_mode else (self.normal_width, self.normal_height)
+        self.width, self.height = self.compact_dimensions() if self.compact_mode else (self.normal_width, self.normal_height)
         self.root.geometry(geometry_with_size(self.config.window_geometry, self.width, self.height))
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", self.config.always_on_top)
@@ -61,6 +61,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.canvas: Canvas | None = None
         self.timer_item = self.subtitle_item = self.status_item = self.state_dot = None
         self.progress_item = self.target_item = self.primary_label_item = None
+        self.segment_status_item = None
         self.button_commands = []
         self.buttons: dict[str, CanvasButton] = {}
         self.drag_offset = (0, 0)
@@ -142,6 +143,24 @@ class BreakGuardApp(WindowMixin, ViewMixin):
             self.cancel_break()
         else:
             self.start_study()
+
+    def toggle_segment(self) -> None:
+        if not self.planner.session:
+            self.set_status("请先开始课程")
+            return
+        snapshot = self.planner.segment_snapshot()
+        if snapshot["active"]:
+            segment = self.planner.finish_segment()
+            if segment:
+                self.set_status(f"第 {segment['sequence_number']} 段已记录：{segment['duration_seconds'] // 60:02d}:{segment['duration_seconds'] % 60:02d}")
+        else:
+            started = self.planner.start_segment()
+            if started:
+                self.set_status(f"第 {started['next_sequence_number']} 段开始计时")
+        if self.compact_mode:
+            self.rebuild_compact_ui()
+        else:
+            self.refresh_view_state()
     def start_study(self) -> None:
         if self.machine.session:
             self.set_status("请先结束当前休息")

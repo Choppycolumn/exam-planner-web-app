@@ -112,6 +112,35 @@ class BreakGuardCoreTests(unittest.TestCase):
         _session, duration = planner.complete_study(start + 75 * 60)
         self.assertEqual(duration, 4500)
 
+    def test_course_segments_persist_until_the_total_timer_ends(self):
+        start = datetime(2026, 7, 12, 9, 0).timestamp()
+        planner = self.planner()
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+
+        first_start = planner.start_segment(start + 5 * 60)
+        self.assertTrue(first_start["active"])
+        self.assertEqual(first_start["next_sequence_number"], 1)
+
+        restored = StudyPlanner(BreakGuardStore(self.database), 10, 20, 30, 200)
+        self.assertTrue(restored.segment_snapshot(start + 8 * 60)["active"])
+        first = restored.finish_segment(start + 15 * 60)
+        self.assertEqual(first["duration_seconds"], 600)
+
+        restored.start_segment(start + 20 * 60)
+        restored.start_segment(start + 22 * 60)
+        second = restored.finish_segment(start + 25 * 60)
+        self.assertEqual(second["duration_seconds"], 300)
+        snapshot = restored.segment_snapshot(start + 30 * 60)
+        self.assertFalse(snapshot["active"])
+        self.assertEqual([item["duration_seconds"] for item in snapshot["segments"]], [600, 300])
+        self.assertEqual(snapshot["total_seconds"], 900)
+
+        restarted = StudyPlanner(BreakGuardStore(self.database), 10, 20, 30, 200)
+        self.assertEqual(len(restarted.segment_snapshot(start + 30 * 60)["segments"]), 2)
+        restarted.complete_study(start + 40 * 60)
+        after_completion = StudyPlanner(BreakGuardStore(self.database), 10, 20, 30, 200)
+        self.assertEqual(after_completion.segment_snapshot()["segments"], [])
+
     def test_progress_uses_study_time(self):
         start = datetime(2026, 7, 12, 9, 0).timestamp()
         planner = self.planner_with_target(120)

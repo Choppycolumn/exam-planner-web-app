@@ -16,6 +16,7 @@ class ViewMixin:
         self.buttons = {}
         self.timer_item = self.subtitle_item = self.status_item = self.state_dot = None
         self.progress_item = self.target_item = None
+        self.segment_status_item = None
         if self.compact_mode:
             self.build_compact_ui()
             return
@@ -98,6 +99,26 @@ class ViewMixin:
         self.timer_item = canvas.create_text(34, 103, anchor="w", text="00:00", fill=LIQUID.text_primary, font=("Segoe UI Variable Display", 34, "bold"))
         self.subtitle_item = canvas.create_text(36, 137, anchor="w", text="已开始自动计时", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8, "bold"))
         self.add_button(self.width - 154, 82, 124, 58, "结束课程", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
+
+        panel_bottom = self.height - 18
+        rounded_rect(canvas, 24, 154, self.width - 24, panel_bottom, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+        canvas.create_text(38, 176, anchor="w", text="分段计时", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        self.segment_status_item = canvas.create_text(38, 199, anchor="w", text="需要时单独标记一段", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        self.add_button(self.width - 132, 166, 100, 36, "开始分段", "btn_segment", self.toggle_segment, LIQUID.accent_soft, LIQUID.accent)
+
+        segments = self.planner.segment_snapshot()["segments"]
+        if not segments:
+            canvas.create_text(38, 229, anchor="w", text="分段结束后会保留在这里，直至本次课程结束", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7))
+            return
+        gap = 8
+        chip_width = (self.width - 84) // 2
+        for index, segment in enumerate(segments):
+            row, column = divmod(index, 2)
+            x = 38 + column * (chip_width + gap)
+            y = 217 + row * 30
+            rounded_rect(canvas, x, y, x + chip_width, y + 25, 12, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+            label = f"第 {segment['sequence_number']} 段  {fmt_seconds(segment['duration_seconds'])}"
+            canvas.create_text(x + chip_width / 2, y + 13, text=label, fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8, "bold"))
     def schedule_row_count(self) -> int:
         project_count = max(1, min(12, len(self.config.available_projects)))
         return max(1, (project_count + 1) // 2)
@@ -320,3 +341,15 @@ class ViewMixin:
         self.set_timer(fmt_seconds(elapsed), f"{started_text} 开始 · 已自动记录")
         self.set_tone("running")
         self.canvas.itemconfigure("btn_primary__label", text="结束课程")
+        segment = self.planner.segment_snapshot()
+        segment_count = len(segment["segments"])
+        if segment["active"]:
+            status = f"第 {segment['next_sequence_number']} 段 · {fmt_seconds(segment['active_seconds'])}"
+            self.canvas.itemconfigure("btn_segment__label", text="结束分段")
+            self.buttons["btn_segment"].set_palette(LIQUID.warning_soft, LIQUID.control_hover, LIQUID.control_pressed, LIQUID.warning_text)
+        else:
+            status = f"已保留 {segment_count} 段 · 累计 {fmt_seconds(segment['total_seconds'])}" if segment_count else "需要时单独标记一段"
+            self.canvas.itemconfigure("btn_segment__label", text="开始分段")
+            self.buttons["btn_segment"].set_palette(LIQUID.accent_soft, LIQUID.control_hover, LIQUID.control_pressed, LIQUID.accent)
+        if self.segment_status_item is not None:
+            self.canvas.itemconfigure(self.segment_status_item, text=status)

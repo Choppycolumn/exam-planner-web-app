@@ -10,6 +10,11 @@ from liquid_style import LIQUID
 
 
 class WindowMixin:
+    def compact_dimensions(self) -> tuple[int, int]:
+        segment_count = len(self.planner.session.segments) if self.planner.session else 0
+        segment_rows = max(1, (segment_count + 1) // 2)
+        return 400, 265 + max(0, segment_rows - 1) * 30
+
     def enable_acrylic(self) -> None:
         if not IS_WINDOWS:
             return
@@ -50,7 +55,20 @@ class WindowMixin:
         right_edge = self.root.winfo_x() + self.normal_width
         top = self.root.winfo_y()
         self.compact_mode = True
-        self.width, self.height = 360, 168
+        self.width, self.height = self.compact_dimensions()
+        self.root.geometry(f"{self.width}x{self.height}+{max(0, right_edge - self.width)}+{max(0, top)}")
+        self.build_ui()
+        self.enable_acrylic()
+        clamp_window_to_screen(self.root, self.width, self.height)
+        self.refresh_view_state()
+
+    def rebuild_compact_ui(self) -> None:
+        if not self.compact_mode:
+            self.refresh_view_state()
+            return
+        right_edge = self.root.winfo_x() + self.width
+        top = self.root.winfo_y()
+        self.width, self.height = self.compact_dimensions()
         self.root.geometry(f"{self.width}x{self.height}+{max(0, right_edge - self.width)}+{max(0, top)}")
         self.build_ui()
         self.enable_acrylic()

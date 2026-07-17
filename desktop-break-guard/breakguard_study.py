@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from breakguard_state import utc_iso
@@ -22,6 +22,8 @@ class StudySession:
     started_iso: str
     project_id: int
     project_name: str
+    segments: list[dict] = field(default_factory=list)
+    segment_started_at: float | None = None
 
 
 class StudyPlanner:
@@ -44,6 +46,27 @@ class StudyPlanner:
         payload["sequence_number"] = int(payload.pop("lesson_number", payload.get("sequence_number", 1)) or 1)
         payload["project_id"] = int(payload.get("project_id") or 0)
         payload["project_name"] = str(payload.get("project_name") or "")
+        restored_segments = []
+        for index, item in enumerate(payload.get("segments") or []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                started_at = float(item["started_at"])
+                ended_at = max(started_at, float(item["ended_at"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            restored_segments.append({
+                "sequence_number": len(restored_segments) + 1,
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": max(0, int(item.get("duration_seconds", ended_at - started_at))),
+            })
+        payload["segments"] = restored_segments
+        try:
+            active_segment = float(payload["segment_started_at"]) if payload.get("segment_started_at") is not None else None
+        except (TypeError, ValueError):
+            active_segment = None
+        payload["segment_started_at"] = max(float(payload["started_at"]), active_segment) if active_segment is not None else None
         return StudySession(**{key: payload[key] for key in StudySession.__dataclass_fields__})
 
     def selected_project_id(self, available_project_ids: list[int] | None = None, now: float | None = None) -> int:
@@ -102,6 +125,46 @@ class StudyPlanner:
         if not self.session:
             return 0
         return max(0, int((now if now is not None else time.time()) - self.session.started_at))
+
+    def segment_snapshot(self, now: float | None = None) -> dict:
+        if not self.session:
+            return {"active": False, "active_seconds": 0, "segments": [], "total_seconds": 0, "next_sequence_number": 1}
+        now = now if now is not None else time.time()
+        segments = [dict(item) for item in self.session.segments]
+        active_seconds = max(0, int(now - self.session.segment_started_at)) if self.session.segment_started_at is not None else 0
+        return {
+            "active": self.session.segment_started_at is not None,
+            "active_started_at": self.session.segment_started_at,
+            "active_seconds": active_seconds,
+            "segments": segments,
+            "total_seconds": sum(int(item["duration_seconds"]) for item in segments) + active_seconds,
+            "next_sequence_number": len(segments) + 1,
+        }
+
+    def start_segment(self, now: float | None = None) -> dict | None:
+        if not self.session:
+            return None
+        now = max(self.session.started_at, now if now is not None else time.time())
+        if self.session.segment_started_at is None:
+            self.session.segment_started_at = now
+            self.store.save_study_session(asdict(self.session))
+        return self.segment_snapshot(now)
+
+    def finish_segment(self, now: float | None = None) -> dict | None:
+        if not self.session or self.session.segment_started_at is None:
+            return None
+        started_at = self.session.segment_started_at
+        ended_at = max(started_at, now if now is not None else time.time())
+        segment = {
+            "sequence_number": len(self.session.segments) + 1,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "duration_seconds": max(0, int(ended_at - started_at)),
+        }
+        self.session.segments.append(segment)
+        self.session.segment_started_at = None
+        self.store.save_study_session(asdict(self.session))
+        return dict(segment)
 
     def set_pause(self, label: str, now: float | None = None) -> None:
         now = now if now is not None else time.time()
