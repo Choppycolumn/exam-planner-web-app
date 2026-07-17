@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -180,7 +180,8 @@ export async function runRuntimeWatchdog({
   if (action === 'rollback') {
     state.rollbackAttempted = true;
     writeJson(statePath, state);
-    const rollback = runCommand('bash', [join(currentRelease, 'scripts', 'rollback-release.sh'), 'previous'], {
+    const rollbackTarget = basename(String(deployment.previousRelease));
+    const rollback = runCommand('bash', [join(currentRelease, 'scripts', 'rollback-release.sh'), rollbackTarget], {
       timeoutMs: 180_000,
       env: { EXAM_PLANNER_LOCK_HELD: '1' },
     });

@@ -95,7 +95,7 @@ describe('runtime recovery policy', () => {
     expect(result.recovered).toBe(true);
     expect(commands).toContainEqual(expect.objectContaining({
       command: 'bash',
-      args: [join(release, 'scripts', 'rollback-release.sh'), 'previous'],
+      args: [join(release, 'scripts', 'rollback-release.sh'), '20260716000000'],
       options: expect.objectContaining({ env: { EXAM_PLANNER_LOCK_HELD: '1' } }),
     }));
   });

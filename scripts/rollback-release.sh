@@ -9,6 +9,7 @@ SHARED_ROOT="$APP_DIR/shared"
 STATIC_ASSET_RETENTION_DAYS="${STATIC_ASSET_RETENTION_DAYS:-14}"
 requested="${1:-previous}"
 original="$(readlink -f -- "$CURRENT_LINK")"
+original_name="$(basename -- "$original")"
 
 if [[ "${EXAM_PLANNER_LOCK_HELD:-0}" != 1 ]]; then
   exec 9>/run/lock/exam-planner-deploy.lock
@@ -16,7 +17,7 @@ if [[ "${EXAM_PLANNER_LOCK_HELD:-0}" != 1 ]]; then
 fi
 
 if [[ "$requested" == previous ]]; then
-  target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -printf '%f %p\n' | sort -r | awk -v current="$original" '$2 != current { print $2; exit }')"
+  target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -printf '%f %p\n' | sort -r | awk -v current_name="$original_name" '$1 < current_name { print $2; exit }')"
   if [[ -z "$target" ]]; then
     target="$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -name 'legacy-*' -printf '%T@ %p\n' | sort -nr | awk -v current="$original" '$2 != current { print $2; exit }')"
   fi
