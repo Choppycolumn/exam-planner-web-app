@@ -40,7 +40,8 @@ npm run build
 - 监听地址：`127.0.0.1:8080`
 - systemd 服务：`exam-planner`
 - 反向代理：Nginx
-- 静态资源根目录：`/opt/exam-planner/current/dist`（必须跟随 `current`，不能固定到旧版 `dist`）
+- 静态资源池：`/opt/exam-planner/shared/assets`（按内容哈希命名，默认保留 14 天）
+- 当前 HTML：由 Node 从 `/opt/exam-planner/current/dist` 提供
 - 公网：80 跳转 443，443 反代到 8080
 - HTTPS：Certbot/Let's Encrypt
 - Docker：未发现
@@ -65,9 +66,10 @@ Telegram Bot 可以在通知中心配置。Webhook URL 填写网站 HTTPS 根地
 2. `scripts/deploy-production.ps1` 上传完整候选包。
 3. 服务器在临时目录执行语法、健康、认证写入和 Break Guard 幂等测试。
 4. 创建并校验部署前 SQLite 快照。
-5. 候选包移动到新的版本目录，以原子软链接切换 `current`。
-6. 启动 Web 和 Worker，验证 `/health`、`/ready`，并逐字节核对 Nginx 返回的主 JavaScript 与当前版本构建产物一致。
-7. 失败时把 `current` 立即切回上一版本；共享数据目录不会被版本切换覆盖。
+5. 候选包移动到新的版本目录；切换前把所有仍可回滚版本及候选版的内容哈希资源发布到共享资源池。
+6. 以原子软链接切换 `current`，启动 Web 和 Worker，验证 `/health`、`/ready`，并逐字节核对 Nginx 返回的主 JavaScript 与当前版本构建产物一致。
+7. 发布成功后记录当前版本、上一版本和激活时间，供运行时健康守护判断是否允许自动回滚。
+8. 失败时把 `current` 立即切回上一版本；共享数据目录和旧版静态资源不会被版本切换覆盖。
 
 手动回滚：
 
@@ -75,7 +77,16 @@ Telegram Bot 可以在通知中心配置。Webhook URL 填写网站 HTTPS 根地
 bash /opt/exam-planner/current/scripts/rollback-release.sh previous
 ```
 
-默认保留最近 5 个版本。
+默认保留最近 5 个版本；这些版本的静态资源会持续续期，版本目录被淘汰后仍默认保留 14 天，因此旧标签页和缓存 HTML 在发布后仍可加载原版本资源。资源过期清理由发布脚本执行，且不会覆盖同名不同内容的文件。
+
+## 运行时恢复
+
+`exam-planner-health-watchdog.timer` 每 2 分钟检查一次 Web、Worker、特权服务、Nginx、`/ready` 以及当前主 JavaScript 的长度、哈希和 MIME：
+
+- 首次失败只记录，避免瞬时抖动触发操作。
+- 连续失败时重启异常服务，并有 10 分钟动作冷却。
+- 新版本激活后 6 小时内连续失败达到阈值时，可自动回滚到记录的上一版本。
+- 每个版本最多自动回滚一次；部署与回滚共用文件锁，禁止并发切换。
 
 ## 辅助脚本
 

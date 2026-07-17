@@ -8,6 +8,9 @@ PACKAGE_FILE="${1:?deployment package path is required}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/exam-planner-deploy-backups}"
 RELEASES_DIR="$APP_DIR/releases"
 CURRENT_LINK="$APP_DIR/current"
+SHARED_ROOT="$APP_DIR/shared"
+WATCHDOG_STATE_DIR="$APP_DIR/data/runtime-watchdog"
+STATIC_ASSET_RETENTION_DAYS="${STATIC_ASSET_RETENTION_DAYS:-14}"
 STAMP="$(date +%Y%m%d%H%M%S)"
 RELEASE_DIR="$RELEASES_DIR/$STAMP"
 UNIT_BACKUP_DIR="$BACKUP_DIR/units-pre-$STAMP"
@@ -17,6 +20,9 @@ TEST_PID=""
 HELPER_PID=""
 PREVIOUS_RELEASE=""
 
+exec 9>/run/lock/exam-planner-deploy.lock
+flock -w 30 9 || { echo "another deployment or recovery action is active" >&2; exit 1; }
+
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" >/dev/null 2>&1 || true; fi
@@ -25,8 +31,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$APP_DIR" "$RELEASES_DIR" "$BACKUP_DIR" "$UNIT_BACKUP_DIR"
-for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service; do
+mkdir -p "$APP_DIR" "$RELEASES_DIR" "$SHARED_ROOT/assets" "$BACKUP_DIR" "$UNIT_BACKUP_DIR"
+for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer; do
   [[ -e "$unit_item" ]] && cp -a "$unit_item" "$UNIT_BACKUP_DIR/"
 done
 
@@ -37,6 +43,9 @@ tar -xzf "$PACKAGE_FILE" -C "$STAGE_DIR"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/web.mjs"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/worker.mjs"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/privileged-helper.mjs"
+"$APP_NODE_BIN" --check "$STAGE_DIR/server/infrastructure/runtime-watchdog.mjs"
+bash -n "$STAGE_DIR/scripts/publish-release-assets.sh"
+bash -n "$STAGE_DIR/scripts/rollback-release.sh"
 
 PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" "$APP_NODE_BIN" "$STAGE_DIR/server/privileged-helper.mjs" >"$TEST_DATA_DIR/helper.log" 2>&1 &
 HELPER_PID="$!"
@@ -90,6 +99,7 @@ keys = {
     'BACKUP_KEEP_MANUAL', 'BACKUP_KEEP_MIGRATION', 'BACKUP_KEEP_OTHER',
     'BACKGROUND_TASK_CONCURRENCY', 'BACKGROUND_MIN_AVAILABLE_MEMORY_BYTES',
     'BACKGROUND_MAX_LOAD_PER_CPU', 'ERROR_THEME_TIME', 'MAINTENANCE_TIME',
+    'STATIC_ASSET_RETENTION_DAYS',
 }
 values = {}
 if os.path.exists(target):
@@ -107,6 +117,11 @@ for item in shlex.split(raw):
     key, separator, value = item.partition('=')
     if separator and key in keys and value:
         values[key] = value
+if values.get('ERROR_THEME_TIME') in {None, '03:10'}:
+    values['ERROR_THEME_TIME'] = '03:30'
+if values.get('MAINTENANCE_TIME') in {None, '04:20'}:
+    values['MAINTENANCE_TIME'] = '05:20'
+values.setdefault('STATIC_ASSET_RETENTION_DAYS', '14')
 missing = {'APP_PASSWORD', 'COOKIE_SECRET', 'SETTINGS_ENCRYPTION_KEY'} - values.keys()
 if missing:
     raise SystemExit(f"missing required runtime credentials: {', '.join(sorted(missing))}")
@@ -133,6 +148,7 @@ ensure_runtime_user() {
   chown -R examplanner:examplanner "$APP_DIR/data"
   find "$APP_DIR/data" -type d -exec chmod 0700 {} +
   find "$APP_DIR/data" -type f -exec chmod 0600 {} +
+  install -d -o root -g examplanner -m 0750 "$WATCHDOG_STATE_DIR"
 }
 
 prepare_previous_release() {
@@ -167,9 +183,49 @@ configure_service_roles() {
   install -m 0644 "$release/infra/systemd/exam-planner.service" /etc/systemd/system/exam-planner.service
   install -m 0644 "$release/infra/systemd/exam-planner-worker.service" /etc/systemd/system/exam-planner-worker.service
   install -m 0644 "$release/infra/systemd/exam-planner-privileged.service" /etc/systemd/system/exam-planner-privileged.service
+  if [[ -f "$release/infra/systemd/exam-planner-health-watchdog.service" && -f "$release/server/infrastructure/runtime-watchdog.mjs" ]]; then
+    install -d -m 0755 /usr/local/lib/exam-planner
+    install -m 0644 "$release/server/infrastructure/runtime-watchdog.mjs" /usr/local/lib/exam-planner/runtime-watchdog.mjs
+    install -m 0644 "$release/infra/systemd/exam-planner-health-watchdog.service" /etc/systemd/system/exam-planner-health-watchdog.service
+    install -m 0644 "$release/infra/systemd/exam-planner-health-watchdog.timer" /etc/systemd/system/exam-planner-health-watchdog.timer
+  fi
+  install_timer_override() {
+    local source_file="$1" timer_unit="$2" target_dir="/etc/systemd/system/$2.d"
+    [[ -f "$source_file" ]] || return
+    systemctl cat "$timer_unit" >/dev/null 2>&1 || return
+    install -d -m 0755 "$target_dir"
+    install -m 0644 "$source_file" "$target_dir/zz-exam-planner-window.conf"
+  }
+  install_timer_override "$release/infra/systemd/timer-overrides/apt-daily.conf" apt-daily.timer
+  install_timer_override "$release/infra/systemd/timer-overrides/apt-daily-upgrade.conf" apt-daily-upgrade.timer
+  install_timer_override "$release/infra/systemd/timer-overrides/logrotate.conf" logrotate.timer
+  install_timer_override "$release/infra/systemd/timer-overrides/dpkg-db-backup.conf" dpkg-db-backup.timer
+  install_timer_override "$release/infra/systemd/timer-overrides/openclaw-night-stop.conf" openclaw-night-stop.timer
+  install_timer_override "$release/infra/systemd/timer-overrides/openclaw-morning-start.conf" openclaw-morning-start.timer
   rm -rf /etc/systemd/system/exam-planner.service.d
   systemctl daemon-reload
   systemctl enable exam-planner exam-planner-worker exam-planner-privileged >/dev/null
+  if [[ -f /etc/systemd/system/exam-planner-health-watchdog.timer ]]; then
+    systemctl enable --now exam-planner-health-watchdog.timer >/dev/null
+  fi
+  for timer_unit in apt-daily.timer apt-daily-upgrade.timer logrotate.timer dpkg-db-backup.timer openclaw-night-stop.timer openclaw-morning-start.timer; do
+    systemctl is-enabled --quiet "$timer_unit" && systemctl restart "$timer_unit" || true
+  done
+}
+
+publish_release_assets() {
+  local release="$1" publisher="$1/scripts/publish-release-assets.sh"
+  [[ -f "$publisher" ]] || publisher="$RELEASE_DIR/scripts/publish-release-assets.sh"
+  [[ -f "$publisher" ]] || { echo "asset publisher is missing" >&2; return 1; }
+  APP_DIR="$APP_DIR" ASSET_SHARED_ROOT="$SHARED_ROOT" STATIC_ASSET_RETENTION_DAYS="$STATIC_ASSET_RETENTION_DAYS" \
+    bash "$publisher" "$release" >/dev/null
+}
+
+publish_retained_assets() {
+  local release
+  while IFS= read -r release; do
+    [[ -d "$release/dist/assets" ]] && publish_release_assets "$release"
+  done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -print | sort)
 }
 
 configure_nginx_assets() {
@@ -178,16 +234,16 @@ configure_nginx_assets() {
     echo "Nginx common configuration is missing: $NGINX_COMMON_CONFIG" >&2
     return 1
   }
-  if grep -Fq 'root /opt/exam-planner/current/dist;' "$NGINX_COMMON_CONFIG"; then
+  if grep -Fq 'root /opt/exam-planner/shared;' "$NGINX_COMMON_CONFIG"; then
     nginx -t >/dev/null
     return
   fi
   cp -a "$NGINX_COMMON_CONFIG" "$backup_file"
-  sed -i -E 's#alias /opt/exam-planner/(current/)?dist/assets/;#root /opt/exam-planner/current/dist;#' "$NGINX_COMMON_CONFIG"
-  if ! grep -Fq 'root /opt/exam-planner/current/dist;' "$NGINX_COMMON_CONFIG" || ! nginx -t >/dev/null; then
+  sed -i -E 's#alias /opt/exam-planner/(current/)?dist/assets/;|root /opt/exam-planner/current/dist;#root /opt/exam-planner/shared;#' "$NGINX_COMMON_CONFIG"
+  if ! grep -Fq 'root /opt/exam-planner/shared;' "$NGINX_COMMON_CONFIG" || ! nginx -t >/dev/null; then
     cp -a "$backup_file" "$NGINX_COMMON_CONFIG"
     nginx -t >/dev/null || true
-    echo "Nginx asset path could not be migrated to the current release symlink" >&2
+    echo "Nginx asset path could not be migrated to the shared immutable asset pool" >&2
     return 1
   fi
   systemctl reload nginx
@@ -220,11 +276,15 @@ start_and_verify() {
   verify_nginx_assets || return 1
   systemctl start exam-planner-worker || return 1
   systemctl is-active --quiet exam-planner-worker || return 1
+  if [[ -f /usr/local/lib/exam-planner/runtime-watchdog.mjs ]]; then
+    "$APP_NODE_BIN" /usr/local/lib/exam-planner/runtime-watchdog.mjs --check-only >/dev/null || return 1
+  fi
 }
 
 rollback_release() {
   systemctl stop exam-planner-worker exam-planner exam-planner-privileged 2>/dev/null || true
   if [[ -n "$PREVIOUS_RELEASE" && -d "$PREVIOUS_RELEASE" ]]; then
+    publish_release_assets "$PREVIOUS_RELEASE"
     activate_release "$PREVIOUS_RELEASE"
     configure_service_roles "$PREVIOUS_RELEASE"
     start_and_verify
@@ -234,6 +294,16 @@ rollback_release() {
   cp -a "$UNIT_BACKUP_DIR"/* /etc/systemd/system/ 2>/dev/null || true
   systemctl daemon-reload
   systemctl restart exam-planner-privileged exam-planner exam-planner-worker
+}
+
+write_deployment_state() {
+  local temporary="$WATCHDOG_STATE_DIR/deployment-state.json.tmp"
+  install -d -o root -g examplanner -m 0750 "$WATCHDOG_STATE_DIR"
+  printf '{"release":"%s","previousRelease":"%s","activatedAtMs":%s}\n' \
+    "$RELEASE_DIR" "$PREVIOUS_RELEASE" "$(($(date +%s) * 1000))" >"$temporary"
+  chown root:examplanner "$temporary"
+  chmod 0640 "$temporary"
+  mv -f -- "$temporary" "$WATCHDOG_STATE_DIR/deployment-state.json"
 }
 
 prune_releases() {
@@ -262,11 +332,12 @@ prune_deploy_backups() {
 ensure_runtime_user
 migrate_inline_secrets
 prepare_previous_release
-configure_nginx_assets
 mv -- "$STAGE_DIR" "$RELEASE_DIR"
 STAGE_DIR=""
 chown -R root:root "$RELEASE_DIR"
 find "$RELEASE_DIR" -type d -exec chmod 0755 {} +
+publish_retained_assets
+configure_nginx_assets
 
 systemctl stop exam-planner-worker 2>/dev/null || true
 systemctl stop exam-planner || true
@@ -280,6 +351,7 @@ if ! start_and_verify; then
   exit 1
 fi
 
+write_deployment_state
 prune_releases
 prune_deploy_backups
 rm -f -- "$PACKAGE_FILE"

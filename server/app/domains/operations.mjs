@@ -40,7 +40,7 @@ export function installOperationsDomain(runtime, exposeRuntime) {
         }
     }
     function scheduleDailyMaintenance() {
-        const { delay, nextAt } = chinaWallClockDelay(process.env.MAINTENANCE_TIME || '04:20');
+        const { delay, nextAt } = chinaWallClockDelay(process.env.MAINTENANCE_TIME || '05:20');
         runtime.nextMaintenanceAt = nextAt;
         runtime.setRuntimeMetadata('worker_next_maintenance_at', runtime.nextMaintenanceAt);
         runtime.maintenanceTimer = runtime.scheduler.scheduleOnce('daily-maintenance', delay, async () => {

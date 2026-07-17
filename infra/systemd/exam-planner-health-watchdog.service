@@ -1,0 +1,25 @@
+[Unit]
+Description=Exam Planner end-to-end health recovery
+After=network-online.target nginx.service exam-planner.service exam-planner-worker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=examplanner
+UMask=0027
+Environment=APP_DIR=/opt/exam-planner
+Environment=WATCHDOG_STATE_DIR=/opt/exam-planner/data/runtime-watchdog
+Environment=WATCHDOG_RESTART_THRESHOLD=2
+Environment=WATCHDOG_ROLLBACK_THRESHOLD=3
+Environment=WATCHDOG_ACTION_COOLDOWN_SECONDS=600
+Environment=WATCHDOG_ROLLBACK_WINDOW_SECONDS=21600
+ExecStart=/usr/bin/flock -n -E 0 /run/lock/exam-planner-deploy.lock /opt/node-v22.22.3-linux-x64/bin/node /usr/local/lib/exam-planner/runtime-watchdog.mjs
+TimeoutStartSec=240
+Nice=10
+IOSchedulingClass=idle
+MemoryAccounting=true
+MemoryHigh=64M
+MemoryMax=96M
+TasksMax=32
+PrivateTmp=true

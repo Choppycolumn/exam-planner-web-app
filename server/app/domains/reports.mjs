@@ -843,9 +843,11 @@ export function installReportsDomain(runtime, exposeRuntime) {
     function nextChinaThreeAMDelay() {
         const now = new Date();
         const chinaNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-        const [hourText, minuteText] = String(process.env.ERROR_THEME_TIME || '03:10').split(':');
-        const hour = Math.max(0, Math.min(23, Number(hourText) || 3));
-        const minute = Math.max(0, Math.min(59, Number(minuteText) || 10));
+        const [hourText, minuteText] = String(process.env.ERROR_THEME_TIME || '03:30').split(':');
+        const parsedHour = Number(hourText);
+        const parsedMinute = Number(minuteText);
+        const hour = Math.max(0, Math.min(23, Number.isFinite(parsedHour) ? parsedHour : 3));
+        const minute = Math.max(0, Math.min(59, Number.isFinite(parsedMinute) ? parsedMinute : 30));
         const targetChina = new Date(Date.UTC(chinaNow.getUTCFullYear(), chinaNow.getUTCMonth(), chinaNow.getUTCDate(), hour, minute, 0, 0));
         if (chinaNow >= targetChina)
             targetChina.setUTCDate(targetChina.getUTCDate() + 1);

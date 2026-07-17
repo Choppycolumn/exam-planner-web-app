@@ -51,10 +51,30 @@ describe('architecture boundaries', () => {
     const deployScript = read('scripts/remote-deploy.sh');
     expect(deployScript).toContain('RELEASES_DIR');
     expect(deployScript).toContain('CURRENT_LINK');
+    expect(deployScript).toContain('publish_release_assets');
     expect(deployScript).toContain('verify_nginx_assets');
-    expect(read('server/nginx-exam-planner.conf')).toContain('root /opt/exam-planner/current/dist;');
+    expect(deployScript).toContain('write_deployment_state');
+    expect(read('server/nginx-exam-planner.conf')).toContain('root /opt/exam-planner/shared;');
+    expect(read('server/nginx-exam-planner.conf')).not.toContain('root /opt/exam-planner/current/dist;');
     expect(read('server/nginx-exam-planner.conf')).not.toContain('alias /opt/exam-planner/dist/assets/;');
     expect(read('infra/systemd/exam-planner.service')).toContain('/opt/exam-planner/current/server/web.mjs');
     expect(read('server/modules/migration-runner.mjs')).toContain('schema_migrations');
+  });
+
+  it('installs a bounded runtime watchdog and staggered maintenance windows', () => {
+    const watchdogUnit = read('infra/systemd/exam-planner-health-watchdog.service');
+    const watchdogTimer = read('infra/systemd/exam-planner-health-watchdog.timer');
+    const deployScript = read('scripts/remote-deploy.sh');
+
+    expect(watchdogUnit).toContain('runtime-watchdog.mjs');
+    expect(watchdogUnit).toContain('exam-planner-deploy.lock');
+    expect(watchdogTimer).toContain('OnUnitActiveSec=2min');
+    expect(deployScript).toContain('zz-exam-planner-window.conf');
+    expect(read('infra/systemd/timer-overrides/openclaw-night-stop.conf')).toContain('OnCalendar=*-*-* 03:00:00');
+    expect(read('infra/systemd/timer-overrides/openclaw-morning-start.conf')).toContain('OnCalendar=*-*-* 07:00:00');
+    expect(read('infra/systemd/timer-overrides/logrotate.conf')).toContain('OnCalendar=*-*-* 03:10:00');
+    expect(read('infra/systemd/timer-overrides/dpkg-db-backup.conf')).toContain('OnCalendar=*-*-* 03:20:00');
+    expect(read('infra/systemd/timer-overrides/apt-daily.conf')).toContain('OnCalendar=*-*-* 03:50:00');
+    expect(read('infra/systemd/timer-overrides/apt-daily-upgrade.conf')).toContain('OnCalendar=*-*-* 04:20:00');
   });
 });

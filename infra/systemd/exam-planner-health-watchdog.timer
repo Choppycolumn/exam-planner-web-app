@@ -1,0 +1,14 @@
+[Unit]
+Description=Check Exam Planner end-to-end health every two minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+AccuracySec=15s
+Persistent=false
+Unit=exam-planner-health-watchdog.service
+
+[Install]
+WantedBy=timers.target
+
