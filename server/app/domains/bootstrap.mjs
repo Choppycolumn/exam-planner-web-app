@@ -11,6 +11,8 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
     }
     const renderLoginPage = (error = '') => runtime.loginPage(error, {
         canAddUser: runtime.userAccountRepository.canCreateLearner(),
+        maxUsers: runtime.userAccountRepository.maxUsers,
+        userCount: runtime.userAccountRepository.countAccounts(),
     });
     const sessionCookie = (session) => `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(session))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`;
     const requestHandler = async (req, res) => {
@@ -73,7 +75,7 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
             const confirmation = String(params.get('confirmPassword') || '');
             let errorMessage = '';
             if (!runtime.userAccountRepository.canCreateLearner())
-                errorMessage = '双用户席位已满，不能继续新增用户。';
+                errorMessage = '用户席位已满，不能继续新增用户。';
             else if (password.length < 6 || password.length > 128)
                 errorMessage = '密码长度需要在 6 到 128 位之间。';
             else if (password !== confirmation)
@@ -98,8 +100,13 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
                 res.end();
             }
             catch (error) {
-                const status = error?.code === 'USER_LIMIT_REACHED' ? 409 : 500;
-                runtime.sendHtml(res, renderLoginPage(status === 409 ? '双用户席位已满，不能继续新增用户。' : '创建用户失败，请稍后重试。'), status);
+                const status = error?.code === 'USER_LIMIT_REACHED' ? 409 : error?.code === 'PASSWORD_IN_USE' ? 400 : 500;
+                const message = error?.code === 'USER_LIMIT_REACHED'
+                    ? '用户席位已满，不能继续新增用户。'
+                    : error?.code === 'PASSWORD_IN_USE'
+                        ? '该密码已被其他学习用户使用，请更换一个密码。'
+                        : '创建用户失败，请稍后重试。';
+                runtime.sendHtml(res, renderLoginPage(message), status);
             }
             return;
         }

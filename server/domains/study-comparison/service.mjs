@@ -2,7 +2,7 @@ function numeric(value) {
   return Number(value || 0);
 }
 
-export function createStudyComparisonService({ database, todayISO, addDaysISO, nowISO }) {
+export function createStudyComparisonService({ database, todayISO, addDaysISO, nowISO, maxUsers = 3 }) {
   const getComparison = ({ days = 30 } = {}) => {
     const safeDays = Math.max(7, Math.min(90, Number(days) || 30));
     const today = todayISO();
@@ -73,7 +73,7 @@ ORDER BY date, user_id;`, [periodStart, today]);
       today,
       periodStart,
       periodEnd: today,
-      maxUsers: 2,
+      maxUsers,
       accounts: accountSummaries,
       daily,
     };

@@ -140,7 +140,7 @@ const breakGuardRepository = createBreakGuardRepository(sqliteRepository);
 const backupRepository = createBackupRepository(sqliteRepository);
 const dictionaryDatabase = createSqliteRepository({ sqliteFile: dictionarySqliteFile, dataDir });
 const dictionaryRepository = createDictionaryRepository(dictionaryDatabase);
-const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers: 2 });
+const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers: 3 });
 const scheduler = createSchedulerRegistry({
     onError: (name, error) => console.error(JSON.stringify({
         level: 'error', event: 'scheduled_job_failed', name, error: String(error?.message || error),
@@ -297,6 +297,7 @@ const studyComparisonService = createStudyComparisonService({
     todayISO,
     addDaysISO,
     nowISO,
+    maxUsers: userAccountRepository.maxUsers,
 });
 exposeRuntime({ studyComparisonService: () => studyComparisonService });
 installDomain('api', installApiDomain);

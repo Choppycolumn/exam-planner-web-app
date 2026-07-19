@@ -14,6 +14,12 @@ const periods = [
   { days: 90, label: '近 90 天' },
 ] as const;
 
+const accountStyles = [
+  { icon: 'bg-blue-50 text-blue-700', bar: 'bg-blue-500' },
+  { icon: 'bg-emerald-50 text-emerald-700', bar: 'bg-emerald-500' },
+  { icon: 'bg-violet-50 text-violet-700', bar: 'bg-violet-500' },
+] as const;
+
 export function StudyComparisonPage() {
   const [days, setDays] = useState<7 | 30 | 90>(30);
   const { data, isLoading } = useQuery({
@@ -39,15 +45,17 @@ export function StudyComparisonPage() {
       </div>
 
       {!data ? (
-        <EmptyState title={isLoading ? '正在读取双方学习记录' : '暂无可对比数据'} />
+        <EmptyState title={isLoading ? '正在读取各用户学习记录' : '暂无可对比数据'} />
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-2">
-            {data.accounts.map((account, index) => (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {data.accounts.map((account, index) => {
+              const style = accountStyles[index % accountStyles.length];
+              return (
               <section key={account.userId} className="card p-5">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <span className={`grid h-10 w-10 place-items-center rounded-xl ${index === 0 ? 'bg-blue-50 text-blue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                    <span className={`grid h-10 w-10 place-items-center rounded-xl ${style.icon}`}>
                       <Users size={19} />
                     </span>
                     <div>
@@ -64,12 +72,13 @@ export function StudyComparisonPage() {
                   <Metric icon={<Flame size={16} />} label="累计" value={minutesToHoursText(account.totalMinutes)} />
                 </div>
               </section>
-            ))}
+              );
+            })}
           </div>
 
-          {data.accounts.length < 2 ? (
+          {data.accounts.length < data.maxUsers ? (
             <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-800">
-              第二位学习用户创建并产生记录后，这里会自动显示双方对比。
+              新的学习用户创建并产生记录后，这里会自动加入对比；系统最多显示 {data.maxUsers} 位用户。
             </div>
           ) : null}
 
@@ -88,12 +97,13 @@ export function StudyComparisonPage() {
                   <div className="space-y-1.5">
                     {data.accounts.map((account, index) => {
                       const minutes = Number(day.users[String(account.userId)] || 0);
+                      const style = accountStyles[index % accountStyles.length];
                       return (
                         <div key={account.userId} className="grid grid-cols-[64px_1fr_56px] items-center gap-2">
                           <span className="truncate text-xs text-slate-600">{account.displayName}</span>
                           <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
                             <div
-                              className={`h-full rounded-full ${index === 0 ? 'bg-blue-500' : 'bg-emerald-500'}`}
+                              className={`h-full rounded-full ${style.bar}`}
                               style={{ width: `${minutes ? Math.max(3, (minutes / maxDailyMinutes) * 100) : 0}%` }}
                             />
                           </div>

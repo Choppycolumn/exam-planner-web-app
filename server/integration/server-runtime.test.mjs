@@ -112,7 +112,7 @@ suite('production server runtime', () => {
     expect((await request(baseUrl, '/api/market-copilot', { cookie })).status).toBe(410);
   });
 
-  it('creates one password-only learner with isolated study data and restricted capabilities', async () => {
+  it('creates two password-only learners with isolated data and shared study comparison', async () => {
     const loginPage = await request(baseUrl, '/');
     expect(loginPage.text).toContain('新增学习用户');
     const registration = await fetch(`${baseUrl}/register-learner`, {
@@ -126,7 +126,7 @@ suite('production server runtime', () => {
     const learnerCookie = registration.headers.get('set-cookie')?.split(';')[0] || '';
 
     const session = JSON.parse((await request(baseUrl, '/api/session', { cookie: learnerCookie })).text);
-    expect(session).toMatchObject({ userId: 2, accountType: 'learner', userCount: 2, canAddUser: false });
+    expect(session).toMatchObject({ userId: 2, accountType: 'learner', userCount: 2, maxUsers: 3, canAddUser: true });
     expect(session.capabilities).toContain('dashboard');
     expect(session.capabilities).not.toContain('operations');
     expect((await request(baseUrl, '/api/notifications/center', { cookie: learnerCookie })).status).toBe(403);
@@ -203,6 +203,7 @@ suite('production server runtime', () => {
 
     const comparison = JSON.parse((await request(baseUrl, '/api/study-comparison?days=7', { cookie: learnerCookie })).text);
     expect(comparison.accounts).toHaveLength(2);
+    expect(comparison.maxUsers).toBe(3);
     expect(comparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
 
     const sqlite = new DatabaseSync(join(temporary, 'data', 'exam-planner.sqlite'), { readOnly: true });
@@ -218,6 +219,45 @@ suite('production server runtime', () => {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ password: 'third-runtime-password', confirmPassword: 'third-runtime-password' }),
     });
-    expect(secondRegistration.status).toBe(400);
+    expect(secondRegistration.status).toBe(302);
+    const thirdUserCookie = secondRegistration.headers.get('set-cookie')?.split(';')[0] || '';
+    const thirdUserSession = JSON.parse((await request(baseUrl, '/api/session', { cookie: thirdUserCookie })).text);
+    expect(thirdUserSession).toMatchObject({ userId: 3, displayName: '学习伙伴 2', accountType: 'learner', userCount: 3, maxUsers: 3, canAddUser: false });
+    expect(thirdUserSession.capabilities).not.toContain('operations');
+    expect((await request(baseUrl, '/api/settings/mihomo', { cookie: thirdUserCookie })).status).toBe(403);
+    expect((await request(baseUrl, '/api/tasks/status', { cookie: thirdUserCookie })).status).toBe(403);
+
+    const thirdProjects = JSON.parse((await request(baseUrl, '/api/projects', { cookie: thirdUserCookie })).text).items;
+    expect(thirdProjects.length).toBeGreaterThan(0);
+    expect(thirdProjects.some((project) => projects.some((learnerProject) => learnerProject.id === project.id))).toBe(false);
+    await request(baseUrl, '/api/study-records/save-day', {
+      method: 'POST',
+      cookie: thirdUserCookie,
+      body: { date, records: [{ projectId: thirdProjects[0].id, projectNameSnapshot: thirdProjects[0].name, minutes: 35, note: 'third learner fixture' }] },
+    });
+    const thirdSubjectId = Number(JSON.parse((await request(baseUrl, '/api/subjects/save', {
+      method: 'POST', cookie: thirdUserCookie, body: { name: '第三用户独立科目', color: '#8b5cf6' },
+    })).text));
+    expect(thirdSubjectId).toBeGreaterThan(0);
+    const thirdRecords = JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: thirdUserCookie })).text).records;
+    const secondUserRecordsAfterThird = JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: learnerCookie })).text).records;
+    expect(thirdRecords).toEqual([expect.objectContaining({ minutes: 35, note: 'third learner fixture' })]);
+    expect(secondUserRecordsAfterThird.some((record) => record.note === 'third learner fixture')).toBe(false);
+    expect(JSON.parse((await request(baseUrl, '/api/subjects', { cookie: learnerCookie })).text).items.some((item) => item.name === '第三用户独立科目')).toBe(false);
+    expect(JSON.parse((await request(baseUrl, '/api/subjects', { cookie })).text).items.some((item) => item.name === '第三用户独立科目')).toBe(false);
+
+    const threeUserComparison = JSON.parse((await request(baseUrl, '/api/study-comparison?days=7', { cookie: thirdUserCookie })).text);
+    expect(threeUserComparison.accounts).toHaveLength(3);
+    expect(threeUserComparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
+    expect(threeUserComparison.accounts.find((account) => account.userId === 3)).toEqual(expect.objectContaining({ todayMinutes: 35 }));
+
+    const fourthRegistration = await fetch(`${baseUrl}/register-learner`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ password: 'fourth-runtime-password', confirmPassword: 'fourth-runtime-password' }),
+    });
+    expect(fourthRegistration.status).toBe(400);
+    expect(await request(baseUrl, '/')).not.toEqual(expect.objectContaining({ text: expect.stringContaining('新增学习用户') }));
   });
 });

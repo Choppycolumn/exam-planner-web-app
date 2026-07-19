@@ -18,7 +18,7 @@ export interface AccountSession {
   displayName: string;
   accountType: 'admin' | 'learner' | 'visitor';
   role: 'write' | 'read';
-  maxUsers: 2;
+  maxUsers: number;
   userCount: number;
   canAddUser: boolean;
   capabilities: string[];
@@ -41,7 +41,7 @@ export interface StudyComparisonResponse {
   today: string;
   periodStart: string;
   periodEnd: string;
-  maxUsers: 2;
+  maxUsers: number;
   accounts: StudyComparisonAccount[];
   daily: Array<{ date: string; users: Record<string, number> }>;
 }

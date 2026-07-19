@@ -122,7 +122,7 @@ export function createSessionAuth({
     return sleep(loginFailureDelayMinMs + Math.floor(Math.random() * loginFailureDelaySpreadMs));
   }
 
-  function loginPage(error = '', { canAddUser = false } = {}) {
+  function loginPage(error = '', { canAddUser = false, maxUsers = 3, userCount = 1 } = {}) {
     const safeError = String(error || '').replace(/[&<>"']/g, (character) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     })[character]);
@@ -158,7 +158,7 @@ export function createSessionAuth({
     </form>
     ${canAddUser ? `<details>
       <summary>+ 新增学习用户</summary>
-      <p class="hint">无需用户名。设置一个独立密码后，它会成为第二位也是最后一位学习用户。</p>
+      <p class="hint">无需用户名。设置独立密码后会创建第 ${Math.min(Number(userCount || 1) + 1, Number(maxUsers || 3))} 位用户，个人学习数据彼此隔离。</p>
       <form method="post" action="/register-learner">
         <label for="new-password">设置密码</label>
         <input id="new-password" name="password" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
@@ -166,7 +166,7 @@ export function createSessionAuth({
         <input id="confirm-password" name="confirmPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required />
         <button class="secondary" type="submit">创建并进入</button>
       </form>
-    </details>` : '<p class="hint">双用户席位已满。</p>'}
+    </details>` : `<p class="hint">${Number(maxUsers || 3)} 个用户席位已满。</p>`}
     ${safeError ? `<div class="error">${safeError}</div>` : ''}
   </main>
 </body>
