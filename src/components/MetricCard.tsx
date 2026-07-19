@@ -9,7 +9,7 @@ export function MetricCard({ label, value, hint, icon }: { label: string; value:
           <div className="mt-2 text-2xl font-semibold text-slate-950">{value}</div>
           {hint ? <p className="mt-2 text-sm text-slate-500">{hint}</p> : null}
         </div>
-        {icon ? <div className="rounded-lg bg-slate-100 p-2 text-slate-600">{icon}</div> : null}
+        {icon ? <div className="rounded-lg border border-blue-100 bg-blue-50 p-2 text-blue-700">{icon}</div> : null}
       </div>
     </div>
   );

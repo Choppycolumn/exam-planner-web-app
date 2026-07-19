@@ -1,6 +1,15 @@
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-const palette = ['#2563eb', '#16a34a', '#f97316', '#9333ea', '#dc2626', '#0f766e', '#ca8a04', '#64748b'];
+const palette = [
+  'var(--accent)',
+  'var(--success)',
+  'var(--warning)',
+  'var(--violet)',
+  'var(--danger)',
+  'var(--sky)',
+  '#ca8a04',
+  'var(--text-tertiary)',
+];
 
 export function ChartBox({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -20,7 +29,7 @@ export function DistributionPie({ data }: { data: Array<{ name: string; value: n
             <Cell key={index} fill={palette[index % palette.length]} />
           ))}
         </Pie>
-        <Tooltip formatter={(value) => [`${value} 分钟`, '用时']} />
+        <Tooltip cursor={{ fill: 'var(--accent-soft)' }} formatter={(value) => [`${value} 分钟`, '用时']} />
         <Legend />
       </PieChart>
     </ResponsiveContainer>
@@ -41,8 +50,8 @@ export function MinutesBar({ data, xKey = 'name', denseLabels = false }: { data:
           textAnchor={denseLabels ? 'end' : 'middle'}
         />
         <YAxis tick={{ fontSize: 12 }} />
-        <Tooltip formatter={(value) => [`${value} 分钟`, '用时']} />
-        <Bar dataKey="minutes" fill="#2563eb" radius={[6, 6, 0, 0]} />
+        <Tooltip cursor={{ fill: 'var(--accent-soft)' }} formatter={(value) => [`${value} 分钟`, '用时']} />
+        <Bar dataKey="minutes" fill="var(--accent)" radius={[6, 6, 0, 0]} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -56,7 +65,7 @@ export function TrendLine({ data, dataKey = 'minutes', label = '分钟' }: { dat
         <XAxis dataKey="date" tick={{ fontSize: 12 }} />
         <YAxis tick={{ fontSize: 12 }} />
         <Tooltip formatter={(value) => [`${value}`, label]} />
-        <Line type="monotone" dataKey={dataKey} stroke="#2563eb" strokeWidth={2.5} dot={{ r: 3 }} />
+        <Line type="monotone" dataKey={dataKey} stroke="var(--accent)" strokeWidth={2.5} dot={{ r: 3 }} />
       </LineChart>
     </ResponsiveContainer>
   );
@@ -71,7 +80,7 @@ export function ReviewTrendChart({ data }: { data: Array<Record<string, string |
         <YAxis tick={{ fontSize: 12 }} domain={[1, 10]} allowDecimals={false} />
         <Tooltip />
         <Legend />
-        <Line type="monotone" connectNulls dataKey="score" name="复盘评分" stroke="#2563eb" strokeWidth={2.4} dot={{ r: 3 }} />
+        <Line type="monotone" connectNulls dataKey="score" name="复盘评分" stroke="var(--accent)" strokeWidth={2.4} dot={{ r: 3 }} />
       </LineChart>
     </ResponsiveContainer>
   );

@@ -26,7 +26,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <main className="min-h-screen bg-[#f7f8fb] p-6 text-slate-900">
+      <main className="app-shell min-h-screen p-6">
         <section className="mx-auto mt-16 max-w-xl rounded-lg border border-rose-200 bg-white p-6 shadow-sm">
           <div className="flex items-start gap-3">
             <div className="rounded-lg bg-rose-50 p-2 text-rose-600">

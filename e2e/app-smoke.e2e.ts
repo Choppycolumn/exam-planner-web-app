@@ -3,12 +3,12 @@ import type { Page } from '@playwright/test';
 
 async function loginIfNeeded(page: Page) {
   const password = process.env.E2E_PASSWORD;
-  const passwordInput = page.locator('input[type="password"]');
+  const passwordInput = page.locator('#password');
   if (!(await passwordInput.count())) return;
   test.skip(!password, 'E2E_PASSWORD is required when the target is protected by the login page.');
   await passwordInput.fill(password);
   await page.locator('button[type="submit"], button').first().click();
-  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.locator('#password')).toHaveCount(0);
 }
 
 test('loads main app and core navigation', async ({ page }) => {

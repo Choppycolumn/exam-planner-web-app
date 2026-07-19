@@ -48,7 +48,7 @@ export function ColorPicker({ value, onChange }: { value?: string; onChange: (co
         <ChevronDown size={16} className={`text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
       </button>
       {open ? (
-        <div className="absolute left-0 top-12 z-40 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+        <div className="app-popover absolute left-0 top-12 z-40 w-64 rounded-lg border p-3">
           <div className="grid grid-cols-5 gap-2">
             {presetColors.map((color) => (
               <button
