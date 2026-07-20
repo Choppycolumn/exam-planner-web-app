@@ -250,6 +250,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
             self.root.geometry(f"{self.width}x{self.height}+{x}+{y}")
             self.build_ui()
             self.root.update_idletasks()
+            self.enable_acrylic()
             clamp_window_to_screen(self.root, self.width, self.height)
             self.persist_window_geometry()
         if sync:

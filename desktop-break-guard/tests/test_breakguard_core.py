@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from breakguard_secrets import protect_secret, unprotect_secret
 from breakguard_study import StudyPlanner
@@ -22,6 +24,46 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertTrue(hasattr(breakguard_view, "ViewMixin"))
         self.assertTrue(hasattr(breakguard_window, "WindowMixin"))
         self.assertIsInstance(breakguard_widgets.IS_WINDOWS, bool)
+
+    def test_course_row_growth_reapplies_the_windows_region(self):
+        from breakguard_app import BreakGuardApp
+
+        app = BreakGuardApp.__new__(BreakGuardApp)
+        app.config = SimpleNamespace(
+            break_minutes=10,
+            lag_grace_minutes=20,
+            lag_repeat_minutes=30,
+            daily_target_minutes=600,
+            available_projects=[{"id": index, "name": f"课程 {index}"} for index in range(1, 8)],
+        )
+        app.machine = SimpleNamespace(break_seconds=600)
+        app.planner = SimpleNamespace(configure=Mock())
+        app.schedule_rows = 3
+        app.minimum_height = 694
+        app.compact_mode = False
+        app.width = app.normal_width = 428
+        app.height = app.normal_height = 694
+        app.normal_geometry = "428x694+100+100"
+        app.root = SimpleNamespace(
+            winfo_x=Mock(return_value=100),
+            winfo_y=Mock(return_value=100),
+            winfo_screenwidth=Mock(return_value=1920),
+            winfo_screenheight=Mock(return_value=1080),
+            geometry=Mock(),
+            update_idletasks=Mock(),
+        )
+        app.build_ui = Mock()
+        app.enable_acrylic = Mock()
+        app.persist_window_geometry = Mock()
+        app.set_status = Mock()
+        app.refresh_view_state = Mock()
+
+        app.on_schedule_settings_saved(sync=False)
+
+        self.assertEqual(app.schedule_rows, 4)
+        self.assertEqual(app.height, 748)
+        app.build_ui.assert_called_once()
+        app.enable_acrylic.assert_called_once()
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
