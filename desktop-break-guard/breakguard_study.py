@@ -86,6 +86,7 @@ class StudyPlanner:
             return self.session
         now = now if now is not None else time.time()
         day = local_date(now)
+        self.store.reopen_study_day(day)
         selected_project_id = self.select_project(project_id, now)
         self.clear_pause(now)
         self.session = StudySession(
@@ -196,6 +197,8 @@ class StudyPlanner:
         study_seconds = stored_study_seconds + active_seconds
         target_seconds = self.daily_target_minutes * 60
         selected_project_id = self.session.project_id if self.session else self.selected_project_id(available_project_ids, now)
+        closure = self.store.study_day_closure(day)
+        project_breakdown = self.store.daily_study_breakdown(day)
         return {
             "date": day,
             "session_count": int(stored["session_count"]),
@@ -204,13 +207,31 @@ class StudyPlanner:
             "target_minutes": self.daily_target_minutes,
             "target_seconds": target_seconds,
             "progress": min(1.0, study_seconds / target_seconds),
+            "completion_percent": round((study_seconds / target_seconds) * 100, 1),
             "selected_project_id": selected_project_id,
             "paused_label": self.store.daily_study_state(day)["paused_label"],
+            "day_ended": bool(closure),
+            "day_ended_at": float(closure["ended_at"]) if closure else None,
+            "project_breakdown": project_breakdown,
         }
+
+    def end_day(self, now: float | None = None, available_project_ids: list[int] | None = None) -> dict:
+        if self.session:
+            raise RuntimeError("active study session must be completed before ending the day")
+        now = now if now is not None else time.time()
+        day = local_date(now)
+        self.clear_pause(now)
+        self.store.close_study_day(day, now)
+        return self.summary(now, available_project_ids)
+
+    def reopen_day(self, now: float | None = None) -> None:
+        self.store.reopen_study_day(local_date(now))
 
     def lag_snapshot(self, now: float | None = None, available_project_ids: list[int] | None = None) -> dict:
         now = now if now is not None else time.time()
         summary = self.summary(now, available_project_ids)
+        if summary["day_ended"]:
+            return {"due": False, "reason": "day_ended"}
         if self.session or summary["paused_label"] or summary["study_seconds"] >= summary["target_seconds"]:
             return {"due": False}
         project_id = summary["selected_project_id"]

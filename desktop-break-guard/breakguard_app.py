@@ -12,6 +12,7 @@ from breakguard_settings import ScheduleSettingsDialog
 from breakguard_state import BreakStateMachine, utc_iso
 from breakguard_storage import BreakGuardStore
 from breakguard_study import StudyPlanner
+from breakguard_summary import DailySummaryDialog
 from breakguard_sync import SyncWorker
 from breakguard_tray import WindowsTrayIcon
 from breakguard_view import ViewMixin
@@ -80,6 +81,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.fullscreen_timer_item = None
         self.fullscreen_kind = ""
         self.settings_dialog = None
+        self.summary_dialog = None
         self.last_fullscreen_raise = 0.0
 
         self.enable_acrylic()
@@ -166,6 +168,17 @@ class BreakGuardApp(WindowMixin, ViewMixin):
             self.set_status("请先结束当前休息")
             return
         summary = self.planner.summary(available_project_ids=self.project_ids())
+        if summary["day_ended"]:
+            reopen = messagebox.askyesno(
+                "继续今天",
+                "今天已经结束并生成总结。要重新开启今天并继续学习吗？",
+                parent=self.root,
+            )
+            if not reopen:
+                self.show_day_summary(summary)
+                return
+            self.reopen_day()
+            summary = self.planner.summary(available_project_ids=self.project_ids())
         project = self.project_by_id(summary["selected_project_id"])
         if int(project.get("id", 0)) <= 0:
             self.set_status("尚未同步到课程，请稍后再试")
@@ -195,7 +208,24 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         session = self.planner.session
         if not session:
             return
+        completed, duration = self.complete_study_record(auto)
+        if not completed:
+            return
+        break_session = self.machine.start()
+        self.client.post_event(
+            "break_started",
+            f"{break_session.session_id}_started",
+            startedAt=break_session.started_iso,
+            note=f"{completed.project_name}学习结束后自动休息",
+        )
+        self.exit_compact_mode()
+        self.set_status(f"{completed.project_name}学习完成，自动休息 {self.config.break_minutes} 分钟")
+        self.refresh_view_state()
+
+    def complete_study_record(self, auto: bool = False):
         completed, duration = self.planner.complete_study()
+        if not completed:
+            return None, 0
         self.client.post_event(
             "class_completed",
             f"{completed.session_id}_class_completed",
@@ -210,15 +240,77 @@ class BreakGuardApp(WindowMixin, ViewMixin):
                 "sessionDate": completed.session_date,
             },
         )
-        break_session = self.machine.start()
+        return completed, duration
+
+    def end_day(self) -> None:
+        if self.planner.session:
+            confirmed = messagebox.askyesno(
+                "结束一天",
+                "当前课程仍在计时。结束课程并生成今日总结吗？\n\n本次课程会正常保存，但不会再开始课间休息。",
+                parent=self.root,
+            )
+            if not confirmed:
+                return
+            self.complete_study_record(auto=False)
+            self.exit_compact_mode()
+        if self.machine.session:
+            confirmed = messagebox.askyesno(
+                "结束一天",
+                "当前仍在课间休息。结束休息并生成今日总结吗？",
+                parent=self.root,
+            )
+            if not confirmed:
+                return
+            self.cancel_break()
+        current = self.planner.summary(available_project_ids=self.project_ids())
+        if current["day_ended"]:
+            self.show_day_summary(current)
+            return
+        now = time.time()
+        summary = self.planner.end_day(now, self.project_ids())
+        self.store.cancel_pending_events("schedule_lag", "suppressed because the study day ended")
+        self.hide_fullscreen()
         self.client.post_event(
-            "break_started",
-            f"{break_session.session_id}_started",
-            startedAt=break_session.started_iso,
-            note=f"{completed.project_name}学习结束后自动休息",
+            "study_day_completed",
+            f"study_day_completed_{summary['date'].replace('-', '')}_{int(now)}",
+            endedAt=utc_iso(now),
+            note=f"结束一天学习：{summary['session_count']} 次，{summary['study_seconds'] // 60} 分钟",
+            payload={
+                "sessionDate": summary["date"],
+                "sessionCount": summary["session_count"],
+                "studySeconds": summary["study_seconds"],
+                "targetMinutes": summary["target_minutes"],
+                "completionPercent": summary["completion_percent"],
+                "projectBreakdown": [
+                    {
+                        "projectId": item["project_id"],
+                        "projectName": item["project_name"],
+                        "sessionCount": item["session_count"],
+                        "studySeconds": item["study_seconds"],
+                    }
+                    for item in summary["project_breakdown"]
+                ],
+            },
         )
-        self.exit_compact_mode()
-        self.set_status(f"{completed.project_name}学习完成，自动休息 {self.config.break_minutes} 分钟")
+        self.set_status("今天已结束，进度提醒暂停到明天")
+        self.refresh_view_state()
+        self.show_day_summary(summary)
+
+    def show_day_summary(self, summary: dict | None = None) -> None:
+        if self.summary_dialog and self.summary_dialog.window.winfo_exists():
+            bring_to_front(self.summary_dialog.window)
+            return
+        data = summary or self.planner.summary(available_project_ids=self.project_ids())
+        self.summary_dialog = DailySummaryDialog(
+            self.root,
+            data,
+            self.reopen_day,
+            on_close=lambda: setattr(self, "summary_dialog", None),
+        )
+
+    def reopen_day(self) -> None:
+        self.planner.reopen_day()
+        self.set_status("今天已重新开启，可以继续学习")
         self.refresh_view_state()
     def open_schedule_settings(self) -> None:
         if self.settings_dialog and self.settings_dialog.window.winfo_exists():

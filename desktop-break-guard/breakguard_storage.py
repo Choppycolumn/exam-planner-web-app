@@ -75,6 +75,12 @@ class BreakGuardStore:
                     last_pause_ended_at REAL,
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS study_day_closures (
+                    session_date TEXT PRIMARY KEY,
+                    ended_at REAL NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                );
             """)
             legacy_sessions = connection.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='lesson_records'"
@@ -171,6 +177,48 @@ class BreakGuardStore:
             ).fetchone()
         return {"session_count": int(row[0]), "study_seconds": int(row[1])}
 
+    def daily_study_breakdown(self, session_date: str) -> list[dict]:
+        with self.lock, self._connection() as connection:
+            rows = connection.execute(
+                """SELECT project_id,project_name,COUNT(*) AS session_count,
+                    COALESCE(SUM(duration_seconds),0) AS study_seconds
+                FROM study_sessions WHERE session_date = ?
+                GROUP BY project_id,project_name
+                ORDER BY study_seconds DESC,project_name""",
+                (session_date,),
+            ).fetchall()
+        return [
+            {
+                "project_id": int(row["project_id"]),
+                "project_name": str(row["project_name"] or "未命名课程"),
+                "session_count": int(row["session_count"]),
+                "study_seconds": int(row["study_seconds"]),
+            }
+            for row in rows
+        ]
+
+    def close_study_day(self, session_date: str, ended_at: float) -> None:
+        now = time.time()
+        with self.lock, self._connection() as connection:
+            connection.execute(
+                """INSERT INTO study_day_closures(session_date,ended_at,created_at,updated_at)
+                VALUES(?,?,?,?) ON CONFLICT(session_date) DO UPDATE SET
+                ended_at=excluded.ended_at,updated_at=excluded.updated_at""",
+                (session_date, float(ended_at), now, now),
+            )
+
+    def reopen_study_day(self, session_date: str) -> None:
+        with self.lock, self._connection() as connection:
+            connection.execute("DELETE FROM study_day_closures WHERE session_date = ?", (session_date,))
+
+    def study_day_closure(self, session_date: str) -> dict | None:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT session_date,ended_at FROM study_day_closures WHERE session_date = ?",
+                (session_date,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def next_study_sequence(self, session_date: str) -> int:
         with self.lock, self._connection() as connection:
             row = connection.execute(
@@ -251,11 +299,11 @@ class BreakGuardStore:
                 (error[:500], event_id),
             )
 
-    def cancel_pending_events(self, event_type: str) -> int:
+    def cancel_pending_events(self, event_type: str, reason: str = "suppressed by pause") -> int:
         with self.lock, self._connection() as connection:
             cursor = connection.execute(
-                "UPDATE event_outbox SET status='cancelled',next_attempt_at=0,last_error='suppressed by pause' WHERE event_type=? AND status='pending'",
-                (str(event_type),),
+                "UPDATE event_outbox SET status='cancelled',next_attempt_at=0,last_error=? WHERE event_type=? AND status='pending'",
+                (str(reason)[:500], str(event_type)),
             )
         return int(cursor.rowcount or 0)
 

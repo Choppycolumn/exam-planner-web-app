@@ -60,13 +60,14 @@ class ViewMixin:
         primary_width = self.width - 186
         self.add_button(28, action_top, primary_width, 50, "开始学习", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
         self.add_button(self.width - 146, action_top, settings_width, 50, "学习设置", "btn_settings", self.open_schedule_settings, LIQUID.control_bg, LIQUID.accent)
-        canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
-        chip_width = (self.width - 80) // 3
+        canvas.create_text(29, action_top + 73, anchor="w", text="不计时暂停与收工", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        chip_width = (self.width - 92) // 4
         self.add_button(28, action_top + 88, chip_width, 38, "午饭", "btn_lunch", lambda: self.meal("lunch"), LIQUID.control_bg, LIQUID.text_secondary)
         self.add_button(40 + chip_width, action_top + 88, chip_width, 38, "晚饭", "btn_dinner", lambda: self.meal("dinner"), LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, "结束一天", "btn_day_end", self.end_day, LIQUID.violet_soft, LIQUID.violet_text)
         compact_action = self.enter_compact_mode if self.planner.session else self.hide_to_tray
         compact_label = "专注小窗" if self.planner.session else "收起"
-        self.add_button(52 + chip_width * 2, action_top + 88, chip_width, 38, compact_label, "btn_min", compact_action, LIQUID.control_bg, LIQUID.text_secondary)
+        self.add_button(64 + chip_width * 3, action_top + 88, chip_width, 38, compact_label, "btn_min", compact_action, LIQUID.control_bg, LIQUID.text_secondary)
 
         status_top = action_top + 141
         rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
@@ -190,7 +191,7 @@ class ViewMixin:
         study_minutes = summary["study_seconds"] // 60
         target_minutes = summary["target_minutes"]
         self.canvas.itemconfigure(self.progress_item, text=f"{self.format_minutes(study_minutes)} / {self.format_minutes(target_minutes)}")
-        pause_text = f" · {summary['paused_label']}中" if summary["paused_label"] else ""
+        pause_text = " · 今日已结束" if summary["day_ended"] else f" · {summary['paused_label']}中" if summary["paused_label"] else ""
         self.canvas.itemconfigure(self.target_item, text=f"已学 {study_minutes} 分钟 · 目标 {target_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
         width = max(1, int(self.progress_track_width * summary["progress"]))
@@ -308,6 +309,8 @@ class ViewMixin:
         summary = self.update_progress()
         snapshot = self.machine.snapshot()
         self.set_action_emphasis(True)
+        if self.canvas is not None and "btn_day_end" in self.buttons:
+            self.canvas.itemconfigure("btn_day_end__label", text="今日总结" if summary["day_ended"] else "结束一天")
         if self.planner.session:
             elapsed = self.planner.study_elapsed()
             started_text = time.strftime("%H:%M", time.localtime(self.planner.session.started_at))
@@ -347,6 +350,11 @@ class ViewMixin:
             status = f"第 {segment['next_sequence_number']} 段 · {fmt_seconds(segment['active_seconds'])}"
             self.canvas.itemconfigure("btn_segment__label", text="结束分段")
             self.buttons["btn_segment"].set_palette(LIQUID.warning_soft, LIQUID.control_hover, LIQUID.control_pressed, LIQUID.warning_text)
+        elif summary["day_ended"]:
+            self.set_timer("今天辛苦了", f"已学 {summary['study_seconds'] // 60} 分钟 · 点击今日总结回顾")
+            self.set_tone("idle")
+            if self.canvas is not None:
+                self.canvas.itemconfigure("btn_primary__label", text="继续今天")
         else:
             status = f"已保留 {segment_count} 段 · 累计 {fmt_seconds(segment['total_seconds'])}" if segment_count else "需要时单独标记一段"
             self.canvas.itemconfigure("btn_segment__label", text="开始分段")

@@ -120,4 +120,15 @@ describe('break guard service', () => {
     expect(repository.appendStudyTime).toHaveBeenCalledOnce();
     expect(refreshStudySummariesForDate).toHaveBeenCalledWith('2026-07-12');
   });
+
+  it('accepts an end-of-day summary without creating another study record', () => {
+    const { service, repository } = fixture();
+    const event = service.recordEvent({
+      eventId: 'study_day_completed_20260712',
+      eventType: 'study_day_completed',
+      payload: { sessionDate: '2026-07-12', sessionCount: 3, studySeconds: 7200, targetMinutes: 240 },
+    });
+    expect(event.label).toBe('结束一天学习');
+    expect(repository.appendStudyTime).not.toHaveBeenCalled();
+  });
 });

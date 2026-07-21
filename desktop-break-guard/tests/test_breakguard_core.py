@@ -16,11 +16,13 @@ from breakguard_storage import BreakGuardStore
 class BreakGuardCoreTests(unittest.TestCase):
     def test_ui_modules_import_after_split(self):
         import breakguard_app
+        import breakguard_summary
         import breakguard_view
         import breakguard_widgets
         import breakguard_window
 
         self.assertTrue(callable(breakguard_app.main))
+        self.assertTrue(hasattr(breakguard_summary, "DailySummaryDialog"))
         self.assertTrue(hasattr(breakguard_view, "ViewMixin"))
         self.assertTrue(hasattr(breakguard_window, "WindowMixin"))
         self.assertIsInstance(breakguard_widgets.IS_WINDOWS, bool)
@@ -192,6 +194,39 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertEqual(summary["study_seconds"], 1800)
         self.assertEqual(summary["target_minutes"], 120)
         self.assertEqual(summary["progress"], 0.25)
+
+    def test_end_day_persists_summary_and_suppresses_lag_reminders(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner_with_target(120)
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+        planner.complete_study(start + 40 * 60)
+        planner.start_study(start + 50 * 60, project_id=20, project_name="高等数学")
+        planner.complete_study(start + 80 * 60)
+
+        summary = planner.end_day(start + 90 * 60, [19, 20])
+
+        self.assertTrue(summary["day_ended"])
+        self.assertEqual(summary["study_seconds"], 70 * 60)
+        self.assertEqual(summary["session_count"], 2)
+        self.assertEqual(summary["completion_percent"], 58.3)
+        self.assertEqual(
+            [(item["project_name"], item["study_seconds"]) for item in summary["project_breakdown"]],
+            [("信号与系统", 40 * 60), ("高等数学", 30 * 60)],
+        )
+
+        restarted = StudyPlanner(BreakGuardStore(self.database), 10, 20, 30, 120)
+        self.assertTrue(restarted.summary(start + 200 * 60)["day_ended"])
+        self.assertEqual(restarted.lag_snapshot(start + 200 * 60)["reason"], "day_ended")
+
+    def test_starting_again_reopens_an_ended_day(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner()
+        planner.end_day(start, [19])
+        self.assertTrue(planner.summary(start)["day_ended"])
+
+        planner.start_study(start + 60, project_id=19, project_name="信号与系统")
+
+        self.assertFalse(planner.summary(start + 120)["day_ended"])
 
     def test_active_course_time_is_included_in_progress(self):
         start = datetime(2026, 7, 12, 9, 0).timestamp()
