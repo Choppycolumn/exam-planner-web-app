@@ -67,6 +67,27 @@ class BreakGuardCoreTests(unittest.TestCase):
         app.build_ui.assert_called_once()
         app.enable_acrylic.assert_called_once()
 
+    def test_compact_view_refreshes_an_active_course_without_summary_scope(self):
+        from breakguard_view import ViewMixin
+
+        view = ViewMixin()
+        view.planner = SimpleNamespace(
+            session=SimpleNamespace(project_name="英一", started_at=1_000),
+            study_elapsed=Mock(return_value=2_400),
+            segment_snapshot=Mock(return_value={"active": False, "segments": [], "total_seconds": 0}),
+        )
+        view.canvas = Mock()
+        view.buttons = {"btn_segment": Mock()}
+        view.segment_status_item = None
+        view.set_timer = Mock()
+        view.set_tone = Mock()
+
+        view.refresh_compact_view()
+
+        view.set_timer.assert_called_once()
+        view.canvas.itemconfigure.assert_any_call("btn_primary__label", text="结束课程")
+        view.canvas.itemconfigure.assert_any_call("btn_segment__label", text="开始分段")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.database = Path(self.temporary.name) / "break-guard.sqlite"

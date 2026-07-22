@@ -328,6 +328,11 @@ class ViewMixin:
             self.set_tone("warning")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text="结束休息")
+        elif summary["day_ended"]:
+            self.set_timer("今天辛苦了", f"已学 {summary['study_seconds'] // 60} 分钟 · 点击今日总结回顾")
+            self.set_tone("idle")
+            if self.canvas is not None:
+                self.canvas.itemconfigure("btn_primary__label", text="继续今天")
         else:
             project = self.project_by_id(summary["selected_project_id"])
             label = f"开始学习 {project['name']}" if int(project.get("id", 0)) else "等待课程同步"
@@ -350,11 +355,6 @@ class ViewMixin:
             status = f"第 {segment['next_sequence_number']} 段 · {fmt_seconds(segment['active_seconds'])}"
             self.canvas.itemconfigure("btn_segment__label", text="结束分段")
             self.buttons["btn_segment"].set_palette(LIQUID.warning_soft, LIQUID.control_hover, LIQUID.control_pressed, LIQUID.warning_text)
-        elif summary["day_ended"]:
-            self.set_timer("今天辛苦了", f"已学 {summary['study_seconds'] // 60} 分钟 · 点击今日总结回顾")
-            self.set_tone("idle")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="继续今天")
         else:
             status = f"已保留 {segment_count} 段 · 累计 {fmt_seconds(segment['total_seconds'])}" if segment_count else "需要时单独标记一段"
             self.canvas.itemconfigure("btn_segment__label", text="开始分段")
