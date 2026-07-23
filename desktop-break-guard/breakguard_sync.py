@@ -41,26 +41,31 @@ class SyncWorker:
         while not self.stop_event.is_set():
             if time.time() - self.last_config_pull >= 60:
                 self._pull_schedule_config()
-            event = self.store.next_due_event()
-            if not event:
+            if not self._deliver_next_event():
                 self.wake_event.wait(2)
                 self.wake_event.clear()
-                continue
-            ok, error, permanent = self._send(json.loads(event["payload_json"]))
-            if ok:
-                self.store.mark_sent(event["event_id"])
-                if event["event_type"] == "schedule_config_updated":
-                    self.last_config_pull = 0.0
-                self.ui_messages.put("已同步到网站")
-                continue
-            if permanent:
-                self.store.mark_failed(event["event_id"], error)
-                self.ui_messages.put("同步配置无效，请检查网站地址和同步令牌")
-                continue
-            attempts = int(event["attempt_count"]) + 1
-            delay = min(300, 10 * (2 ** max(0, attempts - 1)))
-            self.store.mark_retry(event["event_id"], attempts, delay, error)
-            self.ui_messages.put("同步暂时失败，已进入可靠重试队列" if attempts < 6 else "同步多次失败，请检查网站连接")
+
+    def _deliver_next_event(self) -> bool:
+        event = self.store.next_due_event()
+        if not event:
+            return False
+        ok, error, permanent = self._send(json.loads(event["payload_json"]))
+        if ok:
+            self.store.mark_sent(event["event_id"])
+            if event["event_type"] == "schedule_config_updated":
+                self.last_config_pull = 0.0
+            self.ui_messages.put("已同步到网站")
+            return True
+        if permanent:
+            self.store.mark_failed(event["event_id"], error)
+            self.ui_messages.put("同步配置无效，请检查网站地址和同步令牌")
+            return True
+        attempts = int(event["attempt_count"]) + 1
+        delay = min(600, 10 * (2 ** min(6, max(0, attempts - 1))))
+        self.store.mark_retry(event["event_id"], attempts, delay, error)
+        if attempts in {1, 3, 6} or attempts % 12 == 0:
+            self.ui_messages.put("网站暂时不可用，学习记录已安全保存在本地，恢复后自动补传")
+        return True
 
     def _pull_schedule_config(self) -> None:
         self.last_config_pull = time.time()
@@ -76,13 +81,14 @@ class SyncWorker:
             with urllib.request.urlopen(request, timeout=8, context=context) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             if isinstance(payload.get("config"), dict):
+                self.store.expedite_pending_events()
                 self.ui_messages.put({"type": "schedule_config", "config": payload["config"], "projects": payload.get("projects", [])})
         except Exception as exc:
             log_error("schedule config pull failed", exc)
 
     def _send(self, payload: dict) -> tuple[bool, str, bool]:
         if not self.config.server_url or not self.config.token:
-            return False, "server URL or token is not configured", True
+            return False, "server URL or token is not configured", False
         request = urllib.request.Request(
             f"{self.config.server_url}/api/break-guard/events",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

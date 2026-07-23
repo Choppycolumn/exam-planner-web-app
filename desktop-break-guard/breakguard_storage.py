@@ -116,6 +116,20 @@ class BreakGuardStore:
                 )
                 connection.execute("DROP TABLE daily_schedule_state")
 
+            # Versions before 2026-07-23 permanently failed transient network
+            # errors after six attempts. Recover those rows on startup while
+            # preserving explicit client/authentication rejections.
+            connection.execute(
+                """UPDATE event_outbox
+                SET status='pending', next_attempt_at=?
+                WHERE status='failed'
+                  AND last_error NOT LIKE 'HTTP 400%'
+                  AND last_error NOT LIKE 'HTTP 401%'
+                  AND last_error NOT LIKE 'HTTP 403%'
+                  AND last_error NOT LIKE 'HTTP 404%'""",
+                (time.time(),),
+            )
+
     def load_runtime_state(self, key: str) -> dict | None:
         with self.lock, self._connection() as connection:
             row = connection.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
@@ -288,9 +302,13 @@ class BreakGuardStore:
             connection.execute("DELETE FROM event_outbox WHERE status='sent' AND sent_at<?", (time.time() - 7 * 86400,))
 
     def mark_retry(self, event_id: str, attempts: int, delay_seconds: int, error: str) -> None:
-        status = "failed" if attempts >= 6 else "pending"
         with self.lock, self._connection() as connection:
-            connection.execute("UPDATE event_outbox SET status=?,attempt_count=?,next_attempt_at=?,last_error=? WHERE event_id=?", (status, attempts, time.time() + delay_seconds, error[:500], event_id))
+            connection.execute(
+                """UPDATE event_outbox
+                SET status='pending',attempt_count=?,next_attempt_at=?,last_error=?
+                WHERE event_id=?""",
+                (attempts, time.time() + delay_seconds, error[:500], event_id),
+            )
 
     def mark_failed(self, event_id: str, error: str) -> None:
         with self.lock, self._connection() as connection:
@@ -304,6 +322,15 @@ class BreakGuardStore:
             cursor = connection.execute(
                 "UPDATE event_outbox SET status='cancelled',next_attempt_at=0,last_error=? WHERE event_type=? AND status='pending'",
                 (str(reason)[:500], str(event_type)),
+            )
+        return int(cursor.rowcount or 0)
+
+    def expedite_pending_events(self, now: float | None = None) -> int:
+        target = time.time() if now is None else float(now)
+        with self.lock, self._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE event_outbox SET next_attempt_at=? WHERE status='pending' AND next_attempt_at>?",
+                (target, target),
             )
         return int(cursor.rowcount or 0)
 

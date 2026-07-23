@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
+import queue
 from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from breakguard_config import Config
 from breakguard_secrets import protect_secret, unprotect_secret
 from breakguard_study import StudyPlanner
 from breakguard_state import BreakStateMachine
 from breakguard_storage import BreakGuardStore
+from breakguard_sync import SyncWorker
 
 
 class BreakGuardCoreTests(unittest.TestCase):
@@ -123,6 +129,87 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.store.mark_retry(event_id, 2, 30, "offline")
         restarted = BreakGuardStore(self.database)
         self.assertEqual(restarted.pending_count(), 1)
+
+    def test_transient_failure_remains_pending_after_many_attempts(self):
+        event_id = self.store.enqueue_event("class_completed", {}, "offline_class_completed")
+        self.store.mark_retry(event_id, 100, 600, "timed out")
+
+        restarted = BreakGuardStore(self.database)
+
+        self.assertEqual(restarted.pending_count(), 1)
+        self.assertEqual(restarted.failed_count(), 0)
+
+    def test_startup_recovers_legacy_transient_failures_only(self):
+        transient_id = self.store.enqueue_event("class_completed", {}, "legacy_timeout_event")
+        permanent_id = self.store.enqueue_event("class_completed", {}, "legacy_auth_event")
+        self.store.mark_failed(transient_id, "timed out")
+        self.store.mark_failed(permanent_id, "HTTP 401")
+
+        restarted = BreakGuardStore(self.database)
+
+        self.assertEqual(restarted.pending_count(), 1)
+        self.assertEqual(restarted.failed_count(), 1)
+        self.assertEqual(restarted.next_due_event()["event_id"], transient_id)
+
+    def test_successful_connectivity_probe_expedites_pending_events(self):
+        event_id = self.store.enqueue_event("class_completed", {}, "delayed_event")
+        self.store.mark_retry(event_id, 4, 600, "offline")
+        config = Config(server_url="http://unused.test", token="test-token")
+        worker = SyncWorker(config, self.store, queue.Queue())
+        worker.store.expedite_pending_events(now=1000)
+
+        event = self.store.next_due_event(now=1000)
+
+        self.assertEqual(event["event_id"], event_id)
+
+    def test_offline_event_is_delivered_after_server_recovers(self):
+        received = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                received.append(json.loads(self.rfile.read(length).decode("utf-8")))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, _format, *_args):
+                return
+
+        event_id = self.store.enqueue_event(
+            "class_completed",
+            {
+                "startedAt": "2026-07-23T01:00:00Z",
+                "endedAt": "2026-07-23T01:40:00Z",
+                "payload": {"projectId": 19, "durationSeconds": 2400},
+            },
+            "offline_then_recovered",
+        )
+        unavailable = SyncWorker(
+            Config(server_url="http://127.0.0.1:1", token="test-token"),
+            self.store,
+            queue.Queue(),
+        )
+        self.assertTrue(unavailable._deliver_next_event())
+        self.assertEqual(self.store.pending_count(), 1)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            self.store.expedite_pending_events()
+            recovered = SyncWorker(
+                Config(server_url=f"http://127.0.0.1:{server.server_port}", token="test-token"),
+                self.store,
+                queue.Queue(),
+            )
+            self.assertTrue(recovered._deliver_next_event())
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=2)
+
+        self.assertEqual(self.store.pending_count(), 0)
+        self.assertEqual(received[0]["eventId"], event_id)
 
     def test_permanent_sync_failure_stops_retrying(self):
         event_id = self.store.enqueue_event("break_started", {}, "invalid_token_event")
