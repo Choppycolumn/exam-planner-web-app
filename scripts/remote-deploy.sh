@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$APP_DIR" "$RELEASES_DIR" "$SHARED_ROOT/assets" "$BACKUP_DIR" "$UNIT_BACKUP_DIR"
-for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer; do
+for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer /etc/systemd/system/hbrclient.service.d /etc/systemd/system/hbrclientupdater.service.d; do
   [[ -e "$unit_item" ]] && cp -a "$unit_item" "$UNIT_BACKUP_DIR/"
 done
 
@@ -202,12 +202,25 @@ configure_service_roles() {
   install_timer_override "$release/infra/systemd/timer-overrides/dpkg-db-backup.conf" dpkg-db-backup.timer
   install_timer_override "$release/infra/systemd/timer-overrides/openclaw-night-stop.conf" openclaw-night-stop.timer
   install_timer_override "$release/infra/systemd/timer-overrides/openclaw-morning-start.conf" openclaw-morning-start.timer
+  install_service_override() {
+    local source_file="$1" service_unit="$2" target_dir="/etc/systemd/system/$2.d"
+    systemctl cat "$service_unit" >/dev/null 2>&1 || return
+    if [[ ! -f "$source_file" ]]; then
+      rm -f "$target_dir/zz-exam-planner-resources.conf"
+      return
+    fi
+    install -d -m 0755 "$target_dir"
+    install -m 0644 "$source_file" "$target_dir/zz-exam-planner-resources.conf"
+  }
+  install_service_override "$release/infra/systemd/service-overrides/hbrclient-resources.conf" hbrclient.service
+  install_service_override "$release/infra/systemd/service-overrides/hbrclientupdater-resources.conf" hbrclientupdater.service
   rm -rf /etc/systemd/system/exam-planner.service.d
   systemctl daemon-reload
   systemctl enable exam-planner exam-planner-worker exam-planner-privileged >/dev/null
   if [[ -f /etc/systemd/system/exam-planner-health-watchdog.timer ]]; then
     systemctl enable --now exam-planner-health-watchdog.timer >/dev/null
   fi
+  systemctl try-restart hbrclient.service hbrclientupdater.service >/dev/null || true
   for timer_unit in apt-daily.timer apt-daily-upgrade.timer logrotate.timer dpkg-db-backup.timer openclaw-night-stop.timer openclaw-morning-start.timer; do
     systemctl is-enabled --quiet "$timer_unit" && systemctl restart "$timer_unit" || true
   done

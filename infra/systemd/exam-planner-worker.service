@@ -11,7 +11,7 @@ Group=examplanner
 SupplementaryGroups=adm systemd-journal
 WorkingDirectory=/opt/exam-planner/current
 Environment=NODE_ENV=production
-Environment=NODE_OPTIONS=--max-old-space-size=224
+Environment=NODE_OPTIONS=--max-old-space-size=160
 Environment=DATA_DIR=/opt/exam-planner/data
 Environment=STATIC_ROOT=/opt/exam-planner/current/dist
 Environment=TELEGRAM_ENV_FILE=/opt/exam-planner/data/telegram.env
@@ -23,11 +23,13 @@ Restart=always
 RestartSec=10
 TimeoutStopSec=20
 MemoryAccounting=true
-MemoryHigh=300M
-MemoryMax=400M
+MemoryLow=96M
+MemoryHigh=192M
+MemoryMax=256M
 TasksMax=64
-CPUWeight=60
-Nice=5
+CPUWeight=400
+IOWeight=400
+Nice=0
 OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true

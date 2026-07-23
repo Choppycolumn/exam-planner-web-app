@@ -11,7 +11,7 @@ Group=examplanner
 SupplementaryGroups=adm systemd-journal
 WorkingDirectory=/opt/exam-planner/current
 Environment=NODE_ENV=production
-Environment=NODE_OPTIONS=--max-old-space-size=192
+Environment=NODE_OPTIONS=--max-old-space-size=160
 Environment=DATA_DIR=/opt/exam-planner/data
 Environment=STATIC_ROOT=/opt/exam-planner/current/dist
 Environment=COOKIE_SECURE=1
@@ -24,10 +24,12 @@ Restart=always
 RestartSec=5
 TimeoutStopSec=15
 MemoryAccounting=true
-MemoryHigh=240M
-MemoryMax=320M
+MemoryLow=96M
+MemoryHigh=192M
+MemoryMax=256M
 TasksMax=64
-CPUWeight=100
+CPUWeight=500
+IOWeight=500
 OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true

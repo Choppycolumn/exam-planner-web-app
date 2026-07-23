@@ -16,10 +16,14 @@ Environment=WATCHDOG_ACTION_COOLDOWN_SECONDS=600
 Environment=WATCHDOG_ROLLBACK_WINDOW_SECONDS=21600
 ExecStart=/usr/bin/flock -n -E 0 /run/lock/exam-planner-deploy.lock /opt/node-v22.22.3-linux-x64/bin/node /usr/local/lib/exam-planner/runtime-watchdog.mjs
 TimeoutStartSec=240
-Nice=10
-IOSchedulingClass=idle
+Nice=-5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
 MemoryAccounting=true
+MemoryLow=32M
 MemoryHigh=64M
 MemoryMax=96M
 TasksMax=32
+CPUWeight=1000
+IOWeight=1000
 PrivateTmp=true
