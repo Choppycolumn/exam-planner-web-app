@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$APP_DIR" "$RELEASES_DIR" "$SHARED_ROOT/assets" "$BACKUP_DIR" "$UNIT_BACKUP_DIR"
-for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer /etc/systemd/system/hbrclient.service.d /etc/systemd/system/hbrclientupdater.service.d; do
+for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer /etc/systemd/system/hbrclient.service.d /etc/systemd/system/hbrclientupdater.service.d /etc/systemd/system/openclaw-gateway.service.d; do
   [[ -e "$unit_item" ]] && cp -a "$unit_item" "$UNIT_BACKUP_DIR/"
 done
 
@@ -214,6 +214,7 @@ configure_service_roles() {
   }
   install_service_override "$release/infra/systemd/service-overrides/hbrclient-resources.conf" hbrclient.service
   install_service_override "$release/infra/systemd/service-overrides/hbrclientupdater-resources.conf" hbrclientupdater.service
+  install_service_override "$release/infra/systemd/service-overrides/openclaw-gateway-resources.conf" openclaw-gateway.service
   rm -rf /etc/systemd/system/exam-planner.service.d
   systemctl daemon-reload
   systemctl enable exam-planner exam-planner-worker exam-planner-privileged >/dev/null
