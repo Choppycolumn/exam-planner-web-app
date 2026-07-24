@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TrendingUp, Users } from 'lucide-react';
+import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TimerReset, TrendingUp, Users } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -12,6 +12,7 @@ import { useAccountSession } from '../hooks/useAccountSession';
 const adminNavItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
+  { to: '/focus-timer', label: '专注计时', icon: TimerReset },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
   { to: '/progress', label: '学习进度', icon: TrendingUp },

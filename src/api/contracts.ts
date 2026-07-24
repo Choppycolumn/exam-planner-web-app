@@ -24,6 +24,107 @@ export interface AccountSession {
   capabilities: string[];
 }
 
+export type FocusTimerMode = 'idle' | 'focus' | 'break' | 'meal';
+
+export interface FocusTimerSettings {
+  userId: number;
+  focusMinutes: number;
+  breakMinutes: number;
+  updatedAt: string | null;
+}
+
+export interface FocusTimerSegment {
+  segmentId: string;
+  sequenceNumber: number;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number;
+}
+
+export interface FocusTimerState {
+  userId: number;
+  mode: FocusTimerMode;
+  sessionId: string | null;
+  projectId: number | null;
+  projectName: string;
+  pauseLabel: string;
+  startedAt: string | null;
+  targetSeconds: number;
+  revision: number;
+  updatedAt: string | null;
+  elapsedSeconds: number;
+  remainingSeconds: number;
+  overtimeSeconds: number;
+  expired: boolean;
+  segments: FocusTimerSegment[];
+}
+
+export interface FocusTimerSession {
+  id?: number;
+  sessionId: string;
+  sessionDate: string;
+  projectId: number;
+  projectName: string;
+  startedAt: string;
+  endedAt: string;
+  durationSeconds: number;
+  note: string;
+}
+
+export interface FocusTimerSummary {
+  date: string;
+  studySeconds: number;
+  sessionCount: number;
+  byProject: Array<{
+    projectId: number;
+    projectName: string;
+    studySeconds: number;
+    sessionCount: number;
+  }>;
+  dayEnded: boolean;
+}
+
+export interface FocusTimerDashboard {
+  generatedAt: string;
+  settings: FocusTimerSettings;
+  state: FocusTimerState;
+  summary: FocusTimerSummary;
+  sessions: FocusTimerSession[];
+}
+
+export type FocusTimerActionName =
+  | 'start_focus'
+  | 'complete_focus'
+  | 'finish_break'
+  | 'start_meal'
+  | 'finish_meal'
+  | 'start_segment'
+  | 'finish_segment'
+  | 'end_day'
+  | 'reopen_day'
+  | 'save_settings';
+
+export interface FocusTimerAction {
+  action: FocusTimerActionName;
+  operationId: string;
+  occurredAt: string;
+  sessionId?: string;
+  segmentId?: string;
+  projectId?: number;
+  mealType?: 'lunch' | 'dinner';
+  focusMinutes?: number;
+  breakMinutes?: number;
+  note?: string;
+}
+
+export interface FocusTimerActionResponse {
+  ok: true;
+  action: FocusTimerActionName;
+  operationId: string;
+  duplicate?: boolean;
+  dashboard: FocusTimerDashboard;
+}
+
 export interface StudyComparisonAccount {
   userId: number;
   displayName: string;

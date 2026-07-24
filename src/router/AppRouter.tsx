@@ -9,6 +9,7 @@ import { useAccountSession } from '../hooks/useAccountSession';
 
 const GoalsPage = lazy(() => routeLoaders.goals().then((module) => ({ default: module.GoalsPage })));
 const StudyTimePage = lazy(() => routeLoaders.studyTime().then((module) => ({ default: module.StudyTimePage })));
+const FocusTimerPage = lazy(() => routeLoaders.focusTimer().then((module) => ({ default: module.FocusTimerPage })));
 const ReviewsPage = lazy(() => routeLoaders.reviews().then((module) => ({ default: module.ReviewsPage })));
 const ReviewInsightsPage = lazy(() => routeLoaders.reviewInsights().then((module) => ({ default: module.ReviewInsightsPage })));
 const LearningProgressPage = lazy(() => routeLoaders.progress().then((module) => ({ default: module.LearningProgressPage })));
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { index: true, element: <SessionIndex /> },
       { path: 'goals', element: lazyElement(<GoalsPage />) },
       { path: 'study-time', element: lazyElement(<StudyTimePage />) },
+      { path: 'focus-timer', element: lazyElement(<FocusTimerPage />) },
       { path: 'reviews', element: lazyElement(<ReviewsPage />) },
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'progress', element: lazyElement(<LearningProgressPage />) },

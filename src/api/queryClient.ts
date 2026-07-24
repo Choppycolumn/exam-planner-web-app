@@ -34,6 +34,7 @@ export const queryKeys = {
   taskCenter: ['server', 'task-center'] as const,
   learningProgress: ['server', 'learning-progress'] as const,
   studyComparison: (days: number = 30) => ['server', 'study-comparison', days] as const,
+  focusTimer: (userId: number) => ['server', 'focus-timer', userId] as const,
   projectProgress: ['server', 'project-progress'] as const,
   visitStats: ['server', 'visit-stats'] as const,
   opsLogs: ['server', 'ops-logs'] as const,

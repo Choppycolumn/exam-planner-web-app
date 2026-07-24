@@ -1,4 +1,5 @@
 import { learnerCanAccess } from '../../auth/learner-access.mjs';
+import { handleFocusTimerRoutes } from '../../routes/focus-timer-routes.mjs';
 
 export function installApiDomain(runtime, exposeRuntime) {
     async function handleApi(req, res) {
@@ -53,7 +54,7 @@ export function installApiDomain(runtime, exposeRuntime) {
                 userCount: runtime.userAccountRepository.countAccounts(),
                 canAddUser: runtime.userAccountRepository.canCreateLearner(),
                 capabilities: session.accountType === 'learner'
-                    ? ['dashboard', 'goals', 'study-time', 'reviews', 'review-insights', 'learning-progress', 'study-comparison', 'goal-review', 'calendar', 'mock-exams', 'confusing-words']
+                    ? ['dashboard', 'goals', 'study-time', 'focus-timer', 'reviews', 'review-insights', 'learning-progress', 'study-comparison', 'goal-review', 'calendar', 'mock-exams', 'confusing-words']
                     : ['all'],
             });
             return;
@@ -72,6 +73,13 @@ export function installApiDomain(runtime, exposeRuntime) {
             runtime.sendJson(res, { error: 'Read only mode' }, 403);
             return;
         }
+        if (await handleFocusTimerRoutes(req, res, {
+            session,
+            sendJson: runtime.sendJson,
+            readJsonBody: runtime.readJsonBody,
+            focusTimerService: runtime.focusTimerService,
+        }))
+            return;
         if (await runtime.handleProxySettingsRoutes(req, res, {
             sessionRole,
             sendJson: runtime.sendJson,

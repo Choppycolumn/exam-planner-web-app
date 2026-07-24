@@ -6,6 +6,8 @@ describe('learner API boundary', () => {
     expect(learnerCanAccess('GET', '/api/projects')).toBe(true);
     expect(learnerCanAccess('POST', '/api/study-records/save-day')).toBe(true);
     expect(learnerCanAccess('GET', '/api/study-comparison')).toBe(true);
+    expect(learnerCanAccess('GET', '/api/focus-timer')).toBe(true);
+    expect(learnerCanAccess('POST', '/api/focus-timer/action')).toBe(true);
     expect(learnerCanAccess('GET', '/api/dashboard')).toBe(true);
     expect(learnerCanAccess('GET', '/api/reviews?from=2026-07-01')).toBe(true);
     expect(learnerCanAccess('GET', '/api/reviews')).toBe(true);

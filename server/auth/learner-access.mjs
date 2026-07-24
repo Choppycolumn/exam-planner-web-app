@@ -10,6 +10,7 @@ const LEARNER_GET_PATHS = new Set([
   '/api/learning-progress',
   '/api/project-progress',
   '/api/study-comparison',
+  '/api/focus-timer',
   '/api/error-themes/embedding/status',
   '/api/error-themes/options',
   '/api/error-themes/batch/status',
@@ -39,6 +40,7 @@ const LEARNER_POST_PATHS = new Set([
   '/api/settings/study-target',
   '/api/study-records/save-day',
   '/api/reports/generate',
+  '/api/focus-timer/action',
 ]);
 
 export function learnerCanAccess(method, pathname) {

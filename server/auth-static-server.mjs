@@ -35,10 +35,12 @@ import { handleLearningReadRoutes } from './routes/learning-read-routes.mjs';
 import { handleLearningWriteRoutes } from './routes/learning-write-routes.mjs';
 import { createBackupService } from './services/backup-service.mjs';
 import { createBreakGuardService } from './domains/break-guard/service.mjs';
+import { createFocusTimerService } from './domains/focus-timer/service.mjs';
 import { createLearningRepository } from './repositories/learning-repository.mjs';
 import { createDailyBriefRepository } from './repositories/daily-brief-repository.mjs';
 import { createConfusingWordsRepository } from './repositories/confusing-words-repository.mjs';
 import { createBreakGuardRepository } from './repositories/break-guard-repository.mjs';
+import { createFocusTimerRepository } from './repositories/focus-timer-repository.mjs';
 import { createBackupRepository } from './repositories/backup-repository.mjs';
 import { createDictionaryRepository } from './repositories/dictionary-repository.mjs';
 import { createDictionaryService } from './services/dictionary-service.mjs';
@@ -137,6 +139,7 @@ const learningRepository = createLearningRepository(sqliteRepository);
 const dailyBriefRepository = createDailyBriefRepository(sqliteRepository);
 const confusingWordsRepository = createConfusingWordsRepository(sqliteRepository);
 const breakGuardRepository = createBreakGuardRepository(sqliteRepository);
+const focusTimerRepository = createFocusTimerRepository(sqliteRepository);
 const backupRepository = createBackupRepository(sqliteRepository);
 const dictionaryDatabase = createSqliteRepository({ sqliteFile: dictionarySqliteFile, dataDir });
 const dictionaryRepository = createDictionaryRepository(dictionaryDatabase);
@@ -292,6 +295,14 @@ installDomain('proxy', installProxyDomain);
 installDomain('operations', installOperationsDomain);
 installDomain('learning', installLearningDomain);
 installDomain('notifications', installNotificationsDomain);
+const focusTimerService = createFocusTimerService({
+    repository: focusTimerRepository,
+    now: () => Date.now(),
+    todayISO,
+    tableChanged: runtime.tableChanged,
+    refreshStudySummariesForDate: runtime.refreshStudySummariesForDate,
+});
+exposeRuntime({ focusTimerService: () => focusTimerService });
 const studyComparisonService = createStudyComparisonService({
     database: sqliteRepository,
     todayISO,

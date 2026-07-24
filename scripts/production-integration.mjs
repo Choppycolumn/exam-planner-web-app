@@ -57,11 +57,48 @@ const firstEvent = JSON.parse((await request('/api/break-guard/events', breakOpt
 const secondEvent = JSON.parse((await request('/api/break-guard/events', breakOptions)).body);
 if (firstEvent.event?.duplicate !== false || secondEvent.event?.duplicate !== true) throw new Error('Break Guard event idempotency failed');
 
+const projectsResponse = await request('/api/projects', { cookie });
+const focusProject = JSON.parse(projectsResponse.body).items?.find((project) => project.isActive);
+if (projectsResponse.status !== 200 || !focusProject?.id) throw new Error('Focus timer project lookup failed');
+const focusStamp = Date.now();
+const focusSessionId = `deployment_focus_${focusStamp}`;
+const focusStarted = await request('/api/focus-timer/action', {
+  method: 'POST',
+  cookie,
+  body: {
+    action: 'start_focus',
+    operationId: `deployment_focus_start_${focusStamp}`,
+    sessionId: focusSessionId,
+    projectId: focusProject.id,
+    occurredAt: new Date(focusStamp - 2 * 60_000).toISOString(),
+  },
+});
+if (focusStarted.status !== 200 || JSON.parse(focusStarted.body).dashboard?.state?.mode !== 'focus') {
+  throw new Error(`Focus timer start failed: ${focusStarted.status}`);
+}
+const finishFocusBody = {
+  action: 'complete_focus',
+  operationId: `deployment_focus_finish_${focusStamp}`,
+  sessionId: focusSessionId,
+  occurredAt: new Date(focusStamp).toISOString(),
+};
+const focusFinished = await request('/api/focus-timer/action', { method: 'POST', cookie, body: finishFocusBody });
+const focusReplayed = await request('/api/focus-timer/action', { method: 'POST', cookie, body: finishFocusBody });
+const focusDashboard = JSON.parse(focusFinished.body).dashboard;
+if (
+  focusFinished.status !== 200
+  || focusDashboard?.state?.mode !== 'break'
+  || focusDashboard?.summary?.sessionCount !== 1
+  || JSON.parse(focusReplayed.body).duplicate !== true
+) {
+  throw new Error('Focus timer completion or idempotency failed');
+}
+
 if ((await request('/api/library/books', { cookie })).status !== 410) throw new Error('Retired library route is not closed');
 if ((await request('/api/market-copilot', { cookie })).status !== 410) throw new Error('Retired finance route is not closed');
 
 console.log(JSON.stringify({
   ok: true,
   baseUrl: baseUrl.origin,
-  checks: ['authenticated-login', 'task-write-readback', 'break-guard-idempotency', 'retired-route-boundaries'],
+  checks: ['authenticated-login', 'task-write-readback', 'break-guard-idempotency', 'focus-timer-write-readback', 'focus-timer-idempotency', 'retired-route-boundaries'],
 }));

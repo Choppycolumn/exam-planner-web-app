@@ -1,6 +1,7 @@
 export const routeLoaders = {
   goals: () => import('../pages/GoalsPage'),
   studyTime: () => import('../pages/StudyTimePage'),
+  focusTimer: () => import('../pages/FocusTimerPage'),
   reviews: () => import('../pages/ReviewsPage'),
   reviewInsights: () => import('../pages/ReviewInsightsPage'),
   progress: () => import('../pages/LearningProgressPage'),
@@ -38,6 +39,7 @@ export function preloadSecondaryRoutes() {
 const pathLoaders: Record<string, () => Promise<unknown>> = {
   '/goals': routeLoaders.goals,
   '/study-time': routeLoaders.studyTime,
+  '/focus-timer': routeLoaders.focusTimer,
   '/reviews': routeLoaders.reviews,
   '/review-insights': routeLoaders.reviewInsights,
   '/progress': routeLoaders.progress,
