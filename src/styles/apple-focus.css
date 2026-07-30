@@ -1,0 +1,217 @@
+.focus-timer-page {
+  gap: 20px;
+}
+
+.focus-hero {
+  min-height: 650px;
+  border-color: var(--line);
+  border-radius: var(--radius-2xl);
+  background: var(--material-regular);
+  box-shadow: var(--shadow-raised);
+  -webkit-backdrop-filter: blur(var(--glass-blur-thick)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur-thick)) saturate(var(--glass-saturation));
+}
+
+.focus-hero::after {
+  display: none;
+}
+
+.focus-status-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 4px var(--success-soft);
+}
+
+.focus-status-label {
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.focus-status-detail {
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.focus-icon-button {
+  width: 42px;
+  height: 42px;
+  flex-basis: 42px;
+  border-color: var(--line);
+  border-radius: 13px;
+  background: var(--material-regular);
+  box-shadow: var(--shadow-control);
+  transition:
+    transform var(--motion-press) ease,
+    color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
+}
+
+@media (hover: hover) {
+  .focus-icon-button:hover {
+    color: var(--accent-text);
+    border-color: var(--accent-border);
+    background: var(--surface-hover);
+    transform: translateY(-1px);
+  }
+}
+
+.focus-icon-button:active {
+  transform: scale(0.94);
+}
+
+.focus-clock-wrap {
+  margin: clamp(50px, 9vh, 88px) 0 38px;
+}
+
+.focus-clock {
+  font-family: var(--font-display);
+  font-size: clamp(68px, 9vw, 112px);
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: none;
+}
+
+.focus-clock-caption {
+  margin-top: 16px;
+  color: var(--text-tertiary);
+  font-size: 14px;
+  font-weight: 580;
+}
+
+.focus-project-picker {
+  gap: 9px;
+}
+
+.focus-project-option {
+  min-height: 50px;
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  box-shadow: var(--shadow-control);
+  transition:
+    transform var(--motion-press) ease,
+    border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease;
+}
+
+@media (hover: hover) {
+  .focus-project-option:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    background: var(--surface-hover);
+    transform: translateY(-1px);
+  }
+}
+
+.focus-project-option:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.focus-project-option.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent), inset 0 1px 0 var(--highlight);
+}
+
+.focus-primary-action {
+  min-height: 54px;
+  border-radius: 16px;
+  background: var(--accent);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  transition:
+    transform var(--motion-press) ease,
+    background-color var(--motion-fast) ease,
+    box-shadow var(--motion-fast) ease;
+}
+
+@media (hover: hover) {
+  .focus-primary-action:hover:not(:disabled) {
+    background: var(--accent-hover);
+    box-shadow: 0 16px 34px color-mix(in srgb, var(--accent) 27%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+    transform: translateY(-1px);
+  }
+}
+
+.focus-primary-action:active:not(:disabled) {
+  background: var(--accent-pressed);
+  transform: scale(0.985);
+}
+
+.focus-secondary-actions button {
+  min-height: 44px;
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+  background: var(--material-regular);
+  box-shadow: var(--shadow-control);
+  transition:
+    transform var(--motion-press) ease,
+    background-color var(--motion-fast) ease;
+}
+
+.focus-secondary-actions button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.focus-segments span {
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+}
+
+.focus-summary,
+.focus-history {
+  border-radius: var(--radius-lg);
+}
+
+.focus-progress-track {
+  height: 8px;
+  background: var(--surface-inset);
+}
+
+.focus-progress-track span {
+  background: var(--accent);
+}
+
+.focus-project-summary > div,
+.focus-session-row {
+  border-color: var(--line);
+}
+
+.focus-modal-backdrop {
+  background: rgba(7, 14, 25, 0.42);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+  backdrop-filter: blur(12px) saturate(120%);
+}
+
+.focus-settings-sheet {
+  border-color: var(--line-strong);
+  border-radius: var(--radius-xl);
+  background: var(--material-thick);
+  box-shadow: var(--shadow-raised);
+  -webkit-backdrop-filter: blur(var(--glass-blur-thick)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur-thick)) saturate(var(--glass-saturation));
+}
+
+.focus-break-alert {
+  background: rgba(3, 10, 20, 0.94);
+}
+
+.focus-break-alert-icon {
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+@media (max-width: 520px) {
+  .focus-hero {
+    border-radius: 20px;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .focus-hero,
+  .focus-settings-sheet,
+  .focus-modal-backdrop,
+  .focus-break-alert {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}

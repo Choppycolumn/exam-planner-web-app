@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import queue
 import socket
 import sys
@@ -11,8 +12,8 @@ from breakguard_logging import log_error
 
 
 class SingleInstance:
-    PORT = 49372
-    MUTEX_NAME = "Local\\ExamPlannerBreakGuardSingleInstance"
+    PORT = int(os.environ.get("BREAK_GUARD_INSTANCE_PORT", "49372"))
+    MUTEX_NAME = os.environ.get("BREAK_GUARD_MUTEX_NAME", "Local\\ExamPlannerBreakGuardSingleInstance")
 
     def __init__(self, action_queue: "queue.Queue[str]"):
         self.action_queue = action_queue

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TimerReset, TrendingUp, Users } from 'lucide-react';
+import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TimerReset, TrendingUp, Users, WifiOff } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -49,46 +49,49 @@ export function Layout() {
 
   return (
     <div className="app-shell">
-      <aside className="app-sidebar fixed left-0 top-0 hidden h-screen w-64 overflow-y-auto border-r px-4 py-5 lg:block">
-        <div className="px-2">
-          <p className="app-brand-kicker text-sm font-semibold">Exam Planner</p>
-          <h1 className="mt-1 text-lg font-semibold text-slate-950">考研计划管理</h1>
+      <aside className="app-sidebar">
+        <div className="app-brand">
+          <span className="app-brand-mark" aria-hidden="true"><BookOpen size={19} strokeWidth={2.2} /></span>
+          <div>
+            <p className="app-brand-kicker">Exam Planner</p>
+            <h1 className="app-brand-title">考研计划管理</h1>
+          </div>
         </div>
-        <nav className="mt-8 space-y-1">
+        <nav className="app-nav-list" aria-label="主要导航">
           {navItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
-                `app-nav-link flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium ${isActive ? 'app-nav-link-active' : ''}`
+                `app-nav-link ${isActive ? 'app-nav-link-active' : ''}`
               }
               onMouseEnter={() => preloadRoute(to)}
               onFocus={() => preloadRoute(to)}
             >
-              <Icon size={18} />
-              {label}
+              <Icon size={18} strokeWidth={2} aria-hidden="true" />
+              <span>{label}</span>
             </NavLink>
           ))}
         </nav>
       </aside>
 
-      <main className="lg:pl-64">
-        <header className="app-header sticky top-0 z-30 border-b px-4 py-3 lg:px-8">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-slate-500">{formatChineseDate()}</p>
-              {session ? (isLearner ? <p className="text-sm text-slate-700">独立学习空间 · 仅学习对比与其他账户共享</p> : <AdminGoalSummary />) : <p className="text-sm text-slate-500">正在读取账户...</p>}
+      <main className="app-main">
+        <header className="app-header">
+          <div className="app-header-inner">
+            <div className="app-header-context">
+              <p className="app-header-date">{formatChineseDate()}</p>
+              {session ? (isLearner ? <p className="app-header-summary">独立学习空间 · 仅学习对比与其他账户共享</p> : <AdminGoalSummary />) : <p className="app-header-summary">正在读取账户...</p>}
             </div>
-            <div className="flex items-center gap-2">
-              {readOnly ? <span className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">只读模式</span> : null}
-              {session ? <span className="hidden rounded-lg border border-slate-200 bg-white/70 px-3 py-2 text-sm font-semibold text-slate-700 sm:inline">{session.displayName}</span> : null}
+            <div className="app-header-actions">
+              {readOnly ? <span className="app-status-pill app-status-warning">只读模式</span> : null}
+              {session ? <span className="app-account-pill">{session.displayName}</span> : null}
               {canInstall && !installed ? (
-                <button className="btn btn-soft h-10 w-10 px-0" type="button" onClick={() => void install()} aria-label="安装到桌面" title="安装到桌面">
+                <button className="app-icon-button" type="button" onClick={() => void install()} aria-label="安装到桌面" title="安装到桌面">
                   <Download size={17} />
                 </button>
               ) : null}
               <button
-                className="btn btn-soft h-10 w-10 px-0"
+                className="app-icon-button"
                 type="button"
                 onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
                 aria-label={theme === 'dark' ? '切换到浅色模式' : '切换到深色模式'}
@@ -97,24 +100,26 @@ export function Layout() {
                 {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
               </button>
               <form method="post" action="/logout">
-                <button className="btn btn-soft h-10 w-10 px-0" type="submit" aria-label="退出登录" title="退出登录">
+                <button className="app-icon-button" type="submit" aria-label="退出登录" title="退出登录">
                   <LogOut size={17} />
                 </button>
               </form>
             </div>
-            <div className="flex gap-2 overflow-x-auto lg:hidden">
-              {navItems.map(({ to, label }) => (
-                <NavLink key={to} to={to} onMouseEnter={() => preloadRoute(to)} onFocus={() => preloadRoute(to)} className={({ isActive }) => `app-mobile-link whitespace-nowrap rounded-lg px-3 py-2 text-sm ${isActive ? 'app-mobile-link-active' : ''}`}>
-                  {label}
+          </div>
+          <nav className="app-mobile-nav" aria-label="移动端导航">
+              {navItems.map(({ to, label, icon: Icon }) => (
+                <NavLink key={to} to={to} onMouseEnter={() => preloadRoute(to)} onFocus={() => preloadRoute(to)} className={({ isActive }) => `app-mobile-link ${isActive ? 'app-mobile-link-active' : ''}`}>
+                  <Icon size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>{label}</span>
                 </NavLink>
               ))}
-            </div>
-          </div>
+          </nav>
         </header>
-        <div className="mx-auto max-w-7xl px-4 py-8 lg:px-8">
+        <div className="app-content">
           {!online ? (
-            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-              当前处于离线状态。已打开的页面可以继续查看，保存、同步和行情更新会在恢复网络后再操作。
+            <div className="app-offline-banner" role="status">
+              <WifiOff size={17} aria-hidden="true" />
+              <span>当前处于离线状态。已打开的页面可以继续查看，保存、同步和行情更新会在恢复网络后再操作。</span>
             </div>
           ) : null}
           <Outlet />

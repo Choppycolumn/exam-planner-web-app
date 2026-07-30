@@ -25,12 +25,12 @@ class ViewMixin:
         canvas.pack(fill=BOTH, expand=True)
         painter = LiquidPainter(canvas)
         painter.background(self.width, self.height)
-        painter.glass_panel(8, 8, self.width - 8, self.height - 8)
+        painter.glass_panel(9, 9, self.width - 9, self.height - 9)
         right = self.width - 28
         center = self.width / 2
         self.state_dot = painter.status_dot(29, 31, LIQUID.success)
-        canvas.create_text(50, 37, anchor="w", text="Break Guard", fill=LIQUID.text_primary, font=LIQUID.font_title)
-        canvas.create_text(50, 57, anchor="w", text="每日学习 · 专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
+        canvas.create_text(48, 36, anchor="w", text="Break Guard", fill=LIQUID.text_primary, font=LIQUID.font_title)
+        canvas.create_text(48, 57, anchor="w", text="专注节奏守护", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
         close_visual = painter.icon_button(self.width - 54, 22, 32, "×", "btn_close")
         close_visual["label"] = "btn_close__label"
         close_button = CanvasButton(canvas, "btn_close", self.hide_to_tray, close_visual)
@@ -38,12 +38,12 @@ class ViewMixin:
         self.buttons["btn_close"] = close_button
         canvas.create_text(28, 87, anchor="w", text="选择科目开始学习，结束后自动进入课间休息", fill=LIQUID.text_secondary, font=LIQUID.font_subtitle)
 
-        rounded_rect(canvas, 28, 106, right, 186, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+        rounded_rect(canvas, 28, 106, right, 186, LIQUID.radius_lg, fill=LIQUID.panel_bg_inner, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_text(46, 127, anchor="w", text="今日学习", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
         self.progress_item = canvas.create_text(right - 18, 127, anchor="e", text="0 分钟 / 目标", fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"))
         self.progress_track_width = max(1, right - 64)
-        rounded_rect(canvas, 46, 149, right - 18, 159, 5, fill=LIQUID.neutral_soft, outline="")
-        self.progress_bar = rounded_rect(canvas, 46, 149, 47, 159, 5, fill=LIQUID.accent, outline="")
+        rounded_rect(canvas, 46, 149, right - 18, 157, 4, fill=LIQUID.neutral_soft, outline="")
+        self.progress_bar = rounded_rect(canvas, 46, 149, 47, 157, 4, fill=LIQUID.accent, outline="")
         self.target_item = canvas.create_text(46, 174, anchor="w", text="", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         canvas.create_text(28, 210, anchor="w", text="今日课程", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
         canvas.create_text(right, 210, anchor="e", text="点击科目即可切换", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
@@ -70,7 +70,7 @@ class ViewMixin:
         self.add_button(64 + chip_width * 3, action_top + 88, chip_width, 38, compact_label, "btn_min", compact_action, LIQUID.control_bg, LIQUID.text_secondary)
 
         status_top = action_top + 141
-        rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        rounded_rect(canvas, 28, status_top, right, status_top + 28, 14, fill=LIQUID.neutral_soft, outline="")
         canvas.create_oval(40, status_top + 10, 48, status_top + 18, fill=LIQUID.success, outline="")
         self.status_item = canvas.create_text(58, status_top + 14, anchor="w", text="网站同步待命 · 托盘常驻 · 关闭即隐藏", fill=LIQUID.text_secondary, font=LIQUID.font_footer, width=max(260, self.width - 100))
     def build_compact_ui(self) -> None:
@@ -79,12 +79,12 @@ class ViewMixin:
         canvas.pack(fill=BOTH, expand=True)
         painter = LiquidPainter(canvas)
         painter.background(self.width, self.height)
-        painter.glass_panel(8, 8, self.width - 8, self.height - 8)
+        painter.glass_panel(9, 9, self.width - 9, self.height - 9)
         self.state_dot = painter.status_dot(27, 26, LIQUID.accent)
         session = self.planner.session
         course_title = session.project_name if session else "学习计时"
         canvas.create_text(47, 31, anchor="w", text=course_title[:18], fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        canvas.create_text(47, 52, anchor="w", text="专注小窗 · 正在自动记录", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
+        canvas.create_text(47, 52, anchor="w", text="正在自动记录", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8))
 
         expand_visual = painter.icon_button(self.width - 86, 20, 28, "↗", "btn_expand")
         expand_visual["label"] = "btn_expand__label"
@@ -102,7 +102,7 @@ class ViewMixin:
         self.add_button(self.width - 154, 82, 124, 58, "结束课程", "btn_primary", self.primary_action, LIQUID.accent, "#ffffff", primary=True)
 
         panel_bottom = self.height - 18
-        rounded_rect(canvas, 24, 154, self.width - 24, panel_bottom, 20, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1)
+        rounded_rect(canvas, 24, 154, self.width - 24, panel_bottom, LIQUID.radius_lg, fill=LIQUID.panel_bg_inner, outline=LIQUID.panel_border_soft, width=1)
         canvas.create_text(38, 176, anchor="w", text="分段计时", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
         self.segment_status_item = canvas.create_text(38, 199, anchor="w", text="需要时单独标记一段", fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 8, "bold"))
         self.add_button(self.width - 132, 166, 100, 36, "开始分段", "btn_segment", self.toggle_segment, LIQUID.accent_soft, LIQUID.accent)
@@ -143,24 +143,39 @@ class ViewMixin:
             selected = int(project["id"]) == selected_project_id
             fill = LIQUID.accent_soft if active or selected else LIQUID.control_bg
             foreground = LIQUID.accent if active or selected else LIQUID.text_primary
-            marker = "●" if active else "▶" if selected else "○"
+            marker = "●" if active else "✓" if selected else ""
             project_tag = f"project_slot_{project['id']}"
             tags = ("schedule_dynamic", project_tag)
             project_name = (project.get("name") or "未命名课程")[:10]
             rounded_rect(
-                self.canvas, x, y, x + tile_width, y + 46, 14,
+                self.canvas, x, y, x + tile_width, y + 46, LIQUID.radius_md,
                 fill=fill,
                 outline=LIQUID.accent if active or selected else LIQUID.panel_border_soft,
-                width=2 if active or selected else 1,
-                tags=tags,
+                width=1,
+                tags=(*tags, f"{project_tag}__surface"),
             )
             self.canvas.create_text(x + 16, y + 23, text=marker, fill=foreground, font=("Segoe UI Variable Display", 9, "bold"), tags=tags)
             self.canvas.create_text(x + 31, y + 16, anchor="w", text=project_name, fill=foreground, font=("Microsoft YaHei UI", 9, "bold"), tags=tags)
             state_text = "学习中" if active else "当前课程" if selected else "点击选择"
             self.canvas.create_text(x + 31, y + 33, anchor="w", text=state_text, fill=LIQUID.text_tertiary, font=("Microsoft YaHei UI", 7), tags=tags)
-            self.canvas.tag_bind(project_tag, "<ButtonRelease-1>", lambda _event, project_id=int(project["id"]): self.select_current_project(project_id))
+            pressed_fill = LIQUID.control_pressed if not active and not selected else LIQUID.accent_border
+            self.canvas.tag_bind(
+                project_tag, "<ButtonPress-1>",
+                lambda _event, surface=f"{project_tag}__surface", pressed=pressed_fill: self.canvas.itemconfigure(surface, fill=pressed),
+            )
+            self.canvas.tag_bind(
+                project_tag, "<ButtonRelease-1>",
+                lambda _event, project_id=int(project["id"]), surface=f"{project_tag}__surface", normal=fill: (
+                    self.canvas.itemconfigure(surface, fill=normal), self.select_current_project(project_id)
+                ),
+            )
             self.canvas.tag_bind(project_tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
-            self.canvas.tag_bind(project_tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
+            self.canvas.tag_bind(
+                project_tag, "<Leave>",
+                lambda _event, surface=f"{project_tag}__surface", normal=fill: (
+                    self.canvas.itemconfigure(surface, fill=normal), self.canvas.configure(cursor="")
+                ),
+            )
     def add_button(self, x, y, width, height, text, tag, command, fill, foreground, primary=False) -> None:
         visual = LiquidPainter(self.canvas).button(x, y, width, height, text, tag, fill, foreground, primary=primary)
         visual["label"] = f"{tag}__label"
@@ -172,7 +187,15 @@ class ViewMixin:
             self.canvas.itemconfigure(self.status_item, text=text)
     def set_timer(self, text: str, subtitle: str) -> None:
         if self.canvas is not None and self.timer_item is not None:
-            self.canvas.itemconfigure(self.timer_item, text=text)
+            timer_parts = text.removeprefix("+").split(":")
+            numeric = len(timer_parts) == 2 and all(part.isdigit() for part in timer_parts)
+            if self.compact_mode:
+                timer_font = ("Segoe UI Variable Display", 34, "bold")
+            elif numeric:
+                timer_font = LIQUID.font_timer
+            else:
+                timer_font = ("Microsoft YaHei UI", 26, "bold")
+            self.canvas.itemconfigure(self.timer_item, text=text, font=timer_font)
         if self.canvas is not None and self.subtitle_item is not None:
             self.canvas.itemconfigure(self.subtitle_item, text=subtitle)
     def set_tone(self, tone: str) -> None:
@@ -195,7 +218,7 @@ class ViewMixin:
         self.canvas.itemconfigure(self.target_item, text=f"已学 {study_minutes} 分钟 · 目标 {target_minutes} 分钟{pause_text}")
         self.canvas.delete("progress_fill")
         width = max(1, int(self.progress_track_width * summary["progress"]))
-        self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 159, 5, fill=LIQUID.accent, outline="", tags="progress_fill")
+        self.progress_bar = rounded_rect(self.canvas, 46, 149, 46 + width, 157, 4, fill=LIQUID.accent, outline="", tags="progress_fill")
         self.draw_schedule()
         return summary
     @staticmethod
@@ -221,32 +244,31 @@ class ViewMixin:
         window.attributes("-topmost", True)
         window.protocol("WM_DELETE_WINDOW", self.cancel_break)
         width, height = window.winfo_screenwidth(), window.winfo_screenheight()
-        canvas = Canvas(window, width=width, height=height, bg="#08111f", highlightthickness=0, name="canvas")
+        canvas = Canvas(window, width=width, height=height, bg="#06101e", highlightthickness=0, name="canvas")
         self.fullscreen_canvas = canvas
         canvas.pack(fill=BOTH, expand=True)
-        draw_vertical_gradient(canvas, width, height, "#08111f", "#17243a")
+        draw_vertical_gradient(canvas, width, height, "#06101e", "#11263e")
         card_w, card_h = min(760, width - 80), 390
         x1, y1 = (width - card_w) // 2, max(120, (height - card_h) // 2)
         x2, y2 = x1 + card_w, y1 + card_h
-        rounded_rect(canvas, x1 + 5, y1 + 10, x2 + 5, y2 + 10, 44, fill="#050b14", outline="")
-        rounded_rect(canvas, x1, y1, x2, y2, 44, fill="#172237", outline="#64748b", width=1)
-        rounded_rect(canvas, x1 + 7, y1 + 7, x2 - 7, y2 - 7, 38, fill="#1d2a40", outline="#334155", width=1)
-        rounded_rect(canvas, width / 2 - 92, y1 + 34, width / 2 + 92, y1 + 68, 17, fill="#3f1f2a", outline="#fb7185", width=1)
-        canvas.create_text(width / 2, y1 + 51, text="休息计时已结束", fill="#fda4af", font=("Microsoft YaHei UI", 11, "bold"))
-        canvas.create_text(width / 2, y1 + 128, text="现在回来", fill="#f8fafc", font=("Microsoft YaHei UI", 52, "bold"))
+        rounded_rect(canvas, x1 + 4, y1 + 9, x2 + 4, y2 + 9, 40, fill="#020711", outline="")
+        rounded_rect(canvas, x1, y1, x2, y2, 40, fill="#142238", outline="#35506f", width=1)
+        rounded_rect(canvas, width / 2 - 92, y1 + 34, width / 2 + 92, y1 + 68, 17, fill="#38202a", outline="#794052", width=1)
+        canvas.create_text(width / 2, y1 + 51, text="休息计时已结束", fill="#ff9db0", font=("Microsoft YaHei UI", 11, "bold"))
+        canvas.create_text(width / 2, y1 + 128, text="现在回来", fill="#f4f8fd", font=("Microsoft YaHei UI", 50, "bold"))
         self.fullscreen_timer_item = canvas.create_text(width / 2, y1 + 196, text=f"已经超时 {fmt_seconds(overtime)}，现在回到学习。", fill="#e2e8f0", font=("Microsoft YaHei UI", 22, "bold"))
-        canvas.create_text(width / 2, y1 + 244, text="超过 5 分钟仍未确认，网站会记录一次不专注。", fill="#94a3b8", font=("Microsoft YaHei UI", 12))
+        canvas.create_text(width / 2, y1 + 244, text="超过 5 分钟仍未确认，网站会记录一次不专注。", fill="#91a5bd", font=("Microsoft YaHei UI", 12))
         tag, button_w, button_h = "fullscreen_back", 210, 60
         button_x, button_y = int(width / 2 - button_w / 2), y1 + 292
-        rounded_rect(canvas, button_x + 2, button_y + 4, button_x + button_w + 2, button_y + button_h + 4, 30, fill="#050b14", outline="", tags=tag)
-        rounded_rect(canvas, button_x, button_y, button_x + button_w, button_y + button_h, 30, fill="#f8fafc", outline="#ffffff", width=1, tags=(tag, f"{tag}__surface"))
-        canvas.create_text(width / 2, button_y + button_h / 2, text="结束休息", fill="#111827", font=("Microsoft YaHei UI", 16, "bold"), tags=(tag, f"{tag}__label"))
+        rounded_rect(canvas, button_x + 2, button_y + 4, button_x + button_w + 2, button_y + button_h + 4, 18, fill="#020711", outline="", tags=tag)
+        rounded_rect(canvas, button_x, button_y, button_x + button_w, button_y + button_h, 18, fill="#f4f8fd", outline="#ffffff", width=1, tags=(tag, f"{tag}__surface"))
+        canvas.create_text(width / 2, button_y + button_h / 2, text="结束休息", fill="#111c2e", font=("Microsoft YaHei UI", 15, "bold"), tags=(tag, f"{tag}__label"))
         self.button_commands.append(CanvasButton(canvas, tag, self.cancel_break, {
             "surface": f"{tag}__surface",
             "label": f"{tag}__label",
-            "normal": "#f8fafc",
-            "hover": "#e0ecff",
-            "pressed": "#cbdcf4",
+            "normal": "#f4f8fd",
+            "hover": "#e2efff",
+            "pressed": "#cadcf1",
         }))
         window.bind("<Escape>", lambda _event: self.cancel_break())
         window.after(50, lambda: bring_to_front(window))
@@ -264,32 +286,32 @@ class ViewMixin:
         window.attributes("-topmost", True)
         window.protocol("WM_DELETE_WINDOW", self.hide_fullscreen)
         width, height = window.winfo_screenwidth(), window.winfo_screenheight()
-        canvas = Canvas(window, width=width, height=height, bg="#0b1020", highlightthickness=0)
+        canvas = Canvas(window, width=width, height=height, bg="#080d18", highlightthickness=0)
         self.fullscreen_canvas = canvas
         canvas.pack(fill=BOTH, expand=True)
-        draw_vertical_gradient(canvas, width, height, "#0b1020", "#24152f")
+        draw_vertical_gradient(canvas, width, height, "#080d18", "#1d1730")
         card_w, card_h = min(820, width - 80), 430
         x1, y1 = (width - card_w) // 2, max(100, (height - card_h) // 2)
         x2, y2 = x1 + card_w, y1 + card_h
-        rounded_rect(canvas, x1 + 6, y1 + 12, x2 + 6, y2 + 12, 46, fill="#050711", outline="")
-        rounded_rect(canvas, x1, y1, x2, y2, 46, fill="#211a32", outline="#a78bfa", width=1)
-        rounded_rect(canvas, width / 2 - 100, y1 + 34, width / 2 + 100, y1 + 70, 18, fill="#3a2540", outline="#f59e0b", width=1)
-        canvas.create_text(width / 2, y1 + 52, text="学习进度提醒", fill="#fbbf24", font=("Microsoft YaHei UI", 11, "bold"))
-        canvas.create_text(width / 2, y1 + 130, text="今天的学习时长还未达标", fill="#f8fafc", font=("Microsoft YaHei UI", 42, "bold"))
+        rounded_rect(canvas, x1 + 4, y1 + 10, x2 + 4, y2 + 10, 40, fill="#03050d", outline="")
+        rounded_rect(canvas, x1, y1, x2, y2, 40, fill="#181d30", outline="#5a517e", width=1)
+        rounded_rect(canvas, width / 2 - 100, y1 + 34, width / 2 + 100, y1 + 70, 17, fill="#342a24", outline="#74552b", width=1)
+        canvas.create_text(width / 2, y1 + 52, text="学习进度提醒", fill="#f0b65b", font=("Microsoft YaHei UI", 11, "bold"))
+        canvas.create_text(width / 2, y1 + 130, text="今天的学习时长还未达标", fill="#f4f8fd", font=("Microsoft YaHei UI", 40, "bold"))
         canvas.create_text(
             width / 2, y1 + 198,
             text=f"距离上次学习结束已 {snapshot['inactive_minutes']} 分钟\n今日已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟，请确认是否继续",
-            fill="#ddd6fe", font=("Microsoft YaHei UI", 17, "bold"), justify="center",
+            fill="#d8d5ee", font=("Microsoft YaHei UI", 17, "bold"), justify="center",
         )
-        canvas.create_text(width / 2, y1 + 266, text="这不是惩罚，只是把今天重新拉回轨道。", fill="#a5b4fc", font=("Microsoft YaHei UI", 12))
-        self._fullscreen_button(canvas, int(width / 2 - 220), y1 + 312, 250, 64, "现在开始学习", "lag_start", self.start_study, "#f8fafc", "#111827")
-        self._fullscreen_button(canvas, int(width / 2 + 50), y1 + 312, 170, 64, "稍后提醒", "lag_later", self.hide_fullscreen, "#332945", "#e9d5ff")
+        canvas.create_text(width / 2, y1 + 266, text="这不是惩罚，只是把今天重新拉回轨道。", fill="#9ea9c4", font=("Microsoft YaHei UI", 12))
+        self._fullscreen_button(canvas, int(width / 2 - 220), y1 + 312, 250, 64, "现在开始学习", "lag_start", self.start_study, "#f4f8fd", "#111c2e")
+        self._fullscreen_button(canvas, int(width / 2 + 50), y1 + 312, 170, 64, "稍后提醒", "lag_later", self.hide_fullscreen, "#26263d", "#d8d5ee")
         window.bind("<Escape>", lambda _event: self.hide_fullscreen())
         window.after(50, lambda: bring_to_front(window))
         self.last_fullscreen_raise = time.time()
     def _fullscreen_button(self, canvas, x, y, width, height, text, tag, command, fill, foreground) -> None:
-        rounded_rect(canvas, x + 2, y + 4, x + width + 2, y + height + 4, height // 2, fill="#050711", outline="", tags=tag)
-        rounded_rect(canvas, x, y, x + width, y + height, height // 2, fill=fill, outline="#ffffff", width=1, tags=(tag, f"{tag}__surface"))
+        rounded_rect(canvas, x + 2, y + 4, x + width + 2, y + height + 4, 18, fill="#03050d", outline="", tags=tag)
+        rounded_rect(canvas, x, y, x + width, y + height, 18, fill=fill, outline="#52627a", width=1, tags=(tag, f"{tag}__surface"))
         canvas.create_text(x + width / 2, y + height / 2, text=text, fill=foreground, font=("Microsoft YaHei UI", 14, "bold"), tags=(tag, f"{tag}__label"))
         self.button_commands.append(CanvasButton(canvas, tag, command, {
             "surface": f"{tag}__surface", "label": f"{tag}__label",

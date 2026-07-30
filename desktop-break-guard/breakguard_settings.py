@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from tkinter import BOTH, Canvas, Toplevel
 
+from breakguard_widgets import CanvasButton
 from liquid_style import LIQUID, LiquidPainter, rounded_rect
 
 
@@ -18,6 +19,7 @@ class ScheduleSettingsDialog:
             "lag_grace_minutes": config.lag_grace_minutes,
         }
         self.value_items = {}
+        self.buttons: list[CanvasButton] = []
         self.window = Toplevel(parent)
         self.window.withdraw()
         self.window.title("学习设置")
@@ -60,6 +62,7 @@ class ScheduleSettingsDialog:
 
     def _shell(self, title: str, subtitle: str, back=False) -> None:
         self.canvas.delete("all")
+        self.buttons.clear()
         painter = LiquidPainter(self.canvas)
         painter.background(self.WIDTH, self.HEIGHT)
         painter.glass_panel(8, 8, self.WIDTH - 8, self.HEIGHT - 8)
@@ -85,13 +88,22 @@ class ScheduleSettingsDialog:
         self._button(28, 478, 364, 42, "完成", self.close, "done", primary=True)
 
     def _menu_card(self, x, y, title, subtitle, index, command, tag) -> None:
-        rounded_rect(self.canvas, x, y, x + 364, y + 84, 22, fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1, tags=tag)
+        rounded_rect(
+            self.canvas, x, y, x + 364, y + 84, LIQUID.radius_lg,
+            fill=LIQUID.control_bg, outline=LIQUID.panel_border_soft, width=1,
+            tags=(tag, f"{tag}__surface"),
+        )
         rounded_rect(self.canvas, x + 16, y + 18, x + 64, y + 66, 16, fill=LIQUID.accent_soft, outline="", tags=tag)
         self.canvas.create_text(x + 40, y + 42, text=index, fill=LIQUID.accent, font=("Segoe UI Variable Display", 11, "bold"), tags=tag)
         self.canvas.create_text(x + 82, y + 29, anchor="w", text=title, fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 11, "bold"), tags=tag)
         self.canvas.create_text(x + 82, y + 57, anchor="w", text=subtitle, fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9), tags=tag)
         self.canvas.create_text(x + 340, y + 42, text="›", fill=LIQUID.text_tertiary, font=("Segoe UI Variable Display", 18), tags=tag)
-        self._bind(tag, command)
+        self._bind(tag, command, {
+            "surface": f"{tag}__surface",
+            "normal": LIQUID.control_bg,
+            "hover": LIQUID.control_hover,
+            "pressed": LIQUID.control_pressed,
+        })
 
     def show_courses(self) -> None:
         self._shell("课程列表", "这些科目来自网站中的学习项目", back=True)
@@ -134,18 +146,16 @@ class ScheduleSettingsDialog:
         self._refresh_value(key)
 
     def _button(self, x, y, width, height, text, command, tag, primary=False) -> None:
-        LiquidPainter(self.canvas).button(
+        visual = LiquidPainter(self.canvas).button(
             x, y, width, height, text, tag,
             LIQUID.accent if primary else LIQUID.control_bg,
             "#ffffff" if primary else LIQUID.text_secondary,
             primary=primary,
         )
-        self._bind(tag, command)
+        self._bind(tag, command, visual)
 
-    def _bind(self, tag: str, command) -> None:
-        self.canvas.tag_bind(tag, "<ButtonRelease-1>", lambda _event: command())
-        self.canvas.tag_bind(tag, "<Enter>", lambda _event: self.canvas.configure(cursor="hand2"))
-        self.canvas.tag_bind(tag, "<Leave>", lambda _event: self.canvas.configure(cursor=""))
+    def _bind(self, tag: str, command, visual: dict[str, str]) -> None:
+        self.buttons.append(CanvasButton(self.canvas, tag, command, visual))
 
     def adjust(self, key: str, delta: int, minimum: int, maximum: int) -> None:
         value = self.values[key] + delta

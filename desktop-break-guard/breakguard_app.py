@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import os
 import time
 from tkinter import Canvas, Tk, Toplevel, messagebox
 
@@ -40,7 +41,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.client.start()
 
         self.root = Tk()
-        self.root.title("休息守护")
+        self.root.title(os.environ.get("BREAK_GUARD_WINDOW_TITLE", "休息守护"))
         self.minimum_width = 428
         self.schedule_rows = self.schedule_row_count()
         self.minimum_height = self.preferred_height()
@@ -91,9 +92,9 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.root.update_idletasks()
         self.persist_window_geometry()
         self.tray = WindowsTrayIcon(ICON_FILE, self.tray_actions)
-        if self.tray.wait_until_ready():
+        if self.tray.wait_until_ready() and os.environ.get("BREAK_GUARD_QA_MODE") != "1":
             self.hide_from_taskbar()
-        else:
+        elif not self.tray.available:
             self.set_status("托盘不可用，窗口不会被隐藏")
         self.refresh_view_state()
         self.poll_queues()
