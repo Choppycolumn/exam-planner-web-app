@@ -56,11 +56,19 @@ curl --unix-socket "$TEST_DATA_DIR/privileged.sock" -fsS http://localhost/health
 PORT=18080 DATA_DIR="$TEST_DATA_DIR" STATIC_ROOT="$STAGE_DIR/dist" PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" APP_PASSWORD='deployment-smoke-only' COOKIE_SECRET='deployment-smoke-cookie-secret-000000000000' SETTINGS_ENCRYPTION_KEY='deployment-smoke-settings-key-000000000000' BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/server/web.mjs" >"$TEST_DATA_DIR/server.log" 2>&1 &
 TEST_PID="$!"
 for _ in $(seq 1 20); do
-  if "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080 >/dev/null 2>&1; then break; fi
+  if timeout 15s "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080 >/dev/null 2>&1; then break; fi
   sleep 1
 done
-CHECK_EMPTY_LOGIN=1 "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080
-SMOKE_APP_PASSWORD='deployment-smoke-only' SMOKE_BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-integration.mjs" http://127.0.0.1:18080
+if ! timeout 30s env CHECK_EMPTY_LOGIN=1 "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-smoke.mjs" http://127.0.0.1:18080; then
+  tail -n 80 "$TEST_DATA_DIR/server.log" >&2 || true
+  echo "staging smoke test failed or timed out" >&2
+  exit 1
+fi
+if ! timeout 120s env SMOKE_REQUEST_TIMEOUT_MS=20000 SMOKE_APP_PASSWORD='deployment-smoke-only' SMOKE_BREAK_GUARD_TOKEN='deployment-smoke-break-guard' "$APP_NODE_BIN" "$STAGE_DIR/scripts/production-integration.mjs" http://127.0.0.1:18080; then
+  tail -n 80 "$TEST_DATA_DIR/server.log" >&2 || true
+  echo "staging integration test failed or timed out" >&2
+  exit 1
+fi
 kill "$TEST_PID" >/dev/null 2>&1 || true
 wait "$TEST_PID" 2>/dev/null || true
 TEST_PID=""

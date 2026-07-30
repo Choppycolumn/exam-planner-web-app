@@ -1,6 +1,7 @@
 const baseUrl = new URL(process.argv[2] || 'http://127.0.0.1:8080');
 const password = process.env.SMOKE_APP_PASSWORD || '';
 const breakGuardToken = process.env.SMOKE_BREAK_GUARD_TOKEN || '';
+const requestTimeoutMs = Math.max(1_000, Number(process.env.SMOKE_REQUEST_TIMEOUT_MS || 20_000));
 
 if (!password || !breakGuardToken) throw new Error('Smoke credentials are required');
 
@@ -8,7 +9,9 @@ async function request(pathname, { method = 'GET', body, cookie, headers = {} } 
   const response = await fetch(new URL(pathname, baseUrl), {
     method,
     redirect: 'manual',
+    signal: AbortSignal.timeout(requestTimeoutMs),
     headers: {
+      connection: 'close',
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(cookie ? { cookie } : {}),
       ...headers,
@@ -21,7 +24,8 @@ async function request(pathname, { method = 'GET', body, cookie, headers = {} } 
 const login = await fetch(new URL('/login', baseUrl), {
   method: 'POST',
   redirect: 'manual',
-  headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  signal: AbortSignal.timeout(requestTimeoutMs),
+  headers: { connection: 'close', 'content-type': 'application/x-www-form-urlencoded' },
   body: new URLSearchParams({ password }),
 });
 if (login.status !== 302) throw new Error(`Authenticated login failed: ${login.status}`);
