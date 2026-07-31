@@ -95,7 +95,7 @@ kill "$HELPER_PID" >/dev/null 2>&1 || true
 wait "$HELPER_PID" 2>/dev/null || true
 HELPER_PID=""
 
-"$STAGE_DIR/scripts/check-system-pressure.sh" deploy
+bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy
 
 if [[ -f "$APP_DIR/data/exam-planner.sqlite" ]]; then
   DB_BACKUP_DIR="$APP_DIR/data/backups"
