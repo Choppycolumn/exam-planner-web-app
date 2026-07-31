@@ -22,7 +22,7 @@ try {
   if (-not (Test-Path (Join-Path $root $runtimeDependency))) {
     throw "Missing runtime dependency: $runtimeDependency. Run npm install before deployment."
   }
-  tar -czf $package dist server public package.json package-lock.json docs scripts infra README.md $runtimeDependency
+  tar -czf $package dist server public shared package.json package-lock.json docs scripts infra README.md $runtimeDependency
   & $pscp -batch -hostkey $hostKey -pw $Password $package "${UserName}@${HostName}:$remotePackage"
   if ($LASTEXITCODE -ne 0) { throw "Upload failed." }
   & $pscp -batch -hostkey $hostKey -pw $Password (Join-Path $root "scripts\remote-deploy.sh") "${UserName}@${HostName}:$remoteScript"
