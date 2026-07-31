@@ -18,11 +18,12 @@ export const backupKindLabel: Record<string, string> = {
   restore: '恢复记录',
 };
 
-export type SettingsTab = 'all' | 'general' | 'briefs' | 'backups' | 'goals' | 'dictionary' | 'danger';
+export type SettingsTab = 'all' | 'general' | 'users' | 'briefs' | 'backups' | 'goals' | 'dictionary' | 'danger';
 
 export const settingsTabs: Array<{ id: SettingsTab; label: string; description: string }> = [
   { id: 'all', label: '全部', description: '显示所有设置块' },
   { id: 'general', label: '基础', description: '数据说明与学习目标' },
+  { id: 'users', label: '用户', description: '账户、权限与邀请' },
   { id: 'briefs', label: '通知', description: '晨间简报与邮件' },
   { id: 'backups', label: '备份', description: '服务器快照与恢复' },
   { id: 'goals', label: '目标', description: '长期目标管理' },

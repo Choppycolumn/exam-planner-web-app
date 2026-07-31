@@ -16,26 +16,6 @@ export const routeLoaders = {
   dashboardCharts: () => import('../components/DashboardCharts'),
 };
 
-type IdleWindow = Window & {
-  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
-  cancelIdleCallback?: (id: number) => void;
-};
-
-export function preloadSecondaryRoutes() {
-  const win = window as IdleWindow;
-  const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
-  if (connection?.saveData || ['slow-2g', '2g'].includes(connection?.effectiveType || '')) return undefined;
-  const run = () => void routeLoaders.dashboardCharts().catch(() => undefined);
-
-  if (win.requestIdleCallback) {
-    const idleId = win.requestIdleCallback(run, { timeout: 1800 });
-    return () => win.cancelIdleCallback?.(idleId);
-  }
-
-  const timeoutId = window.setTimeout(run, 800);
-  return () => window.clearTimeout(timeoutId);
-}
-
 const pathLoaders: Record<string, () => Promise<unknown>> = {
   '/goals': routeLoaders.goals,
   '/study-time': routeLoaders.studyTime,

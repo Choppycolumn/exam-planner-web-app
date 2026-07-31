@@ -1,3 +1,5 @@
+import { apiErrorPayload } from '../../http/api-contract-validation.mjs';
+
 export function installBootstrapDomain(runtime, exposeRuntime) {
     runtime.validateStartupConfig();
     try {
@@ -10,11 +12,12 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
         throw error;
     }
     const renderLoginPage = (error = '') => runtime.loginPage(error, {
-        canAddUser: runtime.userAccountRepository.canCreateLearner(),
+        accounts: runtime.userAccountRepository.listAccounts(),
+        canRegister: runtime.userAccountRepository.canCreateMember(),
         maxUsers: runtime.userAccountRepository.maxUsers,
         userCount: runtime.userAccountRepository.countAccounts(),
+        readOnlyAvailable: Boolean(runtime.readOnlyPassword),
     });
-    const sessionCookie = (session) => `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(session))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`;
     const requestHandler = async (req, res) => {
         if (runtime.shuttingDown) {
             res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'connection': 'close' });
@@ -31,23 +34,36 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
                 return;
             }
             const password = String(params.get('password') || '');
+            const accountId = String(params.get('accountId') || '');
             let session = null;
-            if (runtime.safeSecretEqual(password, runtime.appPassword)) {
-                session = { role: 'write', userId: 1, accountType: 'admin', displayName: '我' };
+            if (accountId === 'visitor' && runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)) {
+                const owner = runtime.userAccountRepository.listAccounts().find((account) => account.userRole === 'owner');
+                session = {
+                    role: 'read', userId: runtime.userAccountRepository.getOwnerUserId(), publicId: owner?.publicId || '',
+                    accountType: 'visitor', displayName: '访客', sessionVersion: owner?.sessionVersion || 1,
+                    capabilities: runtime.defaultCapabilitiesForRole('visitor'),
+                };
             }
-            else if (runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)) {
-                session = { role: 'read', userId: 1, accountType: 'visitor', displayName: '访客' };
+            else if (accountId) {
+                session = runtime.userAccountRepository.authenticateAccount(accountId, password);
             }
             else {
-                const learner = runtime.userAccountRepository.authenticateLearner(password);
-                if (learner)
-                    session = learner;
+                const owner = runtime.userAccountRepository.listAccounts().find((account) => account.userRole === 'owner');
+                if (runtime.safeSecretEqual(password, runtime.appPassword)) session = owner;
+                else if (runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)) {
+                    session = {
+                        role: 'read', userId: runtime.userAccountRepository.getOwnerUserId(), publicId: owner?.publicId || '',
+                        accountType: 'visitor', displayName: '访客', sessionVersion: owner?.sessionVersion || 1,
+                        capabilities: runtime.defaultCapabilitiesForRole('visitor'),
+                    };
+                }
+                else session = runtime.userAccountRepository.authenticateLearner(password);
             }
             if (session) {
                 runtime.recordLoginSuccess(clientIp);
                 res.writeHead(302, {
                     location: '/',
-                    'set-cookie': sessionCookie(session),
+                    'set-cookie': `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(session, { clientHash: runtime.clientHashForRequest(req) }))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`,
                 });
                 res.end();
                 return;
@@ -62,7 +78,7 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
             runtime.sendHtml(res, renderLoginPage(`密码不正确，请重试。剩余 ${remainingAttempts} 次后将锁定 30 分钟。`), 401);
             return;
         }
-        if (req.url === '/register-learner' && req.method === 'POST') {
+        if (req.url === '/register-invite' && req.method === 'POST') {
             const clientIp = runtime.getClientIp(req);
             const locked = runtime.getLoginLock(clientIp);
             if (locked) {
@@ -71,13 +87,19 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
                 return;
             }
             const params = new URLSearchParams(await runtime.readBody(req));
+            const inviteToken = String(params.get('inviteToken') || '');
+            const displayName = String(params.get('displayName') || '');
             const password = String(params.get('password') || '');
             const confirmation = String(params.get('confirmPassword') || '');
             let errorMessage = '';
-            if (!runtime.userAccountRepository.canCreateLearner())
+            if (!runtime.userAccountRepository.canCreateMember())
                 errorMessage = '用户席位已满，不能继续新增用户。';
-            else if (password.length < 6 || password.length > 128)
-                errorMessage = '密码长度需要在 6 到 128 位之间。';
+            else if (!inviteToken)
+                errorMessage = '请输入管理员生成的邀请码。';
+            else if (!displayName.trim())
+                errorMessage = '请输入显示名称。';
+            else if (password.length < 8 || password.length > 128)
+                errorMessage = '密码长度需要在 8 到 128 位之间。';
             else if (password !== confirmation)
                 errorMessage = '两次输入的密码不一致。';
             else if (runtime.safeSecretEqual(password, runtime.appPassword) || (runtime.readOnlyPassword && runtime.safeSecretEqual(password, runtime.readOnlyPassword)))
@@ -90,27 +112,30 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
                 return;
             }
             try {
-                const learner = runtime.userAccountRepository.createLearner(password);
+                const learner = runtime.userAccountRepository.consumeInvite({ token: inviteToken, password, displayName });
                 runtime.recordLoginSuccess(clientIp);
                 runtime.tableChanged();
                 res.writeHead(302, {
                     location: '/',
-                    'set-cookie': sessionCookie(learner),
+                    'set-cookie': `${runtime.cookieName}=${encodeURIComponent(runtime.createSessionValue(learner, { clientHash: runtime.clientHashForRequest(req) }))}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${runtime.secureCookie ? '; Secure' : ''}`,
                 });
                 res.end();
             }
             catch (error) {
-                const status = error?.code === 'USER_LIMIT_REACHED' ? 409 : error?.code === 'PASSWORD_IN_USE' ? 400 : 500;
+                const status = error?.code === 'USER_LIMIT_REACHED' ? 409 : ['PASSWORD_IN_USE', 'INVALID_INVITE'].includes(error?.code) ? 400 : 500;
                 const message = error?.code === 'USER_LIMIT_REACHED'
                     ? '用户席位已满，不能继续新增用户。'
                     : error?.code === 'PASSWORD_IN_USE'
                         ? '该密码已被其他学习用户使用，请更换一个密码。'
+                        : error?.code === 'INVALID_INVITE'
+                            ? '邀请码无效、已使用或已过期。'
                         : '创建用户失败，请稍后重试。';
                 runtime.sendHtml(res, renderLoginPage(message), status);
             }
             return;
         }
         if (req.url === '/logout' && req.method === 'POST') {
+            runtime.revokeSession(req.headers.cookie);
             res.writeHead(302, {
                 location: '/',
                 'set-cookie': `${runtime.cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${runtime.secureCookie ? '; Secure' : ''}`,
@@ -136,6 +161,8 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
         }
         if (req.url?.startsWith('/api/')) {
             const startedAt = Date.now();
+            const requestId = runtime.randomBytes(8).toString('hex');
+            res.setHeader('x-request-id', requestId);
             const activeSession = runtime.getSession(req.headers.cookie);
             const sessionRole = activeSession?.role || '';
             let statusCode = 200;
@@ -156,7 +183,7 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
                 if (!res.headersSent) {
                     statusCode = error.statusCode || 500;
                     const responseStatus = error.statusCode || 500;
-                    runtime.sendJson(res, { error: responseStatus >= 500 ? 'Server error' : error.message || 'Request failed' }, responseStatus);
+                    runtime.sendJson(res, apiErrorPayload(error, requestId), responseStatus);
                 }
                 else {
                     res.end();

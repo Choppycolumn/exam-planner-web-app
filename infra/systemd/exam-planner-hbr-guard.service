@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop HBR when disk pressure threatens interactive services
+ConditionPathExists=/usr/local/sbin/exam-planner-hbr-window-control
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/exam-planner-hbr-window-control guard
+TimeoutStartSec=90s
+Nice=10
+IOSchedulingClass=idle

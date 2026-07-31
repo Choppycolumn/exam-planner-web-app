@@ -1,4 +1,93 @@
 export function createOpsRepository(sqlite) {
+  const writeAuditEvent = ({ action, actorRole, clientHash, detail, createdAt }) => {
+    sqlite.execute(`INSERT INTO audit_events(action,actor_role,client_hash,detail_json,created_at)
+VALUES(?,?,?,?,?);`, [
+      String(action || ''),
+      String(actorRole || ''),
+      String(clientHash || ''),
+      JSON.stringify(detail || {}),
+      String(createdAt),
+    ]);
+  };
+
+  const writeApiRequest = ({ method, path, statusCode, durationMs, role, error, createdAt }) => {
+    sqlite.execute(`INSERT INTO api_request_log(method,path,status_code,duration_ms,role,error,created_at)
+VALUES(?,?,?,?,?,?,?);`, [
+      String(method || 'GET'),
+      String(path || '/'),
+      Number(statusCode || 0),
+      Number(durationMs || 0),
+      String(role || ''),
+      String(error || ''),
+      String(createdAt),
+    ]);
+  };
+
+  const writeClientError = ({
+    source, path, message, stack, componentStack, role, clientHash, userAgent, createdAt,
+  }) => {
+    const result = sqlite.execute(`INSERT INTO client_error_log(
+source,path,message,stack,component_stack,role,client_hash,user_agent,created_at)
+VALUES(?,?,?,?,?,?,?,?,?);`, [
+      String(source || ''),
+      String(path || ''),
+      String(message || ''),
+      String(stack || ''),
+      String(componentStack || ''),
+      String(role || ''),
+      String(clientHash || ''),
+      String(userAgent || ''),
+      String(createdAt),
+    ]);
+    return Number(result.lastInsertRowid || 0);
+  };
+
+  const recordVisit = ({ path, method, role, clientHash, userAgent, createdAt }) => {
+    sqlite.execute(`INSERT INTO visit_events(path,method,role,client_hash,user_agent,created_at)
+VALUES(?,?,?,?,?,?);`, [path, method, role, clientHash, userAgent, createdAt]);
+  };
+
+  const getVisitStats = ({ today, start7, start14 }) => {
+    const dailyRows = sqlite.json(`SELECT substr(created_at,1,10) AS date,
+COUNT(*) AS visits,COUNT(DISTINCT client_hash) AS uniqueVisitors
+FROM visit_events WHERE substr(created_at,1,10) BETWEEN ? AND ?
+GROUP BY substr(created_at,1,10) ORDER BY date;`, [start14, today]);
+    const total = Number(sqlite.scalar('SELECT COUNT(*) FROM visit_events;') || 0);
+    const todayCount = Number(sqlite.scalar(
+      'SELECT COUNT(*) FROM visit_events WHERE substr(created_at,1,10)=?;',
+      [today],
+    ) || 0);
+    const last7 = Number(sqlite.scalar(
+      'SELECT COUNT(*) FROM visit_events WHERE substr(created_at,1,10) BETWEEN ? AND ?;',
+      [start7, today],
+    ) || 0);
+    const uniqueVisitors7 = Number(sqlite.scalar(
+      'SELECT COUNT(DISTINCT client_hash) FROM visit_events WHERE substr(created_at,1,10) BETWEEN ? AND ?;',
+      [start7, today],
+    ) || 0);
+    const topPaths = sqlite.json(`SELECT path,COUNT(*) AS visits
+FROM visit_events WHERE substr(created_at,1,10) BETWEEN ? AND ?
+GROUP BY path ORDER BY visits DESC,path LIMIT 8;`, [start14, today]);
+    const latest = sqlite.json(`SELECT path,role,user_agent AS userAgent,created_at AS createdAt
+FROM visit_events ORDER BY created_at DESC LIMIT 12;`);
+    return { dailyRows, total, todayCount, last7, uniqueVisitors7, topPaths, latest };
+  };
+
+  const pruneOperationalData = ({ visitBefore, apiBefore, clientErrorBefore, taskRunBefore }) => {
+    sqlite.transaction((connection) => {
+      connection.prepare('DELETE FROM visit_events WHERE substr(created_at,1,10)<?;').run(visitBefore);
+      connection.prepare('DELETE FROM api_request_log WHERE substr(created_at,1,10)<?;').run(apiBefore);
+      connection.prepare('DELETE FROM client_error_log WHERE substr(created_at,1,10)<?;').run(clientErrorBefore);
+      connection.prepare('DELETE FROM task_runs WHERE substr(started_at,1,10)<?;').run(taskRunBefore);
+    });
+  };
+
+  const sqliteProbe = () => Number(sqlite.scalar('SELECT 1;') || 0) === 1;
+
+  const requiredTableCount = () => Number(sqlite.scalar(
+    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('goals','short_term_tasks','daily_reviews');",
+  ) || 0);
+
   const listAuditEvents = (limit = 12) => {
     const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
     return sqlite.json(`SELECT action, actor_role AS actorRole, detail_json AS detailJson, created_at AS createdAt
@@ -73,5 +162,19 @@ ORDER BY count DESC, source ASC;`).map((row) => ({ source: row.source, count: Nu
     };
   };
 
-  return { listAuditEvents, listSlowApi, getApiMetrics, listClientErrors, getClientErrorMetrics };
+  return {
+    writeAuditEvent,
+    writeApiRequest,
+    writeClientError,
+    recordVisit,
+    getVisitStats,
+    pruneOperationalData,
+    sqliteProbe,
+    requiredTableCount,
+    listAuditEvents,
+    listSlowApi,
+    getApiMetrics,
+    listClientErrors,
+    getClientErrorMetrics,
+  };
 }

@@ -22,22 +22,34 @@ import { BACKUP_BASE_URL_KEY, BACKUP_META_KEY, LEGACY_BACKUP_PASSWORD_KEY, backu
 import { SettingsNavigation } from '../features/settings/SettingsNavigation';
 import { BriefSettingsSection } from '../features/settings/BriefSettingsSection';
 import { BreakGuardScheduleSection } from '../features/settings/BreakGuardScheduleSection';
+import { UserManagementSection } from '../features/settings/UserManagementSection';
+import { useAccountSession } from '../hooks/useAccountSession';
 
 export function SettingsPage() {
+  const { data: session } = useAccountSession();
+  const settingsUserId = Number(session?.userId || 0);
   const { goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks, readOnly } = useAppData();
   const [toast, setToast] = useState('');
   const [studyTargetHours, setStudyTargetHours] = useState('');
   const [backupBaseUrl, setBackupBaseUrl] = useState(() => localStorage.getItem(BACKUP_BASE_URL_KEY) || '');
   const [backupSyncToken, setBackupSyncToken] = useState('');
-  const [confusingGroups, setConfusingGroups] = useState(() => loadGroups());
+  const [confusingGroups, setConfusingGroups] = useState<ConfusingWordGroup[]>([]);
   const [confusingBackupVersions, setConfusingBackupVersions] = useState<ConfusingWordsBackupVersion[]>([]);
   const [confusingServerBackup, setConfusingServerBackup] = useState<{ groups: ConfusingWordGroup[]; backedUpAt?: string } | null>(null);
   const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [briefSettings, setBriefSettings] = useState<DailyBriefSettings>(() => defaultBriefSettings());
   const [taskReminderOffsetsText, setTaskReminderOffsetsText] = useState(() => reminderOffsetsText(defaultBriefSettings()));
   const [briefLoading, setBriefLoading] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>('all');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general');
   const showSection = (section: SettingsTab) => settingsTab === 'all' || settingsTab === section;
+
+  useEffect(() => {
+    if (settingsUserId < 1) return undefined;
+    const timeoutId = window.setTimeout(() => {
+      setConfusingGroups(loadGroups(settingsUserId, { allowLegacy: true }));
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [settingsUserId]);
 
   const refreshBackupStatus = async () => {
     try {
@@ -50,7 +62,7 @@ export function SettingsPage() {
           setTimeout(() => setToast(''), 2200);
           return;
         }
-        const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { force: true, source: 'manual-force' });
+        const result = await backupConfusingWords(buildExport(loadGroups(settingsUserId, { allowLegacy: true })), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { force: true, source: 'manual-force' });
         localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
         await refreshConfusingWordsBackups();
         setToast('已强制覆盖服务器单词备份');
@@ -212,7 +224,7 @@ export function SettingsPage() {
     if (!Array.isArray(payload.groups)) return alert('导入文件格式不正确');
     const shouldMerge = confirm('点击“确定”合并导入；点击“取消”覆盖当前易混单词数据。');
     const next = shouldMerge ? [...confusingGroups, ...payload.groups] : payload.groups;
-    saveGroups(next);
+    saveGroups(next, settingsUserId);
     setConfusingGroups(next);
     setToast('易混单词导入完成');
     setTimeout(() => setToast(''), 1800);
@@ -227,7 +239,7 @@ export function SettingsPage() {
 
   const backupNow = async () => {
     try {
-      const result = await backupConfusingWords(buildExport(loadGroups()), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { source: 'manual-settings' });
+      const result = await backupConfusingWords(buildExport(loadGroups(settingsUserId, { allowLegacy: true })), { baseUrl: backupBaseUrl, syncToken: backupSyncToken }, { source: 'manual-settings' });
       localStorage.setItem(BACKUP_META_KEY, result.backedUpAt);
       await refreshConfusingWordsBackups();
       setToast('易混单词已备份到服务器');
@@ -242,7 +254,7 @@ export function SettingsPage() {
     try {
       const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, syncToken: backupSyncToken });
       if (!backup?.groups?.length) return alert('服务器上还没有可恢复的易混单词备份');
-      saveGroups(backup.groups);
+      saveGroups(backup.groups, settingsUserId);
       setConfusingGroups(backup.groups);
       if (backup.backedUpAt) localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
       await refreshConfusingWordsBackups();
@@ -259,7 +271,7 @@ export function SettingsPage() {
       await restoreConfusingWordsBackupVersion(version.id, { baseUrl: backupBaseUrl, syncToken: backupSyncToken });
       const backup = await fetchConfusingWordsBackup({ baseUrl: backupBaseUrl, syncToken: backupSyncToken });
       if (backup?.groups?.length) {
-        saveGroups(backup.groups);
+        saveGroups(backup.groups, settingsUserId);
         setConfusingGroups(backup.groups);
         if (backup.backedUpAt) localStorage.setItem(BACKUP_META_KEY, backup.backedUpAt);
       }
@@ -322,6 +334,7 @@ export function SettingsPage() {
         <MetricCard label="模考记录" value={`${exams.length} 条`} />
       </div>
       <SettingsNavigation current={settingsTab} onChange={setSettingsTab} />
+      <UserManagementSection visible={showSection('users')} onMessage={(message) => { setToast(message); setTimeout(() => setToast(''), 2400); }} />
       <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">数据保存说明</h2>
         <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>

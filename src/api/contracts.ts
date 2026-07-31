@@ -15,13 +15,46 @@ export interface ServerState {
 
 export interface AccountSession {
   userId: number;
+  publicId: string;
   displayName: string;
   accountType: 'admin' | 'learner' | 'visitor';
+  userRole: 'owner' | 'member' | 'visitor';
   role: 'write' | 'read';
   maxUsers: number;
   userCount: number;
   canAddUser: boolean;
   capabilities: string[];
+}
+
+export interface ManagedUserAccount {
+  userId: number;
+  publicId: string;
+  displayName: string;
+  accountType: 'admin' | 'learner';
+  userRole: 'owner' | 'member';
+  status: 'active' | 'disabled';
+  isActive: boolean;
+  capabilities: string[];
+  createdAt: string;
+  lastLoginAt: string | null;
+}
+
+export interface UserInviteSummary {
+  id: number;
+  displayName: string;
+  role: 'member';
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface UserManagementResponse {
+  users: ManagedUserAccount[];
+  invites: UserInviteSummary[];
+  maxUsers: number;
+  userCount: number;
+  canCreate: boolean;
 }
 
 export type FocusTimerMode = 'idle' | 'focus' | 'break' | 'meal';
@@ -129,6 +162,7 @@ export interface StudyComparisonAccount {
   userId: number;
   displayName: string;
   accountType: 'admin' | 'learner';
+  userRole: 'owner' | 'member';
   todayMinutes: number;
   weekMinutes: number;
   monthMinutes: number;
@@ -540,6 +574,16 @@ export interface RuntimeStatus {
     memoryOk: boolean;
     loadOk: boolean;
     healthy: boolean;
+  };
+  io?: {
+    available: boolean;
+    status: 'normal' | 'degraded' | 'failed';
+    iowaitPercent: number | null;
+    ioPressure: { avg10: number; avg60: number; avg300: number } | null;
+    blockedProcessCount: number;
+    blockedProcessIds: number[];
+    loadPerCpu: number;
+    action: string;
   };
   nodeVersion: string;
 }

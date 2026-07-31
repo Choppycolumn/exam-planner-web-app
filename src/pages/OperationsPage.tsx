@@ -120,6 +120,13 @@ export function OperationsPage() {
     },
     { label: '每日简报', ok: briefOk, detail: status?.dailyBrief.latest ? `${status.dailyBrief.latest.date} · ${status.dailyBrief.latest.status}` : '暂无简报' },
     { label: '后台任务', ok: taskOk, detail: `失败 ${status?.tasks?.metrics?.failed ?? 0} 次，运行中 ${status?.tasks?.metrics?.running ?? 0}` },
+    {
+      label: '磁盘 I/O',
+      ok: !status?.runtime.io || status.runtime.io.status === 'normal',
+      detail: status?.runtime.io?.available
+        ? `等待 ${status.runtime.io.iowaitPercent == null ? '采样中' : `${status.runtime.io.iowaitPercent}%`}，阻塞进程 ${status.runtime.io.blockedProcessCount}`
+        : '当前平台不提供 I/O 指标',
+    },
     { label: '日志健康', ok: logOk, detail: `5xx ${logs?.apiMetrics?.serverErrors ?? 0} 次，日志源 ${logs?.sources.filter((source) => source.available).length ?? 0}/${logs?.sources.length ?? 0}` },
     { label: '页面错误', ok: clientErrorOk, detail: `24 小时 ${logs?.clientErrors?.metrics.last24h ?? 0} 次，7 天 ${logs?.clientErrors?.metrics.last7d ?? 0} 次` },
     { label: '访问入口', ok: Boolean(visitsQuery.data), detail: `今日 ${visitsQuery.data?.today ?? 0} 次，近 7 天 ${visitsQuery.data?.last7 ?? 0} 次` },

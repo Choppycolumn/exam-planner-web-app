@@ -60,7 +60,7 @@ export function StudyComparisonPage() {
                     </span>
                     <div>
                       <h2 className="font-semibold text-slate-950">{account.displayName}</h2>
-                      <p className="text-xs text-slate-500">{account.accountType === 'admin' ? '主账户' : '学习用户'}</p>
+                      <p className="text-xs text-slate-500">{account.userRole === 'owner' ? '主账户' : '学习用户'}</p>
                     </div>
                   </div>
                   <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">连续 {account.streakDays} 天</span>

@@ -11,13 +11,13 @@ export function SettingsNavigation({ current, onChange }: SettingsNavigationProp
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-900">系统设置中心</h2>
-          <p className="mt-1 text-sm text-slate-500">按基础配置、通知、备份、目标、词典和危险操作分组。</p>
+          <p className="mt-1 text-sm text-slate-500">按基础、用户、通知、备份、目标、词典和危险操作分组。</p>
         </div>
         <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">
           当前：{settingsTabs.find((tab) => tab.id === current)?.label}
         </span>
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-8">
         {settingsTabs.map((tab) => (
           <button
             key={tab.id}

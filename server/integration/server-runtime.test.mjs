@@ -49,7 +49,7 @@ suite('production server runtime', () => {
       env: {
         ...process.env,
         PORT: String(port), DATA_DIR: join(temporary, 'data'), STATIC_ROOT: staticRoot, SERVICE_ROLE: 'web',
-        APP_PASSWORD: 'runtime-test-password', READONLY_PASSWORD: 'runtime-read-password', COOKIE_SECRET: 'runtime-test-cookie-secret-0000000000000000',
+        APP_PASSWORD: 'runtime-test-password', READONLY_PASSWORD: 'runtime-read-password', COOKIE_SECRET: 'runtime-test-cookie-secret-0000000000000000', MAX_USERS: '5',
         BREAK_GUARD_TOKEN: 'runtime-break-guard-token', ENABLE_RETIRED_MARKET_COPILOT: '0', ENABLE_RETIRED_LIBRARY: '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -112,23 +112,26 @@ suite('production server runtime', () => {
     expect((await request(baseUrl, '/api/market-copilot', { cookie })).status).toBe(410);
   });
 
-  it('creates two password-only learners with isolated data and shared study comparison', async () => {
+  it('creates invited members with isolated data and shared study comparison', async () => {
     const loginPage = await request(baseUrl, '/');
-    expect(loginPage.text).toContain('新增学习用户');
-    const registration = await fetch(`${baseUrl}/register-learner`, {
+    expect(loginPage.text).toContain('使用邀请码创建学习空间');
+    const firstInvite = JSON.parse((await request(baseUrl, '/api/users/invites', {
+      method: 'POST', cookie, body: { displayName: '学习伙伴', expiresInHours: 24 },
+    })).text).invite;
+    const registration = await fetch(`${baseUrl}/register-invite`, {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ password: 'learner-runtime-password', confirmPassword: 'learner-runtime-password' }),
+      body: new URLSearchParams({ inviteToken: firstInvite.token, displayName: '学习伙伴', password: 'learner-runtime-password', confirmPassword: 'learner-runtime-password' }),
     });
     expect(registration.status).toBe(302);
     expect(registration.headers.get('location')).toBe('/');
     const learnerCookie = registration.headers.get('set-cookie')?.split(';')[0] || '';
 
     const session = JSON.parse((await request(baseUrl, '/api/session', { cookie: learnerCookie })).text);
-    expect(session).toMatchObject({ userId: 2, accountType: 'learner', userCount: 2, maxUsers: 3, canAddUser: true });
-    expect(session.capabilities).toContain('dashboard');
-    expect(session.capabilities).not.toContain('operations');
+    expect(session).toMatchObject({ userId: 2, accountType: 'learner', userRole: 'member', userCount: 2, maxUsers: 5, canAddUser: true });
+    expect(session.capabilities).toContain('study.use');
+    expect(session.capabilities).not.toContain('operations.manage');
     expect((await request(baseUrl, '/api/notifications/center', { cookie: learnerCookie })).status).toBe(403);
     expect((await request(baseUrl, '/api/tasks/status', { cookie: learnerCookie })).status).toBe(403);
     expect((await request(baseUrl, '/api/settings/mihomo', { cookie: learnerCookie })).status).toBe(403);
@@ -203,7 +206,7 @@ suite('production server runtime', () => {
 
     const comparison = JSON.parse((await request(baseUrl, '/api/study-comparison?days=7', { cookie: learnerCookie })).text);
     expect(comparison.accounts).toHaveLength(2);
-    expect(comparison.maxUsers).toBe(3);
+    expect(comparison.maxUsers).toBe(5);
     expect(comparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
 
     const sqlite = new DatabaseSync(join(temporary, 'data', 'exam-planner.sqlite'), { readOnly: true });
@@ -213,17 +216,20 @@ suite('production server runtime', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM learning_reports WHERE user_id=2').get().count).toBe(1);
     sqlite.close();
 
-    const secondRegistration = await fetch(`${baseUrl}/register-learner`, {
+    const secondInvite = JSON.parse((await request(baseUrl, '/api/users/invites', {
+      method: 'POST', cookie, body: { displayName: '学习伙伴 2', expiresInHours: 24 },
+    })).text).invite;
+    const secondRegistration = await fetch(`${baseUrl}/register-invite`, {
       method: 'POST',
       redirect: 'manual',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ password: 'third-runtime-password', confirmPassword: 'third-runtime-password' }),
+      body: new URLSearchParams({ inviteToken: secondInvite.token, displayName: '学习伙伴 2', password: 'third-runtime-password', confirmPassword: 'third-runtime-password' }),
     });
     expect(secondRegistration.status).toBe(302);
     const thirdUserCookie = secondRegistration.headers.get('set-cookie')?.split(';')[0] || '';
     const thirdUserSession = JSON.parse((await request(baseUrl, '/api/session', { cookie: thirdUserCookie })).text);
-    expect(thirdUserSession).toMatchObject({ userId: 3, displayName: '学习伙伴 2', accountType: 'learner', userCount: 3, maxUsers: 3, canAddUser: false });
-    expect(thirdUserSession.capabilities).not.toContain('operations');
+    expect(thirdUserSession).toMatchObject({ userId: 3, displayName: '学习伙伴 2', accountType: 'learner', userRole: 'member', userCount: 3, maxUsers: 5, canAddUser: true });
+    expect(thirdUserSession.capabilities).not.toContain('operations.manage');
     expect((await request(baseUrl, '/api/settings/mihomo', { cookie: thirdUserCookie })).status).toBe(403);
     expect((await request(baseUrl, '/api/tasks/status', { cookie: thirdUserCookie })).status).toBe(403);
 
@@ -251,13 +257,39 @@ suite('production server runtime', () => {
     expect(threeUserComparison.accounts.find((account) => account.userId === 2)).toEqual(expect.objectContaining({ todayMinutes: 55 }));
     expect(threeUserComparison.accounts.find((account) => account.userId === 3)).toEqual(expect.objectContaining({ todayMinutes: 35 }));
 
-    const fourthRegistration = await fetch(`${baseUrl}/register-learner`, {
-      method: 'POST',
-      redirect: 'manual',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ password: 'fourth-runtime-password', confirmPassword: 'fourth-runtime-password' }),
+    const userManagement = JSON.parse((await request(baseUrl, '/api/users', { cookie })).text);
+    expect(userManagement.users).toHaveLength(3);
+    expect(userManagement.users.every((account) => !('passwordHash' in account))).toBe(true);
+    expect((await request(baseUrl, '/api/users', { cookie: learnerCookie })).status).toBe(403);
+
+    const fourthInvite = JSON.parse((await request(baseUrl, '/api/users/invites', { method: 'POST', cookie, body: { displayName: '第四位' } })).text).invite;
+    const fourthRegistration = await fetch(`${baseUrl}/register-invite`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ inviteToken: fourthInvite.token, displayName: '第四位', password: 'fourth-runtime-password', confirmPassword: 'fourth-runtime-password' }),
     });
-    expect(fourthRegistration.status).toBe(400);
-    expect(await request(baseUrl, '/')).not.toEqual(expect.objectContaining({ text: expect.stringContaining('新增学习用户') }));
+    expect(fourthRegistration.status).toBe(302);
+    expect(JSON.parse((await request(baseUrl, '/api/session', { cookie: fourthRegistration.headers.get('set-cookie')?.split(';')[0] || '' })).text)).toMatchObject({ userId: 4, maxUsers: 5 });
+
+    const importedOwnerState = {
+      goals: [],
+      dailyReviews: [],
+      studyProjects: [{ id: 1, name: '管理员导入项目', color: '#2563eb', isActive: true, sortOrder: 1 }],
+      studyTimeRecords: [{ id: 1, date, projectId: 1, projectNameSnapshot: '管理员导入项目', minutes: 25, note: 'owner import fixture' }],
+      subjects: [],
+      mockExamRecords: [],
+      shortTermTasks: [],
+      waterIntakeRecords: [],
+    };
+    expect((await request(baseUrl, '/api/import', {
+      method: 'POST',
+      cookie,
+      body: { state: importedOwnerState },
+    })).status).toBe(200);
+    expect(JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie })).text).records)
+      .toEqual([expect.objectContaining({ minutes: 25, note: 'owner import fixture' })]);
+    expect(JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: learnerCookie })).text).records)
+      .toEqual([expect.objectContaining({ minutes: 55, note: 'learner fixture' })]);
+    expect(JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: thirdUserCookie })).text).records)
+      .toEqual([expect.objectContaining({ minutes: 35, note: 'third learner fixture' })]);
   });
 });

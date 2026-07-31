@@ -1,5 +1,24 @@
 import { expect, test, type Page } from '@playwright/test';
 
+async function mockLocalOwnerSession(page: Page) {
+  if (process.env.E2E_BASE_URL) return;
+  await page.route('**/api/session', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      userId: 1,
+      displayName: '本地验收',
+      accountType: 'admin',
+      userRole: 'owner',
+      role: 'write',
+      capabilities: [
+        'study.use', 'comparison.view', 'focus_timer.use', 'settings.manage',
+        'operations.manage', 'notifications.manage', 'brief.manage',
+        'break_guard.sync', 'users.manage', 'data.import',
+      ],
+    }),
+  }));
+}
+
 async function loginIfNeeded(page: Page) {
   const passwordInput = page.locator('#password');
   if (!(await passwordInput.count())) return;
@@ -11,6 +30,7 @@ async function loginIfNeeded(page: Page) {
 }
 
 test('dark theme remains readable, responsive and persistent', async ({ page }) => {
+  await mockLocalOwnerSession(page);
   await page.goto('/');
   await loginIfNeeded(page);
 

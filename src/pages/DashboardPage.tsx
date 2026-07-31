@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertCircle, Bell, BookOpen, CalendarCheck, CheckCircle2, ClipboardList, CloudSun, Coffee, Hourglass, PenLine, PlayCircle, Plus, Target, TimerReset, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -93,7 +93,10 @@ export function DashboardPage() {
   const [taskDraft, setTaskDraft] = useState({ title: '', dueDate: todayISO(), dueTime: '', urgency: 'medium' as TaskUrgency });
   const [inboxText, setInboxText] = useState('');
   const [startPanelOpen, setStartPanelOpen] = useState(false);
-  const [chartsReady, setChartsReady] = useState(false);
+  const [chartsReady, setChartsReady] = useState(
+    () => typeof window !== 'undefined' && !('IntersectionObserver' in window),
+  );
+  const chartsAnchorRef = useRef<HTMLDivElement | null>(null);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const { data: dashboardCharts = { today: todayISO(), distribution: [], trend: [] } } = useQuery({
     queryKey: queryKeys.dashboardCharts,
@@ -166,8 +169,16 @@ export function DashboardPage() {
   };
 
   useEffect(() => {
-    const timeoutId = window.setTimeout(() => setChartsReady(true), 250);
-    return () => window.clearTimeout(timeoutId);
+    const anchor = chartsAnchorRef.current;
+    if (!anchor) return undefined;
+    if (!('IntersectionObserver' in window)) return undefined;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return;
+      setChartsReady(true);
+      observer.disconnect();
+    }, { rootMargin: '360px 0px' });
+    observer.observe(anchor);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -543,11 +554,13 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {chartsReady ? (
-        <Suspense fallback={<div className="mt-6 grid gap-4 lg:grid-cols-2"><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div></div>}>
-          <LazyDashboardCharts distribution={dashboardCharts.distribution} trend={dashboardCharts.trend} />
-        </Suspense>
-      ) : null}
+      <div ref={chartsAnchorRef} className="min-h-1">
+        {chartsReady ? (
+          <Suspense fallback={<div className="mt-6 grid gap-4 lg:grid-cols-2"><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div><div className="card h-72 p-5 text-sm text-slate-500">图表加载中...</div></div>}>
+            <LazyDashboardCharts distribution={dashboardCharts.distribution} trend={dashboardCharts.trend} />
+          </Suspense>
+        ) : null}
+      </div>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Link className="card block p-5 transition hover:-translate-y-0.5 hover:shadow-lg" to="/study-time">

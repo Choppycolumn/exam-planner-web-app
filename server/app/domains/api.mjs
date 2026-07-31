@@ -1,5 +1,8 @@
-import { learnerCanAccess } from '../../auth/learner-access.mjs';
+import { canAccessApi } from '../../auth/capabilities.mjs';
+import { createUserContext } from '../../auth/user-context.mjs';
 import { handleFocusTimerRoutes } from '../../routes/focus-timer-routes.mjs';
+import { handleAccountRoutes } from '../../routes/account-routes.mjs';
+import { validateContractRequest } from '../../http/api-contract-validation.mjs';
 
 export function installApiDomain(runtime, exposeRuntime) {
     async function handleApi(req, res) {
@@ -14,6 +17,7 @@ export function installApiDomain(runtime, exposeRuntime) {
             sendJson: runtime.sendJson,
             readJsonBody: runtime.readJsonBody,
             getSession: runtime.getSession,
+            ownerUserId: () => runtime.userAccountRepository.getOwnerUserId(),
             baseState: runtime.baseState,
             normalizeReview: runtime.normalizeReview,
             writeState: runtime.writeState,
@@ -44,18 +48,18 @@ export function installApiDomain(runtime, exposeRuntime) {
             return;
         }
         const apiPathname = new URL(req.url || '/', 'http://localhost').pathname;
+        const userContext = createUserContext(session);
         if (apiPathname === '/api/session' && req.method === 'GET') {
             runtime.sendJson(res, {
                 userId: session.userId,
                 displayName: session.displayName,
                 accountType: session.accountType,
+                userRole: session.userRole,
                 role: session.role,
                 maxUsers: runtime.userAccountRepository.maxUsers,
                 userCount: runtime.userAccountRepository.countAccounts(),
                 canAddUser: runtime.userAccountRepository.canCreateLearner(),
-                capabilities: session.accountType === 'learner'
-                    ? ['dashboard', 'goals', 'study-time', 'focus-timer', 'reviews', 'review-insights', 'learning-progress', 'study-comparison', 'goal-review', 'calendar', 'mock-exams', 'confusing-words']
-                    : ['all'],
+                capabilities: session.capabilities || [],
             });
             return;
         }
@@ -65,14 +69,24 @@ export function installApiDomain(runtime, exposeRuntime) {
             runtime.sendJson(res, { ok: true, id: record?.id || 0 });
             return;
         }
-        if (session.accountType === 'learner' && !learnerCanAccess(req.method || 'GET', apiPathname)) {
-            runtime.sendJson(res, { error: '该学习账号无权访问此功能' }, 403);
+        if (!canAccessApi(session, req.method || 'GET', apiPathname)) {
+            runtime.sendJson(res, { error: '该账户无权访问此功能' }, 403);
             return;
         }
+        const contractBody = req.method === 'POST' ? await runtime.readJsonBody(req) : undefined;
+        validateContractRequest(req.method || 'GET', apiPathname, contractBody);
         if (req.method !== 'GET' && sessionRole === 'read') {
             runtime.sendJson(res, { error: 'Read only mode' }, 403);
             return;
         }
+        if (await handleAccountRoutes(req, res, {
+            session: { ...session, userContext },
+            sendJson: runtime.sendJson,
+            readJsonBody: runtime.readJsonBody,
+            userAccountRepository: runtime.userAccountRepository,
+            writeAuditEvent: runtime.writeAuditEvent,
+        }))
+            return;
         if (await handleFocusTimerRoutes(req, res, {
             session,
             sendJson: runtime.sendJson,
@@ -147,7 +161,7 @@ export function installApiDomain(runtime, exposeRuntime) {
             runtime.sendJson(res, runtime.getCalendarPayload(sessionRole, {
                 from: requestUrl.searchParams.get('from') || undefined,
                 to: requestUrl.searchParams.get('to') || undefined,
-            }, session.userId || 1, session.accountType || 'admin'));
+            }, session.userId, session.capabilities?.includes('notifications.manage')));
             return;
         }
         if (await runtime.handleBriefRoutes(req, res, {
@@ -172,18 +186,16 @@ export function installApiDomain(runtime, exposeRuntime) {
             return;
         if (await runtime.handleLearningReadRoutes(req, res, {
             sessionRole,
-            session,
+            session: { ...session, userContext },
             sendJson: runtime.sendJson,
             ensureSqliteStore: runtime.ensureSqliteStore,
             getGoalsList: runtime.getGoalsList,
             getProjectsList: runtime.getProjectsList,
             getSubjectsList: runtime.getSubjectsList,
-            getStudyTargetMinutes: runtime.getStudyTargetMinutes,
             getDashboardChartsPayload: runtime.getDashboardChartsPayload,
             getDashboardPayload: runtime.getDashboardPayload,
             queryLimit: runtime.queryLimit,
             queryOffset: runtime.queryOffset,
-            listProblemInboxItems: runtime.listProblemInboxItems,
             todayISO: runtime.todayISO,
             getReviewPrefill: runtime.getReviewPrefill,
             getCachedReviewTrend: runtime.getCachedReviewTrend,
@@ -197,7 +209,6 @@ export function installApiDomain(runtime, exposeRuntime) {
             getErrorThemeDetail: runtime.getErrorThemeDetail,
             currentErrorThemeJobSnapshot: runtime.currentErrorThemeJobSnapshot,
             listLearningReports: runtime.listLearningReports,
-            readState: runtime.readState,
         }))
             return;
         if (apiPathname.startsWith('/api/library')) {
@@ -210,7 +221,7 @@ export function installApiDomain(runtime, exposeRuntime) {
         }
         if (await runtime.handleLearningWriteRoutes(req, res, {
             sessionRole,
-            session,
+            session: { ...session, userContext },
             sendJson: runtime.sendJson,
             readJsonBody: runtime.readJsonBody,
             ensureSqliteStore: runtime.ensureSqliteStore,
@@ -221,23 +232,9 @@ export function installApiDomain(runtime, exposeRuntime) {
             writeState: runtime.writeState,
             baseState: runtime.baseState,
             writeAuditEvent: runtime.writeAuditEvent,
-            saveGoalSql: runtime.saveGoalSql,
-            saveProjectSql: runtime.saveProjectSql,
-            saveSubjectSql: runtime.saveSubjectSql,
-            saveExamSql: runtime.saveExamSql,
-            saveTaskSql: runtime.saveTaskSql,
             learningRepository: runtime.learningRepository,
             nowISO: runtime.nowISO,
-            saveWaterSql: runtime.saveWaterSql,
-            saveStudyTargetMinutes: runtime.saveStudyTargetMinutes,
-            saveProblemInboxItem: runtime.saveProblemInboxItem,
-            listProblemInboxItems: runtime.listProblemInboxItems,
-            setProblemInboxStatus: runtime.setProblemInboxStatus,
-            deleteProblemInboxItem: runtime.deleteProblemInboxItem,
-            resolveProblemInboxForDate: runtime.resolveProblemInboxForDate,
             todayISO: runtime.todayISO,
-            upsertReviewSql: runtime.upsertReviewSql,
-            saveDayRecordsSql: runtime.saveDayRecordsSql,
             tableChanged: runtime.tableChanged,
         }))
             return;

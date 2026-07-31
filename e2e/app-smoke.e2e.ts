@@ -1,6 +1,28 @@
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
+async function mockLocalOwnerSession(page: Page) {
+  if (process.env.E2E_BASE_URL) return;
+  await page.route('**/api/session', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      userId: 1,
+      displayName: '本地验收',
+      accountType: 'admin',
+      userRole: 'owner',
+      role: 'write',
+      maxUsers: 10,
+      userCount: 1,
+      canAddUser: true,
+      capabilities: [
+        'study.use', 'comparison.view', 'focus_timer.use', 'settings.manage',
+        'operations.manage', 'notifications.manage', 'brief.manage',
+        'break_guard.sync', 'users.manage', 'data.import',
+      ],
+    }),
+  }));
+}
+
 async function loginIfNeeded(page: Page) {
   const password = process.env.E2E_PASSWORD;
   const passwordInput = page.locator('#password');
@@ -12,6 +34,7 @@ async function loginIfNeeded(page: Page) {
 }
 
 test('loads main app and core navigation', async ({ page }) => {
+  await mockLocalOwnerSession(page);
   await page.goto('/');
   await loginIfNeeded(page);
   await expect(page.locator('main')).toBeVisible();
@@ -19,6 +42,7 @@ test('loads main app and core navigation', async ({ page }) => {
 });
 
 test('opens operations and task center pages', async ({ page }) => {
+  await mockLocalOwnerSession(page);
   await page.goto('/');
   await loginIfNeeded(page);
 
@@ -30,6 +54,7 @@ test('opens operations and task center pages', async ({ page }) => {
 });
 
 test('opens calendar and goal review pages', async ({ page }) => {
+  await mockLocalOwnerSession(page);
   await page.goto('/');
   await loginIfNeeded(page);
 

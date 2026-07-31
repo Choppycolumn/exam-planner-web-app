@@ -1,0 +1,12 @@
+[Unit]
+Description=Open the bounded HBR backup window
+After=network-online.target exam-planner.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/sbin/exam-planner-hbr-window-control
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/exam-planner-hbr-window-control open
+TimeoutStartSec=2min
+Nice=10
+IOSchedulingClass=idle

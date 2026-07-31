@@ -49,6 +49,7 @@ export function createFocusTimerService({
   todayISO,
   tableChanged = () => {},
   refreshStudySummariesForDate = () => {},
+  shouldRefreshStudySummaries = () => false,
 }) {
   function summary(userId, date) {
     const sessions = repository.listSessions(userId, date);
@@ -137,7 +138,7 @@ export function createFocusTimerService({
       }
       return completeFocus(userId, current, new Date(deadlineMs).toISOString(), '达到设定专注时长后自动结束');
     });
-    if (completion.inserted && userId === 1 && completion.session) {
+    if (completion.inserted && shouldRefreshStudySummaries(userId) && completion.session) {
       refreshStudySummariesForDate(completion.session.sessionDate);
     }
     return completion.state;
@@ -274,7 +275,7 @@ export function createFocusTimerService({
       tableChanged();
       return response;
     });
-    if (completedStudyDate && userId === 1) refreshStudySummariesForDate(completedStudyDate);
+    if (completedStudyDate && shouldRefreshStudySummaries(userId)) refreshStudySummariesForDate(completedStudyDate);
     return result;
   }
 

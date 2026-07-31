@@ -4,15 +4,15 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { calculateCountdownDays, formatChineseDate } from '../utils/date';
-import { preloadRoute, preloadSecondaryRoutes } from '../router/preload';
+import { preloadRoute } from '../router/preload';
 import { applyTheme, resolveInitialTheme, type ThemeMode } from '../utils/theme';
 import { usePwaInstall } from '../hooks/usePwaInstall';
 import { useAccountSession } from '../hooks/useAccountSession';
 
-const adminNavItems = [
+const navItems = [
   { to: '/', label: '首页', icon: Home },
   { to: '/study-time', label: '学习时间', icon: BookOpen },
-  { to: '/focus-timer', label: '专注计时', icon: TimerReset },
+  { to: '/focus-timer', label: '专注计时', icon: TimerReset, capability: 'focus_timer.use' },
   { to: '/reviews', label: '每日复盘', icon: CalendarCheck },
   { to: '/review-insights', label: '复盘趋势', icon: Activity },
   { to: '/progress', label: '学习进度', icon: TrendingUp },
@@ -20,11 +20,9 @@ const adminNavItems = [
   { to: '/goal-review', label: '目标复盘', icon: Flag },
   { to: '/mock-exams', label: '模考成绩', icon: ClipboardList },
   { to: '/confusing-words', label: '易混单词', icon: Languages },
-  { to: '/settings', label: '设置', icon: Settings },
-  { to: '/operations', label: '运维与健康', icon: ShieldCheck },
+  { to: '/settings', label: '设置', icon: Settings, capability: 'settings.manage' },
+  { to: '/operations', label: '运维与健康', icon: ShieldCheck, capability: 'operations.manage' },
 ];
-
-const learnerNavItems = adminNavItems.filter(({ to }) => !['/settings', '/operations'].includes(to));
 
 function AdminGoalSummary() {
   const { activeGoal } = useDashboardData();
@@ -41,11 +39,9 @@ export function Layout() {
   const { canInstall, installed, install } = usePwaInstall();
   const [theme, setTheme] = useState<ThemeMode>(() => resolveInitialTheme());
 
-  useEffect(() => preloadSecondaryRoutes(), []);
   useEffect(() => applyTheme(theme), [theme]);
-  const isLearner = session?.accountType === 'learner';
   const readOnly = session?.role === 'read';
-  const navItems = isLearner ? learnerNavItems : adminNavItems;
+  const visibleNavItems = navItems.filter((item) => !item.capability || session?.capabilities?.includes(item.capability));
 
   return (
     <div className="app-shell">
@@ -58,7 +54,7 @@ export function Layout() {
           </div>
         </div>
         <nav className="app-nav-list" aria-label="主要导航">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {visibleNavItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -80,7 +76,7 @@ export function Layout() {
           <div className="app-header-inner">
             <div className="app-header-context">
               <p className="app-header-date">{formatChineseDate()}</p>
-              {session ? (isLearner ? <p className="app-header-summary">独立学习空间 · 仅学习对比与其他账户共享</p> : <AdminGoalSummary />) : <p className="app-header-summary">正在读取账户...</p>}
+              {session ? (session.userRole === 'owner' ? <AdminGoalSummary /> : <p className="app-header-summary">独立学习空间 · 仅学习时长汇总参与对比</p>) : <p className="app-header-summary">正在读取账户...</p>}
             </div>
             <div className="app-header-actions">
               {readOnly ? <span className="app-status-pill app-status-warning">只读模式</span> : null}
@@ -107,7 +103,7 @@ export function Layout() {
             </div>
           </div>
           <nav className="app-mobile-nav" aria-label="移动端导航">
-              {navItems.map(({ to, label, icon: Icon }) => (
+              {visibleNavItems.map(({ to, label, icon: Icon }) => (
                 <NavLink key={to} to={to} onMouseEnter={() => preloadRoute(to)} onFocus={() => preloadRoute(to)} className={({ isActive }) => `app-mobile-link ${isActive ? 'app-mobile-link-active' : ''}`}>
                   <Icon size={16} strokeWidth={2} aria-hidden="true" />
                   <span>{label}</span>

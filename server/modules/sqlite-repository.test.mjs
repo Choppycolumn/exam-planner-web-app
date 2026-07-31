@@ -43,4 +43,19 @@ describe('persistent sqlite repository', () => {
     expect(repository.json('SELECT value FROM sample ORDER BY id;')).toEqual([{ value: 'one' }]);
     repository.close();
   });
+
+  test('supports callback transactions and WAL checkpoints', () => {
+    const repository = repositoryFixture();
+    repository.run('CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT NOT NULL);');
+    const result = repository.transaction((connection) => {
+      connection.prepare('INSERT INTO sample(value) VALUES (?);').run('inside');
+      return 'committed';
+    });
+
+    expect(result).toBe('committed');
+    expect(repository.scalar('SELECT value FROM sample LIMIT 1;')).toBe('inside');
+    expect(repository.checkpoint()).toEqual(expect.any(Array));
+    expect(repository.metrics()).toMatchObject({ transactions: 1, writes: 3, busyErrors: 0 });
+    repository.close();
+  });
 });

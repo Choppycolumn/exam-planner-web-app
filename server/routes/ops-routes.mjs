@@ -44,12 +44,12 @@ export async function handleOpsRoutes(req, res, {
   }
 
   if (req.url === '/api/learning-progress' && req.method === 'GET') {
-    sendJson(res, getLearningProgressPayload(sessionRole, session?.userId || 1, session?.accountType || 'admin'));
+    sendJson(res, getLearningProgressPayload(sessionRole, session.userId, session.accountType));
     return true;
   }
 
   if (req.url === '/api/project-progress' && req.method === 'GET') {
-    sendJson(res, getProjectProgressPayload(sessionRole, session?.userId || 1));
+    sendJson(res, getProjectProgressPayload(sessionRole, session.userId));
     return true;
   }
 

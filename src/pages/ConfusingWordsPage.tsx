@@ -29,11 +29,11 @@ const printModeLabel: Record<PrintMode, string> = {
 export function ConfusingWordsPage() {
   const { data: session, isLoading } = useAccountSession();
   if (isLoading || !session) return <Page title="易混单词" subtitle="正在读取当前账户的单词库..."><div /></Page>;
-  return <ConfusingWordsWorkspace key={session.userId} userId={session.userId} />;
+  return <ConfusingWordsWorkspace key={session.userId} userId={session.userId} isOwner={session.userRole === 'owner'} />;
 }
 
-function ConfusingWordsWorkspace({ userId }: { userId: number }) {
-  const [initialGroups] = useState(() => loadGroups(userId));
+function ConfusingWordsWorkspace({ userId, isOwner }: { userId: number; isOwner: boolean }) {
+  const [initialGroups] = useState(() => loadGroups(userId, { allowLegacy: isOwner }));
   const [groups, setGroups] = useState<ConfusingWordGroup[]>(initialGroups);
   const [selectedId, setSelectedId] = useState(initialGroups[0]?.id ?? '');
   const [wordInput, setWordInput] = useState('');
@@ -80,7 +80,7 @@ function ConfusingWordsWorkspace({ userId }: { userId: number }) {
         if (cancelled || !backup?.groups?.length) return;
         const backupWords = countWords(backup.groups);
         const localWords = countWords(initialGroups);
-        const localExport = loadConfusingWordsExport(userId);
+        const localExport = loadConfusingWordsExport(userId, { allowLegacy: isOwner });
         const localBackedUpAt = localStorage.getItem(backupMetaKey(userId)) || localExport?.exportedAt || '';
         const serverBackedUpAt = backup.backedUpAt || backup.exportedAt || '';
         const serverIsNewer = Boolean(serverBackedUpAt && localBackedUpAt && new Date(serverBackedUpAt).getTime() > new Date(localBackedUpAt).getTime());
@@ -112,7 +112,7 @@ function ConfusingWordsWorkspace({ userId }: { userId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [initialGroups, userId]);
+  }, [initialGroups, isOwner, userId]);
 
   const updateWord = (groupId: string, wordId: string, patch: Partial<ConfusingWordEntry>) => {
     setGroups((current) => {

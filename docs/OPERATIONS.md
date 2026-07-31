@@ -10,6 +10,7 @@
 - 前端页面错误：浏览器渲染错误、全局 JS 错误和 Promise 未处理错误会写入脱敏摘要，方便定位空白页或页面崩溃。
 - 通知通道健康：展示每个通道近 24 小时成功/失败、连续失败、熔断截止时间和可执行建议。
 - 资源预算：展示后台重任务的运行、等待、可用内存和负载阈值。
+- 磁盘 I/O：展示 I/O wait、Linux PSI 和 D 状态进程数量，并给出暂停重 I/O 任务的结论。
 
 后台任务中心 `/task-center` 继续保留：
 
@@ -57,17 +58,19 @@ nginx -t
 
 ## 夜间错峰窗口
 
-- 03:00：停止 OpenClaw，进入低负载维护窗口。
+- 03:00：停止 OpenClaw，进入低交互维护窗口。
+- 03:05：HBR 通过健康与压力预检后进入受限运行窗口。
 - 03:10：logrotate。
 - 03:20：dpkg 数据库备份。
 - 03:30：错因主题整理。
 - 03:50：APT 下载，最多随机延后 5 分钟。
 - 04:20：APT 升级，最多随机延后 10 分钟。
 - 05:20：应用备份、预计算和 SQLite 维护。
+- 06:45：强制停止 HBR。
 - 07:00：启动 OpenClaw。
 - 08:00：每日简报保持原计划，不受维护窗口影响。
 
-这些时间由仓库中的 systemd timer drop-in 和应用环境默认值统一维护，避免 APT、备份、SQLite、日志轮转及 OpenClaw 同时争用内存和磁盘。
+HBR 由独立开窗/关窗 timer 控制，原 vendor 服务禁止开机常驻。它受 CPU、内存、带宽和 IOPS cgroup 上限约束，并由 2 分钟 guard 持续检查；I/O wait、D 状态进程、负载或可用内存超限时立即停止。部署与 HBR 共用 `/run/lock/exam-planner-heavy-io.lock`。
 
 ## 自动恢复
 
@@ -82,6 +85,16 @@ nginx -t
 - Web：Node 堆上限 192 MB，`MemoryHigh=240M`，`MemoryMax=320M`。
 - Worker：Node 堆上限 224 MB，`MemoryHigh=300M`，`MemoryMax=400M`，较低 CPU 权重和 `Nice=5`。
 - 后台重任务默认单并发；可用内存或系统负载不满足阈值时先等待，不与其他重任务争抢资源。
+- HBR：CPU 35%，内存上限 160 MB，读写带宽 2/1 MB/s，读写 IOPS 各 40，并只允许在 03:05-06:45 窗口运行。
+
+HBR 巡检：
+
+```bash
+systemctl list-timers 'exam-planner-hbr-*'
+systemctl status exam-planner-hbr-window-open.timer exam-planner-hbr-window-close.timer exam-planner-hbr-guard.timer
+/usr/local/sbin/exam-planner-hbr-window-control status
+journalctl -u exam-planner-hbr-guard -n 50 --no-pager
+```
 
 ## 通知熔断
 
@@ -99,7 +112,7 @@ nginx -t
 - 设置页密文使用带版本的 AES-256-GCM；旧密文解密成功后自动迁移，失败告警按密文指纹去重。
 - `remote-audit/`、zip、临时报告加入 `.gitignore`。
 - 前端 API 错误统一解析。
-- CORS 可通过 `CORS_ORIGIN` 收窄；默认保留 `*` 以兼容本地易混词跨源备份。
+- CORS 默认不向跨源请求开放；确有需要时通过 `CORS_ORIGIN` 精确指定来源。
 - 日志摘要接口对 Cookie、Token、Password、Secret 做脱敏。
 - 前端页面错误上报会移除 URL 查询参数，并脱敏 Cookie、Token、Password、Secret、Authorization。
 - 访问统计不保存明文 IP。

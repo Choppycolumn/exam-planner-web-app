@@ -1,8 +1,10 @@
-export function createBreakGuardRepository(database) {
+export function createBreakGuardRepository(database, { ownerUserId } = {}) {
+  if (typeof ownerUserId !== 'function') throw new Error('ownerUserId resolver is required');
+  const ownerId = () => Number(ownerUserId());
   return {
     listActiveProjects() {
       return database.json(`SELECT id, name, color, sort_order AS sortOrder
-FROM study_projects WHERE user_id = 1 AND is_active = 1 ORDER BY sort_order, id;`).map((row) => ({
+FROM study_projects WHERE user_id = ? AND is_active = 1 ORDER BY sort_order, id;`, [ownerId()]).map((row) => ({
         ...row,
         id: Number(row.id),
         sortOrder: Number(row.sortOrder || 0),
@@ -54,18 +56,18 @@ FROM break_guard_events ORDER BY created_at DESC, id DESC LIMIT ?;`, [limit]);
     },
     appendStudyTime({ sessionDate, projectId, durationSeconds, sessionSequence }) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) return null;
-      const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = 1 AND is_active = 1 LIMIT 1;', [projectId])[0];
+      const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = ? AND is_active = 1 LIMIT 1;', [projectId, ownerId()])[0];
       if (!project) return null;
       const minutes = Math.max(1, Math.min(24 * 60, Math.round(Number(durationSeconds || 0) / 60)));
       const note = `Break Guard 学习记录 #${Math.max(1, Number(sessionSequence || 1))}`;
       database.execute(`INSERT INTO study_time_records
 (date,project_id,project_name_snapshot,minutes,note,schema_version,created_at,updated_at,user_id)
-VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'),1)
+VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'),?)
 ON CONFLICT(date,project_id) DO UPDATE SET
   minutes=study_time_records.minutes+excluded.minutes,
   project_name_snapshot=excluded.project_name_snapshot,
   note=trim(study_time_records.note || CASE WHEN study_time_records.note <> '' THEN '；' ELSE '' END || excluded.note),
-  updated_at=datetime('now');`, [sessionDate, project.id, project.name, minutes, note]);
+  updated_at=datetime('now');`, [sessionDate, project.id, project.name, minutes, note, ownerId()]);
       return { sessionDate, projectId: Number(project.id), projectName: project.name, minutes, sessionSequence: Number(sessionSequence || 1) };
     },
   };

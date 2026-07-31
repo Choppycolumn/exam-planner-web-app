@@ -1,13 +1,13 @@
 export function createCalendarRepository(sqlite) {
-  const getEvents = ({ from, to, userId = 1, includeNotifications = true }) => {
+  const getEvents = ({ from, to, userId, includeNotifications = false }) => {
+    const scopedUserId = Number(userId);
+    if (!Number.isInteger(scopedUserId) || scopedUserId < 1) throw new Error('valid user context is required');
     const start = from || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const end = to || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const sqlStart = `'${String(start).replace(/'/g, "''")}'`;
-    const sqlEnd = `'${String(end).replace(/'/g, "''")}'`;
     const study = sqlite.json(`SELECT date, COALESCE(SUM(minutes), 0) AS minutes
 FROM study_time_records
-WHERE user_id = ${Number(userId)} AND date BETWEEN ${sqlStart} AND ${sqlEnd}
-GROUP BY date;`).map((row) => ({
+WHERE user_id=? AND date BETWEEN ? AND ?
+GROUP BY date;`, [scopedUserId, start, end]).map((row) => ({
       id: `study-${row.date}`,
       date: row.date,
       type: 'study',
@@ -18,7 +18,7 @@ GROUP BY date;`).map((row) => ({
     }));
     const reviews = sqlite.json(`SELECT date, score, summary
 FROM daily_reviews
-WHERE user_id = ${Number(userId)} AND date BETWEEN ${sqlStart} AND ${sqlEnd};`).map((row) => ({
+WHERE user_id=? AND date BETWEEN ? AND ?;`, [scopedUserId, start, end]).map((row) => ({
       id: `review-${row.date}`,
       date: row.date,
       type: 'review',
@@ -29,7 +29,7 @@ WHERE user_id = ${Number(userId)} AND date BETWEEN ${sqlStart} AND ${sqlEnd};`).
     }));
     const tasks = sqlite.json(`SELECT id, title, due_date AS date, urgency, is_completed AS isCompleted
 FROM short_term_tasks
-WHERE user_id = ${Number(userId)} AND due_date BETWEEN ${sqlStart} AND ${sqlEnd};`).map((row) => ({
+WHERE user_id=? AND due_date BETWEEN ? AND ?;`, [scopedUserId, start, end]).map((row) => ({
       id: `task-${row.id}`,
       date: row.date,
       type: 'task',
@@ -40,7 +40,7 @@ WHERE user_id = ${Number(userId)} AND due_date BETWEEN ${sqlStart} AND ${sqlEnd}
     }));
     const reports = sqlite.json(`SELECT id, kind, title, period_start AS periodStart, period_end AS date
 FROM learning_reports
-WHERE user_id = ${Number(userId)} AND period_end BETWEEN ${sqlStart} AND ${sqlEnd};`).map((row) => ({
+WHERE user_id=? AND period_end BETWEEN ? AND ?;`, [scopedUserId, start, end]).map((row) => ({
       id: `report-${row.id}`,
       date: row.date,
       type: 'report',
@@ -51,9 +51,9 @@ WHERE user_id = ${Number(userId)} AND period_end BETWEEN ${sqlStart} AND ${sqlEn
     }));
     const notifications = includeNotifications ? sqlite.json(`SELECT id, title, severity, substr(created_at, 1, 10) AS date, content
 FROM notification_events
-WHERE substr(created_at, 1, 10) BETWEEN ${sqlStart} AND ${sqlEnd}
+WHERE substr(created_at, 1, 10) BETWEEN ? AND ?
 ORDER BY created_at DESC
-LIMIT 80;`).map((row) => ({
+LIMIT 80;`, [start, end]).map((row) => ({
       id: `notification-${row.id}`,
       date: row.date,
       type: 'notification',

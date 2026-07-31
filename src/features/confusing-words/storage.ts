@@ -1,6 +1,6 @@
 import type { ConfusingWordEntry, ConfusingWordGroup, ConfusingWordsExport, WordMastery } from './types';
 
-const storageKey = (userId = 1) => `examPlanner.confusingWords.v1.user-${userId}`;
+const storageKey = (userId: number) => `examPlanner.confusingWords.v1.user-${userId}`;
 const SCHEMA_VERSION = 1;
 
 const nowISO = () => new Date().toISOString();
@@ -53,8 +53,8 @@ export function parseWords(input: string) {
   return [...new Set(input.split(/[\s,，;；]+/).map((word) => word.trim().toLowerCase()).filter(Boolean))];
 }
 
-export function loadGroups(userId = 1): ConfusingWordGroup[] {
-  const raw = localStorage.getItem(storageKey(userId)) ?? (userId === 1 ? localStorage.getItem('examPlanner.confusingWords.v1') : null);
+export function loadGroups(userId: number, { allowLegacy = false } = {}): ConfusingWordGroup[] {
+  const raw = localStorage.getItem(storageKey(userId)) ?? (allowLegacy ? localStorage.getItem('examPlanner.confusingWords.v1') : null);
   if (!raw) {
     const examples = [
       { words: [{ word: 'affect', chineseDefinition: '影响' }, { word: 'effect', chineseDefinition: '结果；效果' }] },
@@ -81,7 +81,7 @@ export function loadGroups(userId = 1): ConfusingWordGroup[] {
   }
 }
 
-export function saveGroups(groups: ConfusingWordGroup[], userId = 1) {
+export function saveGroups(groups: ConfusingWordGroup[], userId: number) {
   const payload: ConfusingWordsExport = { schemaVersion: SCHEMA_VERSION, exportedAt: nowISO(), groups };
   localStorage.setItem(storageKey(userId), JSON.stringify(payload));
 }
@@ -94,8 +94,8 @@ export function countConfusingWords(groups: ConfusingWordGroup[]) {
   return groups.reduce((sum, group) => sum + (Array.isArray(group.words) ? group.words.length : 0), 0);
 }
 
-export function loadConfusingWordsExport(userId = 1): ConfusingWordsExport | null {
-  const raw = localStorage.getItem(storageKey(userId)) ?? (userId === 1 ? localStorage.getItem('examPlanner.confusingWords.v1') : null);
+export function loadConfusingWordsExport(userId: number, { allowLegacy = false } = {}): ConfusingWordsExport | null {
+  const raw = localStorage.getItem(storageKey(userId)) ?? (allowLegacy ? localStorage.getItem('examPlanner.confusingWords.v1') : null);
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as ConfusingWordsExport;

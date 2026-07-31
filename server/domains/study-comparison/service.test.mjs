@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { createStudyComparisonService } from './service.mjs';
+import { createStudyComparisonRepository } from '../../repositories/study-comparison-repository.mjs';
 
 function addDaysISO(date, amount) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -12,9 +13,19 @@ describe('study comparison service', () => {
   it('aggregates each account independently', () => {
     const sqlite = new DatabaseSync(':memory:');
     sqlite.exec(`
-      CREATE TABLE user_accounts(id INTEGER PRIMARY KEY,account_type TEXT,display_name TEXT,is_active INTEGER);
+      CREATE TABLE user_accounts(
+        id INTEGER PRIMARY KEY,
+        account_type TEXT,
+        display_name TEXT,
+        is_active INTEGER,
+        status TEXT DEFAULT 'active',
+        role TEXT DEFAULT 'member'
+      );
       CREATE TABLE study_time_records(id INTEGER PRIMARY KEY,user_id INTEGER,date TEXT,minutes INTEGER);
-      INSERT INTO user_accounts VALUES(1,'admin','我',1),(2,'learner','学习伙伴',1),(3,'learner','学习伙伴 2',1);
+      INSERT INTO user_accounts VALUES
+        (1,'admin','我',1,'active','owner'),
+        (2,'learner','学习伙伴',1,'active','member'),
+        (3,'learner','学习伙伴 2',1,'active','member');
       INSERT INTO study_time_records VALUES
         (1,1,'2026-07-13',60),(2,1,'2026-07-12',30),(3,2,'2026-07-13',45),(4,2,'2026-07-12',15),
         (5,3,'2026-07-13',35),(6,3,'2026-07-11',25);
@@ -24,10 +35,11 @@ describe('study comparison service', () => {
       scalar: (sql, parameters = []) => Object.values(sqlite.prepare(sql).get(...parameters) || {})[0] ?? '',
     };
     const service = createStudyComparisonService({
-      database,
+      repository: createStudyComparisonRepository(database),
       todayISO: () => '2026-07-13',
       addDaysISO,
       nowISO: () => '2026-07-13T12:00:00.000Z',
+      maxUsers: 3,
     });
     const result = service.getComparison({ days: 7 });
 

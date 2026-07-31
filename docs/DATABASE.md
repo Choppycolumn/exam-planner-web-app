@@ -28,14 +28,22 @@ data/dictionary.sqlite
 - `mock_exam_records`：模考记录。
 - `short_term_tasks`：短期任务。
 - `water_intake_records`：饮水记录。
+- `user_accounts`：正式账户、公开 ID、owner/member 角色、启停状态和会话版本。
+- `user_credentials`：scrypt 密码哈希与算法版本。
+- `user_capabilities`：每个账户的持久化能力开关。
+- `user_sessions`：不透明会话 Token 的 SHA-256 哈希、有效期、撤销时间和客户端摘要。
+- `user_invites`：一次性邀请的哈希、有效期、使用或撤销状态。
+- `user_study_settings`：每用户学习目标。
+- `focus_timer_settings`、`focus_timer_sessions`、`focus_timer_operations`：每用户网页专注计时与幂等操作。
 - `learning_reports`：自动生成的周报/月报。
 - `daily_briefs`：每日简报。
 - `problem_inbox_items`：问题收集箱。
 - `precomputed_cache`：趋势、错因等预计算缓存。
-- `confusing_words_backup`：易混词浏览器备份。
+- `user_confusing_words_backup`、`user_confusing_words_backup_versions`：按用户隔离的易混词当前备份和历史版本。
+- `confusing_words_backup`：迁移前兼容备份。
 - `finance_vaults`：已停用的历史理财密文表，仅保留旧数据，不再由当前代码创建或使用。
 - `backup_log`：备份/恢复日志。
-- `library_books`、`library_text_chunks`、`library_notes`、`library_bookmarks`、`library_reading_progress`：资料库。
+- `library_*`：已停用资料库的历史表，仅随主库备份保留。
 - `error_theme_batches`、`error_themes`、`error_theme_occurrences`、`review_sentence_embeddings`、`error_theme_corrections`：错因主题分析。
 - `visit_events`：访问统计事件，仅保存路径、角色、脱敏访客哈希、浏览器摘要和时间。
 
@@ -71,6 +79,14 @@ data/dictionary.sqlite
 - 记录 applied、baseline、skipped 状态和执行时长。
 - `/ready` 会检查待执行迁移和校验和不一致。
 - 已停用的历史理财迁移按文件名明确标记为 skipped，不再依赖模糊的版本号跳过。
+- `028_formal_multi_user.sql` 把旧账户升级为 owner，建立凭据、能力、会话、邀请码，并为个人业务表补齐 `user_id` 和复合索引。
+
+## 数据隔离约束
+
+- 正式迁移后，个人业务表的读取和写入必须携带当前会话 `user_id`。
+- 项目与科目 ID 在全库范围唯一，避免不同用户之间的外键碰撞。
+- owner 的历史备份恢复只替换 owner 数据，不删除成员数据；导入时会重新映射项目和科目 ID。
+- 学习对比仓储只读取账户显示名和聚合时长，不返回个人备注、复盘或任务。
 
 ## 备份策略
 

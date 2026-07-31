@@ -1,0 +1,12 @@
+[Unit]
+Description=Continuously enforce the HBR resource safety budget
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=false
+Unit=exam-planner-hbr-guard.service
+
+[Install]
+WantedBy=timers.target

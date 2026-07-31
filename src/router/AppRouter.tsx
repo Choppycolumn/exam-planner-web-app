@@ -40,10 +40,10 @@ function SessionIndex() {
   return <DashboardPage />;
 }
 
-function AdminOnlyRoute({ children }: { children: ReactNode }) {
+function CapabilityRoute({ capability, children }: { capability: string; children: ReactNode }) {
   const { data, isLoading } = useAccountSession();
   if (isLoading) return <RouteFallback />;
-  return data?.accountType === 'learner' ? <Navigate to="/study-time" replace /> : children;
+  return data?.capabilities?.includes(capability) ? children : <Navigate to="/study-time" replace />;
 }
 
 export const router = createBrowserRouter([
@@ -54,7 +54,7 @@ export const router = createBrowserRouter([
       { index: true, element: <SessionIndex /> },
       { path: 'goals', element: lazyElement(<GoalsPage />) },
       { path: 'study-time', element: lazyElement(<StudyTimePage />) },
-      { path: 'focus-timer', element: lazyElement(<FocusTimerPage />) },
+      { path: 'focus-timer', element: <CapabilityRoute capability="focus_timer.use">{lazyElement(<FocusTimerPage />)}</CapabilityRoute> },
       { path: 'reviews', element: lazyElement(<ReviewsPage />) },
       { path: 'review-insights', element: lazyElement(<ReviewInsightsPage />) },
       { path: 'progress', element: lazyElement(<LearningProgressPage />) },
@@ -65,13 +65,13 @@ export const router = createBrowserRouter([
       { path: 'notifications', element: <Navigate to="/" replace /> },
       { path: 'market-copilot', element: <Navigate to="/" replace /> },
       { path: 'task-center', element: <Navigate to="/operations" replace /> },
-      { path: 'operations', element: <AdminOnlyRoute>{lazyElement(<OperationsPage />)}</AdminOnlyRoute> },
+      { path: 'operations', element: <CapabilityRoute capability="operations.manage">{lazyElement(<OperationsPage />)}</CapabilityRoute> },
       { path: 'mock-exams', element: lazyElement(<MockExamsPage />) },
       { path: 'confusing-words', element: lazyElement(<ConfusingWordsPage />) },
       { path: 'library', element: <Navigate to="/" replace /> },
       { path: 'library/:id/read', element: <Navigate to="/" replace /> },
-      { path: 'settings', element: <AdminOnlyRoute>{lazyElement(<SettingsPage />)}</AdminOnlyRoute> },
-      { path: 'migrate-local-data', element: <AdminOnlyRoute>{lazyElement(<MigrateLocalDataPage />)}</AdminOnlyRoute> },
+      { path: 'settings', element: <CapabilityRoute capability="settings.manage">{lazyElement(<SettingsPage />)}</CapabilityRoute> },
+      { path: 'migrate-local-data', element: <CapabilityRoute capability="data.import">{lazyElement(<MigrateLocalDataPage />)}</CapabilityRoute> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

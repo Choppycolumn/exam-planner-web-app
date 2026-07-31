@@ -1,10 +1,13 @@
+import { CAPABILITIES, hasCapability } from '../auth/capabilities.mjs';
+
 export async function handlePublicApiRoutes(req, res, {
   dataImportToken,
   backupSyncToken,
   safeSecretEqual,
   sendJson,
   readJsonBody,
-  getSession,
+    getSession,
+    ownerUserId,
   baseState,
   normalizeReview,
   writeState,
@@ -32,7 +35,7 @@ export async function handlePublicApiRoutes(req, res, {
     const session = getSession(req.headers.cookie);
     const sessionRole = session?.role;
     const tokenAuthorized = Boolean(dataImportToken) && safeSecretEqual(body.importToken, dataImportToken);
-    if ((sessionRole !== 'write' || session?.accountType === 'learner') && !tokenAuthorized) {
+    if ((!session || sessionRole !== 'write' || !hasCapability(session, CAPABILITIES.DATA_IMPORT)) && !tokenAuthorized) {
       sendJson(res, { error: 'Unauthorized' }, 401);
       return true;
     }
@@ -76,8 +79,8 @@ export async function handlePublicApiRoutes(req, res, {
     const session = getSession(req.headers.cookie);
     const sessionRole = session?.role;
     const tokenAccess = requireBreakGuardToken(req, body);
-    if (session?.accountType === 'learner') {
-      sendJson(res, { error: '该学习账号不使用 Break Guard' }, 403);
+    if (session && !hasCapability(session, CAPABILITIES.BREAK_GUARD)) {
+      sendJson(res, { error: '该账户不使用 Break Guard' }, 403);
       return true;
     }
     if (!sessionRole && !tokenAccess.ok) {
@@ -88,7 +91,7 @@ export async function handlePublicApiRoutes(req, res, {
       sendJson(res, getBreakGuardScheduleConfig());
       return true;
     }
-    if (sessionRole === 'read') {
+    if (session && (sessionRole === 'read' || !hasCapability(session, CAPABILITIES.BREAK_GUARD))) {
       sendJson(res, { error: 'Read only mode' }, 403);
       return true;
     }
@@ -117,7 +120,7 @@ export async function handlePublicApiRoutes(req, res, {
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
     const session = getSession(req.headers.cookie);
     const sessionRole = session?.role;
-    const userId = Number(session?.userId || 1);
+    const userId = Number(session?.userId || ownerUserId());
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {
@@ -147,7 +150,7 @@ export async function handlePublicApiRoutes(req, res, {
     const body = await readJsonBody(req);
     const session = getSession(req.headers.cookie);
     const sessionRole = session?.role;
-    const userId = Number(session?.userId || 1);
+    const userId = Number(session?.userId || ownerUserId());
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {
@@ -174,7 +177,7 @@ export async function handlePublicApiRoutes(req, res, {
     const body = req.method === 'POST' ? await readJsonBody(req) : {};
     const session = getSession(req.headers.cookie);
     const sessionRole = session?.role;
-    const userId = Number(session?.userId || 1);
+    const userId = Number(session?.userId || ownerUserId());
     const providedToken = body.syncToken || req.headers['x-backup-token'] || '';
     const hasBackupAccess = sessionRole || (Boolean(backupSyncToken) && safeSecretEqual(providedToken, backupSyncToken));
     if (!hasBackupAccess) {

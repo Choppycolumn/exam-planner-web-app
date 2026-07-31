@@ -10,6 +10,8 @@ describe('learning route modules', () => {
       {},
       {
         sessionRole: 'write',
+        session: { userId: 1, capabilities: ['study.use'] },
+        learningRepository: { forUser: () => ({}) },
         sendJson,
         ensureSqliteStore: vi.fn(),
         getDashboardPayload: () => ({ generatedAt: 'fixture' }),
@@ -26,10 +28,11 @@ describe('learning route modules', () => {
       {},
       {
         sessionRole: 'write',
+        session: { userId: 1, capabilities: ['study.use'] },
         sendJson,
         readJsonBody: async () => ({ title: 'fixture task' }),
         nowISO: () => '2026-07-10T00:00:00.000Z',
-        saveTaskSql: (body) => body.title === 'fixture task' ? 42 : 0,
+        learningRepository: { forUser: () => ({ saveTask: (body) => body.title === 'fixture task' ? 42 : 0 }) },
       },
     );
     expect(handled).toBe(true);
@@ -43,7 +46,8 @@ describe('learning route modules', () => {
       {
         readJsonBody: async () => ({}),
         nowISO: () => '2026-07-10T00:00:00.000Z',
-        sqlValue: (value) => JSON.stringify(value),
+        session: { userId: 1, capabilities: ['study.use'] },
+        learningRepository: { forUser: () => ({}) },
       },
     );
     expect(handled).toBe(false);

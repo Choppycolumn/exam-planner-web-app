@@ -1,0 +1,8 @@
+[Unit]
+Description=Close the bounded HBR backup window
+ConditionPathExists=/usr/local/sbin/exam-planner-hbr-window-control
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/exam-planner-hbr-window-control close
+TimeoutStartSec=2min

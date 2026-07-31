@@ -37,17 +37,27 @@ import { createBackupService } from './services/backup-service.mjs';
 import { createBreakGuardService } from './domains/break-guard/service.mjs';
 import { createFocusTimerService } from './domains/focus-timer/service.mjs';
 import { createLearningRepository } from './repositories/learning-repository.mjs';
+import { createLearningQueryRepository } from './repositories/learning-query-repository.mjs';
+import { createAppMetadataRepository } from './repositories/app-metadata-repository.mjs';
+import { createReportRepository } from './repositories/report-repository.mjs';
+import { createSchemaBootstrapRepository } from './repositories/schema-bootstrap-repository.mjs';
+import { createStudyComparisonRepository } from './repositories/study-comparison-repository.mjs';
+import { createStateRepository } from './repositories/state-repository.mjs';
 import { createDailyBriefRepository } from './repositories/daily-brief-repository.mjs';
 import { createConfusingWordsRepository } from './repositories/confusing-words-repository.mjs';
 import { createBreakGuardRepository } from './repositories/break-guard-repository.mjs';
 import { createFocusTimerRepository } from './repositories/focus-timer-repository.mjs';
+import { createTaskRepository } from './repositories/task-repository.mjs';
 import { createBackupRepository } from './repositories/backup-repository.mjs';
 import { createDictionaryRepository } from './repositories/dictionary-repository.mjs';
 import { createDictionaryService } from './services/dictionary-service.mjs';
 import { createUserAccountRepository } from './auth/user-account-repository.mjs';
+import { createSessionRepository } from './auth/session-repository.mjs';
+import { defaultCapabilitiesForRole } from './auth/capabilities.mjs';
 import { createStudyComparisonService } from './domains/study-comparison/service.mjs';
 import { createSchedulerRegistry } from './infrastructure/scheduler-registry.mjs';
 import { createResourceBudget } from './infrastructure/resource-budget.mjs';
+import { createLinuxResourceHealth } from './infrastructure/linux-resource-health.mjs';
 import { createSettingsCrypto } from './core/settings-crypto.mjs';
 import { readSystemResources } from './core/system-resources.mjs';
 import { addDaysISO, addYearISO, currentPeriod, endOfMonthISO, endOfWeekISO, formatDateString, localDateISO, nowISO, parseDateString, previousMonthPeriod, previousPeriod, previousWeekPeriod, startOfMonthISO, startOfWeekISO, todayISO, } from './core/date-time.mjs';
@@ -59,13 +69,44 @@ import { createPrivilegedClient } from './privileged/client.mjs';
 import { clientHashForRequest, createSessionAuth, getClientIp, lockMessage, safeSecretEqual, sleep, } from './auth/session-auth.mjs';
 import { createRequire } from 'node:module';
 import { createApplicationContext } from './app/application-context.mjs';
-import { installPersistenceDomain } from './app/domains/persistence.mjs';
-import { installReportsDomain } from './app/domains/reports.mjs';
-import { installBriefDomain } from './app/domains/brief.mjs';
+import {
+    installPersistenceStateDomain,
+    installPersistenceSchemaDomain,
+    installPersistenceTransferDomain,
+} from './app/domains/persistence.mjs';
+import {
+    installReportRulesDomain,
+    installReportEmbeddingDomain,
+    installReportBatchDomain,
+    installReportAnalysisDomain,
+    installLearningReportsDomain,
+} from './app/domains/reports.mjs';
+import {
+    installBriefSettingsDomain,
+    installBriefTransportDomain,
+    installBriefWeatherDomain,
+    installBriefMarketsDomain,
+    installBriefCompositionDomain,
+    installBriefEmailDomain,
+} from './app/domains/brief.mjs';
 import { installProxyDomain } from './app/domains/proxy.mjs';
-import { installOperationsDomain } from './app/domains/operations.mjs';
-import { installLearningDomain } from './app/domains/learning.mjs';
-import { installNotificationsDomain } from './app/domains/notifications.mjs';
+import {
+    installOperationsHealthDomain,
+    installOperationsLifecycleDomain,
+} from './app/domains/operations.mjs';
+import {
+    installLearningDictionaryDomain,
+    installLearningAnalyticsDomain,
+    installLearningDashboardDomain,
+    installLearningObservabilityDomain,
+} from './app/domains/learning.mjs';
+import {
+    installNotificationTelemetryDomain,
+    installNotificationWechatDomain,
+    installNotificationChannelsDomain,
+    installNotificationReminderDomain,
+    installNotificationBotsDomain,
+} from './app/domains/notifications.mjs';
 import { installApiDomain } from './app/domains/api.mjs';
 import { installBootstrapDomain } from './app/domains/bootstrap.mjs';
 
@@ -135,15 +176,35 @@ const loginLockMs = 30 * 60 * 1000;
 const loginFailureDelayMinMs = 1000;
 const loginFailureDelaySpreadMs = 1000;
 const sqliteRepository = createSqliteRepository({ sqliteFile, dataDir });
-const learningRepository = createLearningRepository(sqliteRepository);
+const learningRepository = createLearningRepository(sqliteRepository, {
+    nowISO,
+    todayISO,
+    entitySchemaVersion,
+    onChange: () => runtime.tableChanged?.(),
+    onOwnerStudyChanged: (date) => runtime.refreshStudySummariesForDate?.(date),
+    ownerUserId: () => userAccountRepository.getOwnerUserId(),
+});
+const learningQueryRepository = createLearningQueryRepository(sqliteRepository);
+const appMetadataRepository = createAppMetadataRepository(sqliteRepository);
+const reportRepository = createReportRepository(sqliteRepository);
+const schemaBootstrapRepository = createSchemaBootstrapRepository(sqliteRepository);
+const studyComparisonRepository = createStudyComparisonRepository(sqliteRepository);
+const stateRepository = createStateRepository(sqliteRepository);
 const dailyBriefRepository = createDailyBriefRepository(sqliteRepository);
 const confusingWordsRepository = createConfusingWordsRepository(sqliteRepository);
-const breakGuardRepository = createBreakGuardRepository(sqliteRepository);
+const breakGuardRepository = createBreakGuardRepository(sqliteRepository, {
+    ownerUserId: () => userAccountRepository.getOwnerUserId(),
+});
 const focusTimerRepository = createFocusTimerRepository(sqliteRepository);
 const backupRepository = createBackupRepository(sqliteRepository);
 const dictionaryDatabase = createSqliteRepository({ sqliteFile: dictionarySqliteFile, dataDir });
 const dictionaryRepository = createDictionaryRepository(dictionaryDatabase);
-const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers: 3 });
+const maxUsers = Math.max(1, Math.min(100, Number(process.env.MAX_USERS || 10)));
+const userAccountRepository = createUserAccountRepository(sqliteRepository, { maxUsers });
+const sessionRepository = createSessionRepository(sqliteRepository);
+const taskRepository = createTaskRepository(sqliteRepository, {
+    ownerUserId: () => userAccountRepository.getOwnerUserId(),
+});
 const scheduler = createSchedulerRegistry({
     onError: (name, error) => console.error(JSON.stringify({
         level: 'error', event: 'scheduled_job_failed', name, error: String(error?.message || error),
@@ -155,6 +216,7 @@ const resourceBudget = createResourceBudget({
     maxLoadPerCpu: Math.max(0.5, Number(process.env.BACKGROUND_MAX_LOAD_PER_CPU || 1.5)),
     readResources: readSystemResources,
 });
+const linuxResourceHealth = createLinuxResourceHealth();
 const taskRunsRepository = createTaskRunsRepository(sqliteRepository);
 const opsRepository = createOpsRepository(sqliteRepository);
 const externalApiClient = createExternalApiClient();
@@ -179,13 +241,15 @@ const sessionAuth = createSessionAuth({
     readOnlyPassword,
     cookieSecret,
     cookieName,
+    sessionRepository,
     loginAttemptsFile,
     loginFailureLimit,
     loginLockMs,
     loginFailureDelayMinMs,
     loginFailureDelaySpreadMs,
+    ownerUserId: () => userAccountRepository.getOwnerUserId(),
 });
-const { createSessionValue, getSession, getSessionRole, isValidSession, getLoginLock, recordLoginSuccess, recordLoginFailure, loginFailureDelay, loginPage, } = sessionAuth;
+const { createSessionValue, getSession, getSessionRole, isValidSession, revokeSession, getLoginLock, recordLoginSuccess, recordLoginFailure, loginFailureDelay, loginPage, } = sessionAuth;
 if (!appPassword) {
     throw new Error('APP_PASSWORD is required');
 }
@@ -260,15 +324,26 @@ exposeRuntime({ "createHash": () => createHash, "randomBytes": () => randomBytes
 
 exposeRuntime({
     learningRepository: () => learningRepository,
+    learningQueryRepository: () => learningQueryRepository,
+    appMetadataRepository: () => appMetadataRepository,
+    reportRepository: () => reportRepository,
+    schemaBootstrapRepository: () => schemaBootstrapRepository,
+    studyComparisonRepository: () => studyComparisonRepository,
+    stateRepository: () => stateRepository,
     dailyBriefRepository: () => dailyBriefRepository,
     confusingWordsRepository: () => confusingWordsRepository,
     breakGuardRepository: () => breakGuardRepository,
     backupRepository: () => backupRepository,
     dictionaryRepository: () => dictionaryRepository,
     userAccountRepository: () => userAccountRepository,
+    sessionRepository: () => sessionRepository,
+    taskRepository: () => taskRepository,
+    defaultCapabilitiesForRole: () => defaultCapabilitiesForRole,
     getSession: () => getSession,
+    revokeSession: () => revokeSession,
     scheduler: () => scheduler,
     resourceBudget: () => resourceBudget,
+    linuxResourceHealth: () => linuxResourceHealth,
     notificationChannelHealth: () => notificationChannelHealth,
     migrationStatus: () => migrationStatus,
 });
@@ -288,23 +363,43 @@ const dictionaryService = createDictionaryService({
 });
 exposeRuntime({ dictionaryService: () => dictionaryService });
 
-installDomain('persistence', installPersistenceDomain);
-installDomain('reports', installReportsDomain);
-installDomain('brief', installBriefDomain);
+installDomain('persistence.state', installPersistenceStateDomain);
+installDomain('persistence.schema', installPersistenceSchemaDomain);
+installDomain('persistence.transfer', installPersistenceTransferDomain);
+installDomain('reports.rules', installReportRulesDomain);
+installDomain('reports.embeddings', installReportEmbeddingDomain);
+installDomain('reports.batches', installReportBatchDomain);
+installDomain('reports.analysis', installReportAnalysisDomain);
+installDomain('reports.learning', installLearningReportsDomain);
+installDomain('brief.settings', installBriefSettingsDomain);
+installDomain('brief.transport', installBriefTransportDomain);
+installDomain('brief.weather', installBriefWeatherDomain);
+installDomain('brief.markets', installBriefMarketsDomain);
+installDomain('brief.composition', installBriefCompositionDomain);
+installDomain('brief.email', installBriefEmailDomain);
 installDomain('proxy', installProxyDomain);
-installDomain('operations', installOperationsDomain);
-installDomain('learning', installLearningDomain);
-installDomain('notifications', installNotificationsDomain);
+installDomain('operations.health', installOperationsHealthDomain);
+installDomain('operations.lifecycle', installOperationsLifecycleDomain);
+installDomain('learning.dictionary', installLearningDictionaryDomain);
+installDomain('learning.analytics', installLearningAnalyticsDomain);
+installDomain('learning.dashboard', installLearningDashboardDomain);
+installDomain('learning.observability', installLearningObservabilityDomain);
+installDomain('notifications.telemetry', installNotificationTelemetryDomain);
+installDomain('notifications.wechat', installNotificationWechatDomain);
+installDomain('notifications.channels', installNotificationChannelsDomain);
+installDomain('notifications.reminders', installNotificationReminderDomain);
+installDomain('notifications.bots', installNotificationBotsDomain);
 const focusTimerService = createFocusTimerService({
     repository: focusTimerRepository,
     now: () => Date.now(),
     todayISO,
     tableChanged: runtime.tableChanged,
     refreshStudySummariesForDate: runtime.refreshStudySummariesForDate,
+    shouldRefreshStudySummaries: (userId) => Number(userId) === userAccountRepository.getOwnerUserId(),
 });
 exposeRuntime({ focusTimerService: () => focusTimerService });
 const studyComparisonService = createStudyComparisonService({
-    database: sqliteRepository,
+    repository: studyComparisonRepository,
     todayISO,
     addDaysISO,
     nowISO,

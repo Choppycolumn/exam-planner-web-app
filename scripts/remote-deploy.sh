@@ -19,20 +19,37 @@ TEST_DATA_DIR="$(mktemp -d /tmp/exam-planner-smoke-data.XXXXXX)"
 TEST_PID=""
 HELPER_PID=""
 PREVIOUS_RELEASE=""
+HBR_RESTORE_PENDING=0
 
 exec 9>/run/lock/exam-planner-deploy.lock
 flock -w 30 9 || { echo "another deployment or recovery action is active" >&2; exit 1; }
+exec 8>/run/lock/exam-planner-heavy-io.lock
+flock -w 120 8 || { echo "another heavy I/O operation is active" >&2; exit 1; }
+
+restore_hbr_if_needed() {
+  (( HBR_RESTORE_PENDING )) || return 0
+  HBR_RESTORE_PENDING=0
+  if [[ -x /usr/local/sbin/exam-planner-hbr-window-control ]]; then
+    HBR_LOCK_HELD=1 /usr/local/sbin/exam-planner-hbr-window-control open >/dev/null 2>&1 || true
+  fi
+}
 
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$STAGE_DIR" && "$STAGE_DIR" == /opt/exam-planner-stage.* ]]; then rm -r -- "$STAGE_DIR" 2>/dev/null || true; fi
   [[ "$TEST_DATA_DIR" == /tmp/exam-planner-smoke-data.* ]] && rm -r -- "$TEST_DATA_DIR" 2>/dev/null || true
+  restore_hbr_if_needed
 }
 trap cleanup EXIT
 
+if systemctl is-active --quiet hbrclient.service || systemctl is-active --quiet hbrclientupdater.service; then
+  HBR_RESTORE_PENDING=1
+  systemctl stop hbrclient.service hbrclientupdater.service 2>/dev/null || true
+fi
+
 mkdir -p "$APP_DIR" "$RELEASES_DIR" "$SHARED_ROOT/assets" "$BACKUP_DIR" "$UNIT_BACKUP_DIR"
-for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer /etc/systemd/system/hbrclient.service.d /etc/systemd/system/hbrclientupdater.service.d /etc/systemd/system/openclaw-gateway.service.d; do
+for unit_item in /etc/systemd/system/exam-planner.service /etc/systemd/system/exam-planner.service.d /etc/systemd/system/exam-planner-worker.service /etc/systemd/system/exam-planner-privileged.service /etc/systemd/system/exam-planner-health-watchdog.service /etc/systemd/system/exam-planner-health-watchdog.timer /etc/systemd/system/exam-planner-hbr-window-open.service /etc/systemd/system/exam-planner-hbr-window-open.timer /etc/systemd/system/exam-planner-hbr-window-close.service /etc/systemd/system/exam-planner-hbr-window-close.timer /etc/systemd/system/exam-planner-hbr-guard.service /etc/systemd/system/exam-planner-hbr-guard.timer /etc/systemd/system/hbrclient.service.d /etc/systemd/system/hbrclientupdater.service.d /etc/systemd/system/openclaw-gateway.service.d; do
   [[ -e "$unit_item" ]] && cp -a "$unit_item" "$UNIT_BACKUP_DIR/"
 done
 
@@ -46,6 +63,8 @@ tar -xzf "$PACKAGE_FILE" -C "$STAGE_DIR"
 "$APP_NODE_BIN" --check "$STAGE_DIR/server/infrastructure/runtime-watchdog.mjs"
 bash -n "$STAGE_DIR/scripts/publish-release-assets.sh"
 bash -n "$STAGE_DIR/scripts/rollback-release.sh"
+bash -n "$STAGE_DIR/scripts/check-system-pressure.sh"
+bash -n "$STAGE_DIR/scripts/hbr-window-control.sh"
 
 PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" "$APP_NODE_BIN" "$STAGE_DIR/server/privileged-helper.mjs" >"$TEST_DATA_DIR/helper.log" 2>&1 &
 HELPER_PID="$!"
@@ -75,6 +94,8 @@ TEST_PID=""
 kill "$HELPER_PID" >/dev/null 2>&1 || true
 wait "$HELPER_PID" 2>/dev/null || true
 HELPER_PID=""
+
+"$STAGE_DIR/scripts/check-system-pressure.sh" deploy
 
 if [[ -f "$APP_DIR/data/exam-planner.sqlite" ]]; then
   DB_BACKUP_DIR="$APP_DIR/data/backups"
@@ -197,6 +218,16 @@ configure_service_roles() {
     install -m 0644 "$release/infra/systemd/exam-planner-health-watchdog.service" /etc/systemd/system/exam-planner-health-watchdog.service
     install -m 0644 "$release/infra/systemd/exam-planner-health-watchdog.timer" /etc/systemd/system/exam-planner-health-watchdog.timer
   fi
+  if [[ -f "$release/scripts/hbr-window-control.sh" && -f "$release/scripts/check-system-pressure.sh" ]]; then
+    install -m 0755 "$release/scripts/hbr-window-control.sh" /usr/local/sbin/exam-planner-hbr-window-control
+    install -m 0755 "$release/scripts/check-system-pressure.sh" /usr/local/sbin/exam-planner-pressure-check
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-window-open.service" /etc/systemd/system/exam-planner-hbr-window-open.service
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-window-open.timer" /etc/systemd/system/exam-planner-hbr-window-open.timer
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-window-close.service" /etc/systemd/system/exam-planner-hbr-window-close.service
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-window-close.timer" /etc/systemd/system/exam-planner-hbr-window-close.timer
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-guard.service" /etc/systemd/system/exam-planner-hbr-guard.service
+    install -m 0644 "$release/infra/systemd/exam-planner-hbr-guard.timer" /etc/systemd/system/exam-planner-hbr-guard.timer
+  fi
   install_timer_override() {
     local source_file="$1" timer_unit="$2" target_dir="/etc/systemd/system/$2.d"
     [[ -f "$source_file" ]] || return
@@ -229,7 +260,10 @@ configure_service_roles() {
   if [[ -f /etc/systemd/system/exam-planner-health-watchdog.timer ]]; then
     systemctl enable --now exam-planner-health-watchdog.timer >/dev/null
   fi
-  systemctl try-restart hbrclient.service hbrclientupdater.service >/dev/null || true
+  systemctl disable hbrclient.service hbrclientupdater.service >/dev/null 2>&1 || true
+  if [[ -f /etc/systemd/system/exam-planner-hbr-window-open.timer ]]; then
+    systemctl enable --now exam-planner-hbr-window-open.timer exam-planner-hbr-window-close.timer exam-planner-hbr-guard.timer >/dev/null
+  fi
   for timer_unit in apt-daily.timer apt-daily-upgrade.timer logrotate.timer dpkg-db-backup.timer openclaw-night-stop.timer openclaw-morning-start.timer; do
     systemctl is-enabled --quiet "$timer_unit" && systemctl restart "$timer_unit" || true
   done

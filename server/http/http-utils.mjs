@@ -1,4 +1,5 @@
 export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 * 1024 } = {}) {
+  const parsedJsonBodies = new WeakMap();
   const securityHeaders = {
     'x-content-type-options': 'nosniff',
     'x-frame-options': 'DENY',
@@ -12,7 +13,7 @@ export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
       'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'content-type,x-backup-token,x-clawbot-secret,authorization',
+      'access-control-allow-headers': 'content-type,x-backup-token,x-clawbot-secret,x-exam-planner-client,authorization',
     };
     if (corsOrigin) {
       headers['access-control-allow-origin'] = corsOrigin;
@@ -63,20 +64,25 @@ export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 
   }
 
   async function readJsonBody(req) {
-    const body = await readBody(req, jsonBodyMaxBytes);
-    if (!body) return {};
-    let parsed;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      const error = new Error('Invalid JSON body');
-      error.statusCode = 400;
-      throw error;
+    if (!parsedJsonBodies.has(req)) {
+      parsedJsonBodies.set(req, (async () => {
+        const body = await readBody(req, jsonBodyMaxBytes);
+        if (!body) return {};
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          const error = new Error('Invalid JSON body');
+          error.statusCode = 400;
+          throw error;
+        }
+        if (parsed !== null && typeof parsed === 'object') return parsed;
+        const error = new Error('JSON body must be an object or array');
+        error.statusCode = 400;
+        throw error;
+      })());
     }
-    if (parsed !== null && typeof parsed === 'object') return parsed;
-    const error = new Error('JSON body must be an object or array');
-    error.statusCode = 400;
-    throw error;
+    return parsedJsonBodies.get(req);
   }
 
   return { sendJson, sendHtml, readBody, readJsonBody };

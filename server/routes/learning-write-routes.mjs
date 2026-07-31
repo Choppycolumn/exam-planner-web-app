@@ -14,26 +14,13 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
     writeState,
     baseState,
     writeAuditEvent,
-    saveGoalSql,
-    saveProjectSql,
-    saveSubjectSql,
-    saveExamSql,
-    saveTaskSql,
     learningRepository,
     nowISO,
-    saveWaterSql,
-    saveStudyTargetMinutes,
-    saveProblemInboxItem,
-    listProblemInboxItems,
-    setProblemInboxStatus,
-    deleteProblemInboxItem,
-    resolveProblemInboxForDate,
     todayISO,
-    upsertReviewSql,
-    saveDayRecordsSql,
     tableChanged,
   } = dependencies;
-  const userId = Number(session?.userId || 1);
+  const userId = Number(session.userId);
+  const scopedLearning = learningRepository.forUser(session?.userContext || session);
 
   const body = await readJsonBody(req);
   const timestamp = nowISO();
@@ -62,11 +49,11 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   const directRoutes = {
-    '/api/goals/save': () => saveGoalSql(body, userId),
-    '/api/projects/save': () => saveProjectSql(body, userId),
-    '/api/subjects/save': () => saveSubjectSql(body, userId),
-    '/api/exams/save': () => saveExamSql(body, userId),
-    '/api/tasks/save': () => saveTaskSql(body, userId),
+    '/api/goals/save': () => scopedLearning.saveGoal(body),
+    '/api/projects/save': () => scopedLearning.saveProject(body),
+    '/api/subjects/save': () => scopedLearning.saveSubject(body),
+    '/api/exams/save': () => scopedLearning.saveExam(body),
+    '/api/tasks/save': () => scopedLearning.saveTask(body),
   };
 
   if (directRoutes[req.url]) {
@@ -75,70 +62,70 @@ export async function handleLearningWriteRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/goals/activate') {
-    learningRepository.activateGoal(Number(body.id), timestamp, userId);
+    scopedLearning.activateGoal(Number(body.id), timestamp);
     tableChanged();
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/water/save') {
-    saveWaterSql(body, userId);
+    scopedLearning.saveWater(body);
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/settings/study-target') {
-    sendJson(res, saveStudyTargetMinutes(body, userId));
+    sendJson(res, scopedLearning.saveStudyTarget(body));
     return true;
   }
 
   if (req.url === '/api/problem-inbox/save') {
-    const id = saveProblemInboxItem(body, userId);
-    const item = listProblemInboxItems({
+    const id = scopedLearning.saveProblem(body);
+    const item = scopedLearning.listProblemInbox({
       status: 'all',
       limit: 1,
       from: body.date || '1900-01-01',
       to: body.date || '2999-12-31',
-    }, userId).find((candidate) => candidate.id === id) || null;
+    }).find((candidate) => candidate.id === id) || null;
     sendJson(res, { ok: true, id, item });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/status') {
-    setProblemInboxStatus(body.id, body.status, userId);
+    scopedLearning.setProblemStatus(body.id, body.status);
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/remove') {
-    deleteProblemInboxItem(body.id, userId);
+    scopedLearning.deleteProblem(body.id);
     sendJson(res, { ok: true });
     return true;
   }
 
   if (req.url === '/api/problem-inbox/resolve-date') {
-    sendJson(res, resolveProblemInboxForDate(body.date || todayISO(), userId));
+    sendJson(res, scopedLearning.resolveProblemsForDate(body.date || todayISO()));
     return true;
   }
 
   if (req.url === '/api/reviews/upsert') {
-    sendJson(res, upsertReviewSql(body, userId));
+    sendJson(res, scopedLearning.upsertReview(body));
     return true;
   }
 
   if (req.url === '/api/study-records/save-day') {
-    saveDayRecordsSql(body.date || todayISO(), body.records || [], userId);
+    scopedLearning.saveDayRecords(body.date || todayISO(), body.records || []);
     sendJson(res, { ok: true });
     return true;
   }
 
   const mutations = {
-    '/api/goals/remove': () => learningRepository.removeGoal(Number(body.id), userId),
-    '/api/projects/remove': () => learningRepository.removeProject(Number(body.id), timestamp, userId),
-    '/api/subjects/remove': () => learningRepository.removeSubject(Number(body.id), timestamp, userId),
-    '/api/exams/remove': () => learningRepository.removeExam(Number(body.id), userId),
-    '/api/tasks/remove': () => learningRepository.removeTask(Number(body.id), userId),
-    '/api/tasks/toggle': () => learningRepository.toggleTask(Number(body.id), Boolean(body.completed), timestamp, userId),
+    '/api/goals/remove': () => scopedLearning.removeGoal(Number(body.id)),
+    '/api/projects/remove': () => scopedLearning.removeProject(Number(body.id), timestamp),
+    '/api/subjects/remove': () => scopedLearning.removeSubject(Number(body.id), timestamp),
+    '/api/exams/remove': () => scopedLearning.removeExam(Number(body.id)),
+    '/api/tasks/remove': () => scopedLearning.removeTask(Number(body.id)),
+    '/api/tasks/toggle': () => scopedLearning.toggleTask(Number(body.id), Boolean(body.completed), timestamp),
   };
 
   if (mutations[req.url]) {

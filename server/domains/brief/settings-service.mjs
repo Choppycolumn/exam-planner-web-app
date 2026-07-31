@@ -234,7 +234,7 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
     let parsed = {};
     let encryptedSecret = null;
     try {
-      const raw = runtime.sqliteScalar(`SELECT value FROM app_metadata WHERE key = ${runtime.sqlString(runtime.dailyBriefSettingsKey)} LIMIT 1;`);
+      const raw = runtime.appMetadataRepository.get(runtime.dailyBriefSettingsKey, '');
       parsed = raw ? JSON.parse(raw) : {};
       if (parsed.email?.passwordEncrypted && !parsed.email.password) {
         encryptedSecret = runtime.settingsCrypto.decrypt(parsed.email.passwordEncrypted);
@@ -245,7 +245,7 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
     }
     const settings = normalizeDailyBriefSettings(parsed);
     if ((parsed.email?.password && !parsed.email.passwordEncrypted) || encryptedSecret?.needsMigration || encryptedSecret?.ok === false) {
-      runtime.runSqlite(`UPDATE app_metadata SET value = ${runtime.sqlString(JSON.stringify(storedDailyBriefSettings(settings)))}, updated_at = datetime('now') WHERE key = ${runtime.sqlString(runtime.dailyBriefSettingsKey)};`);
+      runtime.appMetadataRepository.set(runtime.dailyBriefSettingsKey, JSON.stringify(storedDailyBriefSettings(settings)));
     }
     return includeSecret ? settings : publicDailyBriefSettings(settings);
   }
@@ -253,9 +253,7 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
   function saveDailyBriefSettings(input = {}) {
     const previous = getDailyBriefSettings({ includeSecret: true });
     const settings = normalizeDailyBriefSettings(input, previous);
-    runtime.runSqlite(`INSERT INTO app_metadata (key, value, updated_at)
-VALUES (${runtime.sqlString(runtime.dailyBriefSettingsKey)}, ${runtime.sqlString(JSON.stringify(storedDailyBriefSettings(settings)))}, datetime('now'))
-ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at;`);
+    runtime.appMetadataRepository.set(runtime.dailyBriefSettingsKey, JSON.stringify(storedDailyBriefSettings(settings)));
     scheduleDailyBrief();
     return publicDailyBriefSettings(settings);
   }

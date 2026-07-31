@@ -9,12 +9,10 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     getGoalsList,
     getProjectsList,
     getSubjectsList,
-    getStudyTargetMinutes,
     getDashboardChartsPayload,
     getDashboardPayload,
     queryLimit,
     queryOffset,
-    listProblemInboxItems,
     todayISO,
     getReviewPrefill,
     getCachedReviewTrend,
@@ -28,9 +26,9 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     getErrorThemeDetail,
     currentErrorThemeJobSnapshot,
     listLearningReports,
-    readState,
   } = dependencies;
-  const userId = Number(session?.userId || 1);
+  const userId = Number(session.userId);
+  const scopedLearning = learningRepository.forUser(session?.userContext || session);
 
   if (req.url === '/api/goals') {
     ensureSqliteStore();
@@ -52,7 +50,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/settings/study-target') {
     ensureSqliteStore();
-    const targetMinutes = getStudyTargetMinutes(userId);
+    const targetMinutes = scopedLearning.getStudyTarget();
     sendJson(res, { targetMinutes, targetHours: Math.round((targetMinutes / 60) * 10) / 10, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -65,7 +63,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
 
   if (req.url === '/api/dashboard') {
     ensureSqliteStore();
-    sendJson(res, getDashboardPayload(sessionRole, userId, session?.accountType || 'admin'));
+    sendJson(res, getDashboardPayload(sessionRole, userId, session.accountType, session.capabilities || []));
     return true;
   }
 
@@ -76,7 +74,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const from = requestUrl.searchParams.get('from') || '1900-01-01';
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
     const limit = queryLimit(requestUrl.searchParams, 12, 100) ?? 12;
-    sendJson(res, { items: listProblemInboxItems({ limit, status, from, to }, userId), readOnly: sessionRole === 'read' });
+    sendJson(res, { items: scopedLearning.listProblemInbox({ limit, status, from, to }), readOnly: sessionRole === 'read' });
     return true;
   }
 
@@ -102,7 +100,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     const to = requestUrl.searchParams.get('to') || '2999-12-31';
     const limit = queryLimit(requestUrl.searchParams, 20, 100);
     const offset = queryOffset(requestUrl.searchParams);
-    const result = learningRepository.listReviews({ from, to, limit, offset }, userId);
+    const result = scopedLearning.listReviews({ from, to, limit, offset });
     const reviews = result.reviews.map(normalizeReview);
     const total = result.total;
     sendJson(res, { reviews, total, limit, offset, readOnly: sessionRole === 'read' });
@@ -113,7 +111,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
     ensureSqliteStore();
     const requestUrl = new URL(req.url, 'http://localhost');
     const date = requestUrl.searchParams.get('date') || todayISO();
-    const records = learningRepository.listStudyRecords(date, userId);
+    const records = scopedLearning.listStudyRecords(date);
     sendJson(res, { records, readOnly: sessionRole === 'read' });
     return true;
   }
@@ -191,7 +189,7 @@ export async function handleLearningReadRoutes(req, res, dependencies) {
   }
 
   if (req.url === '/api/state') {
-    const state = readState();
+    const state = scopedLearning.getStateSnapshot();
     sendJson(res, {
       ...state,
       dailyReviews: state.dailyReviews.map(normalizeReview),

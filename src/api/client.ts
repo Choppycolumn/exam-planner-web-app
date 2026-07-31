@@ -1,7 +1,8 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
-import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse, FocusTimerDashboard, FocusTimerAction, FocusTimerActionResponse } from './contracts';
+import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse, FocusTimerDashboard, FocusTimerAction, FocusTimerActionResponse, UserManagementResponse, ManagedUserAccount } from './contracts';
 import { invalidateServerQueries } from './queryClient';
-import { apiRequest } from './transport';
+import { apiContractRequest } from './transport';
+import type { ApiContractName } from '../../shared/api-contracts.js';
 export * from './contracts';
 export { apiRequest } from './transport';
 
@@ -10,139 +11,149 @@ export const notifyDataChanged = () => {
   window.dispatchEvent(new Event('server-data-changed'));
 };
 
-function cachedApiRequest<T>(path: string, ttlMs = 60_000): Promise<T> {
+function cachedContractRequest<T>(
+  name: ApiContractName,
+  query?: Record<string, string | number | undefined>,
+  ttlMs = 60_000,
+): Promise<T> {
   void ttlMs;
-  return apiRequest<T>(path);
+  return apiContractRequest<T>(name, { query });
 }
 
 function cachedState() {
-  return apiRequest<ServerState>('/state');
+  return apiContractRequest<ServerState>('state');
 }
 
 function cachedDashboard() {
-  return apiRequest<DashboardData>('/dashboard');
+  return apiContractRequest<DashboardData>('dashboard');
 }
 
 export const serverApi = {
-  getSession: () => apiRequest<AccountSession>('/session'),
+  getSession: () => apiContractRequest<AccountSession>('session'),
+  getUsers: () => apiContractRequest<UserManagementResponse>('users'),
+  createUserInvite: (displayName: string, expiresInHours = 24) =>
+    apiContractRequest<{ ok: true; invite: { token: string; displayName: string; expiresAt: string } }>('userInviteCreate', { body: { displayName, expiresInHours } }),
+  revokeUserInvite: (inviteId: number) => apiContractRequest<{ ok: true; revoked: boolean }>('userInviteRevoke', { body: { inviteId } }),
+  updateUser: (userId: number, input: { displayName: string; status: 'active' | 'disabled' }) =>
+    apiContractRequest<{ ok: true; account: ManagedUserAccount }>('userUpdate', { body: { userId, ...input } }),
+  resetUserPassword: (userId: number, password: string) => apiContractRequest<{ ok: true }>('userResetPassword', { body: { userId, password } }),
+  revokeUserSessions: (userId: number) => apiContractRequest<{ ok: true }>('userRevokeSessions', { body: { userId } }),
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
-  getDashboardCharts: () => cachedApiRequest<DashboardChartsData>('/dashboard/charts', 90_000),
-  getGoals: () => cachedApiRequest<ReferenceList<Goal>>('/goals', 120_000),
-  getProjects: () => cachedApiRequest<ReferenceList<StudyProject>>('/projects', 120_000),
-  getSubjects: () => cachedApiRequest<ReferenceList<Subject>>('/subjects', 120_000),
-  getStudyTarget: () => cachedApiRequest<StudyTargetSetting>('/settings/study-target', 120_000),
-  saveStudyTarget: (targetHours: number) => apiRequest<StudyTargetSetting>('/settings/study-target', { method: 'POST', body: { targetHours } }),
-  getBriefSettings: () => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings'),
-  saveBriefSettings: (settings: DailyBriefSettings) => apiRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('/briefs/settings', { method: 'POST', body: settings }),
-  getBriefs: (limit = 30) => cachedApiRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>(`/briefs?limit=${limit}`, 60_000),
-  getTodayBrief: () => cachedApiRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('/briefs/today', 60_000),
-  generateBrief: (sendEmail = false, sendWechat = false) => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/generate', { method: 'POST', body: { sendEmail, sendWechat } }),
-  sendLatestBrief: () => apiRequest<{ ok: true; brief: DailyBrief }>('/briefs/send-latest', { method: 'POST' }),
+  getDashboardCharts: () => apiContractRequest<DashboardChartsData>('dashboardCharts'),
+  getGoals: () => apiContractRequest<ReferenceList<Goal>>('goals'),
+  getProjects: () => apiContractRequest<ReferenceList<StudyProject>>('projects'),
+  getSubjects: () => apiContractRequest<ReferenceList<Subject>>('subjects'),
+  getStudyTarget: () => apiContractRequest<StudyTargetSetting>('studyTargetRead'),
+  saveStudyTarget: (targetHours: number) => apiContractRequest<StudyTargetSetting>('studyTargetWrite', { body: { targetHours } }),
+  getBriefSettings: () => apiContractRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('briefSettingsRead'),
+  saveBriefSettings: (settings: DailyBriefSettings) => apiContractRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('briefSettingsWrite', { body: settings }),
+  getBriefs: (limit = 30) => cachedContractRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>('briefs', { limit }, 60_000),
+  getTodayBrief: () => cachedContractRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('briefToday', undefined, 60_000),
+  generateBrief: (sendEmail = false, sendWechat = false) => apiContractRequest<{ ok: true; brief: DailyBrief }>('briefGenerate', { body: { sendEmail, sendWechat } }),
+  sendLatestBrief: () => apiContractRequest<{ ok: true; brief: DailyBrief }>('briefSendLatest'),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     if (limit) params.set('limit', String(limit));
     if (offset) params.set('offset', String(offset));
-    const query = params.toString();
-    return cachedApiRequest<ReviewsResponse>(`/reviews${query ? `?${query}` : ''}`, 45_000);
+    return apiContractRequest<ReviewsResponse>('reviews', { query: params });
   },
-  getReviewPrefill: (date: string) => cachedApiRequest<ReviewPrefill>(`/reviews/prefill?date=${encodeURIComponent(date)}`, 30_000),
-  getReviewTrend: (days = 30) => cachedApiRequest<ReviewTrendResponse>(`/reviews/trend?days=${days}`, 120_000),
+  getReviewPrefill: (date: string) => cachedContractRequest<ReviewPrefill>('reviewPrefill', { date }, 30_000),
+  getReviewTrend: (days = 30) => cachedContractRequest<ReviewTrendResponse>('reviewTrend', { days }, 120_000),
   getProblemInbox: (status: 'open' | 'resolved' | 'all' = 'open', limit = 12) =>
-    cachedApiRequest<{ items: ProblemInboxItem[]; readOnly?: boolean }>(`/problem-inbox?status=${encodeURIComponent(status)}&limit=${limit}`, 30_000),
+    cachedContractRequest<{ items: ProblemInboxItem[]; readOnly?: boolean }>('problemInbox', { status, limit }, 30_000),
   saveProblemInbox: (text: string, date?: string) =>
-    apiRequest<{ ok: true; id: number; item: ProblemInboxItem | null }>('/problem-inbox/save', { method: 'POST', body: { text, date } }),
+    apiContractRequest<{ ok: true; id: number; item: ProblemInboxItem | null }>('problemInboxSave', { body: { text, date } }),
   setProblemInboxStatus: (id: number, status: 'open' | 'resolved') =>
-    apiRequest<{ ok: true }>('/problem-inbox/status', { method: 'POST', body: { id, status } }),
-  removeProblemInbox: (id: number) => apiRequest<{ ok: true }>('/problem-inbox/remove', { method: 'POST', body: { id } }),
-  resolveProblemInboxByDate: (date: string) => apiRequest<{ ok: true; resolvedAt: string }>('/problem-inbox/resolve-date', { method: 'POST', body: { date } }),
-  getStudyRecordsByDate: (date: string) => cachedApiRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>(`/study-records?date=${encodeURIComponent(date)}`, 30_000),
-  getFocusTimer: () => apiRequest<FocusTimerDashboard>('/focus-timer'),
+    apiContractRequest<{ ok: true }>('problemInboxStatus', { body: { id, status } }),
+  removeProblemInbox: (id: number) => apiContractRequest<{ ok: true }>('problemInboxRemove', { body: { id } }),
+  resolveProblemInboxByDate: (date: string) => apiContractRequest<{ ok: true; resolvedAt: string }>('problemInboxResolveDate', { body: { date } }),
+  getStudyRecordsByDate: (date: string) => cachedContractRequest<{ records: StudyTimeRecord[]; readOnly?: boolean }>('studyRecords', { date }, 30_000),
+  getFocusTimer: () => apiContractRequest<FocusTimerDashboard>('focusTimerRead'),
   focusTimerAction: (action: FocusTimerAction) =>
-    apiRequest<FocusTimerActionResponse>('/focus-timer/action', { method: 'POST', body: action }),
-  getStatisticsSummary: () => cachedApiRequest<StatisticsSummary>('/statistics/summary', 90_000),
+    apiContractRequest<FocusTimerActionResponse>('focusTimerAction', { body: action }),
+  getStatisticsSummary: () => cachedContractRequest<StatisticsSummary>('statisticsSummary', undefined, 90_000),
   getMockExams: (subjectId: number | 'all' = 'all', limit = 20, offset = 0) =>
-    apiRequest<MockExamListResponse>(`/mock-exams?subjectId=${encodeURIComponent(String(subjectId))}&limit=${limit}&offset=${offset}`),
-  saveGoal: (goal: Partial<Goal>) => apiRequest<number>('/goals/save', { method: 'POST', body: goal }).then((result) => Number(result)),
-  activateGoal: (id: number) => apiRequest<void>('/goals/activate', { method: 'POST', body: { id } }),
-  removeGoal: (id: number) => apiRequest<void>('/goals/remove', { method: 'POST', body: { id } }),
-  upsertReview: (review: Partial<DailyReview> & { date: string }) => apiRequest<number>('/reviews/upsert', { method: 'POST', body: review }).then((result) => Number(result)),
-  saveProject: (project: Partial<StudyProject>) => apiRequest<number>('/projects/save', { method: 'POST', body: project }).then((result) => Number(result)),
-  removeProject: (id: number) => apiRequest<void>('/projects/remove', { method: 'POST', body: { id } }),
+    apiContractRequest<MockExamListResponse>('mockExams', { query: { subjectId, limit, offset } }),
+  saveGoal: (goal: Partial<Goal>) => apiContractRequest<number>('goalSave', { body: goal }).then((result) => Number(result)),
+  activateGoal: (id: number) => apiContractRequest<void>('goalActivate', { body: { id } }),
+  removeGoal: (id: number) => apiContractRequest<void>('goalRemove', { body: { id } }),
+  upsertReview: (review: Partial<DailyReview> & { date: string }) => apiContractRequest<number>('reviewUpsert', { body: review }).then((result) => Number(result)),
+  saveProject: (project: Partial<StudyProject>) => apiContractRequest<number>('projectSave', { body: project }).then((result) => Number(result)),
+  removeProject: (id: number) => apiContractRequest<void>('projectRemove', { body: { id } }),
   saveDayRecords: (date: string, records: Array<Partial<StudyTimeRecord> & { projectId: number; projectNameSnapshot: string }>) =>
-    apiRequest<void>('/study-records/save-day', { method: 'POST', body: { date, records } }),
-  saveSubject: (subject: Partial<Subject>) => apiRequest<number>('/subjects/save', { method: 'POST', body: subject }).then((result) => Number(result)),
-  removeSubject: (id: number) => apiRequest<void>('/subjects/remove', { method: 'POST', body: { id } }),
+    apiContractRequest<void>('studyRecordsSaveDay', { body: { date, records } }),
+  saveSubject: (subject: Partial<Subject>) => apiContractRequest<number>('subjectSave', { body: subject }).then((result) => Number(result)),
+  removeSubject: (id: number) => apiContractRequest<void>('subjectRemove', { body: { id } }),
   saveExam: (record: Partial<MockExamRecord> & { subjectId: number; subjectNameSnapshot: string }) =>
-    apiRequest<number>('/exams/save', { method: 'POST', body: record }).then((result) => Number(result)),
-  removeExam: (id: number) => apiRequest<void>('/exams/remove', { method: 'POST', body: { id } }),
-  saveTask: (task: Partial<ShortTermTask>) => apiRequest<number>('/tasks/save', { method: 'POST', body: task }).then((result) => Number(result)),
-  toggleTask: (task: ShortTermTask, completed: boolean) => apiRequest<void>('/tasks/toggle', { method: 'POST', body: { id: task.id, completed } }),
-  removeTask: (id: number) => apiRequest<void>('/tasks/remove', { method: 'POST', body: { id } }),
+    apiContractRequest<number>('examSave', { body: record }).then((result) => Number(result)),
+  removeExam: (id: number) => apiContractRequest<void>('examRemove', { body: { id } }),
+  saveTask: (task: Partial<ShortTermTask>) => apiContractRequest<number>('taskSave', { body: task }).then((result) => Number(result)),
+  toggleTask: (task: ShortTermTask, completed: boolean) => apiContractRequest<void>('taskToggle', { body: { id: task.id, completed } }),
+  removeTask: (id: number) => apiContractRequest<void>('taskRemove', { body: { id } }),
   saveWaterIntake: (record: Pick<WaterIntakeRecord, 'date' | 'cups' | 'cupMl' | 'targetCups'>) =>
-    apiRequest<void>('/water/save', { method: 'POST', body: record }),
-  getBackupStatus: () => apiRequest<BackupStatus>('/backups/status'),
-  getBreakGuardSchedule: () => apiRequest<BreakGuardScheduleResponse>('/break-guard/config'),
-  saveBreakGuardSchedule: (config: BreakGuardScheduleConfig) => apiRequest<{ ok: true } & BreakGuardScheduleResponse>('/break-guard/config', { method: 'POST', body: { config } }),
-  runServerBackup: () => apiRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('/backups/run', { method: 'POST' }),
-  restoreServerBackup: (fileName: string) => apiRequest<{ ok: true; restoredFrom: string }>('/backups/restore', { method: 'POST', body: { fileName } }),
-  getMihomoSettings: () => apiRequest<MihomoSettingsResponse>('/settings/mihomo'),
+    apiContractRequest<void>('waterSave', { body: record }),
+  getBackupStatus: () => apiContractRequest<BackupStatus>('backupStatus'),
+  getBreakGuardSchedule: () => apiContractRequest<BreakGuardScheduleResponse>('breakGuardConfigRead'),
+  saveBreakGuardSchedule: (config: BreakGuardScheduleConfig) => apiContractRequest<{ ok: true } & BreakGuardScheduleResponse>('breakGuardConfigWrite', { body: { config } }),
+  runServerBackup: () => apiContractRequest<{ ok: true; backup: { kind: string; filePath: string; createdAt: string } }>('backupRun'),
+  restoreServerBackup: (fileName: string) => apiContractRequest<{ ok: true; restoredFrom: string }>('backupRestore', { body: { fileName } }),
+  getMihomoSettings: () => apiContractRequest<MihomoSettingsResponse>('mihomoSettings'),
   saveMihomoSubscription: (subscriptionUrl: string, clearSubscription = false) =>
-    apiRequest<MihomoSettingsResponse>('/settings/mihomo/subscription', { method: 'POST', body: { subscriptionUrl, clearSubscription } }),
+    apiContractRequest<MihomoSettingsResponse>('mihomoSubscription', { body: { subscriptionUrl, clearSubscription } }),
   importMihomoProvider: (subscriptionContent: string) =>
-    apiRequest<MihomoSettingsResponse>('/settings/mihomo/import', { method: 'POST', body: { subscriptionContent } }),
+    apiContractRequest<MihomoSettingsResponse>('mihomoImport', { body: { subscriptionContent } }),
   selectMihomoProxy: (name: string) =>
-    apiRequest<MihomoSettingsResponse>('/settings/mihomo/select', { method: 'POST', body: { name } }),
-  testMihomoProxy: () => apiRequest<MihomoTestResponse>('/settings/mihomo/test', { method: 'POST' }),
-  getTaskCenterStatus: () => cachedApiRequest<TaskCenterStatus>('/tasks/status', 20_000),
-  getLearningProgress: () => cachedApiRequest<LearningProgressResponse>('/learning-progress', 60_000),
-  getStudyComparison: (days = 30) => cachedApiRequest<StudyComparisonResponse>(`/study-comparison?days=${days}`, 60_000),
-  getProjectProgress: () => cachedApiRequest<ProjectProgressResponse>('/project-progress', 60_000),
-  getVisitStats: () => cachedApiRequest<VisitStatsResponse>('/visits/summary', 30_000),
-  getOpsLogsSummary: () => apiRequest<OpsLogSummaryResponse>('/ops/logs/summary'),
+    apiContractRequest<MihomoSettingsResponse>('mihomoSelect', { body: { name } }),
+  testMihomoProxy: () => apiContractRequest<MihomoTestResponse>('mihomoTest'),
+  getTaskCenterStatus: () => cachedContractRequest<TaskCenterStatus>('taskCenterStatus', undefined, 20_000),
+  getLearningProgress: () => cachedContractRequest<LearningProgressResponse>('learningProgress', undefined, 60_000),
+  getStudyComparison: (days = 30) => apiContractRequest<StudyComparisonResponse>('studyComparison', { query: { days } }),
+  getProjectProgress: () => cachedContractRequest<ProjectProgressResponse>('projectProgress', undefined, 60_000),
+  getVisitStats: () => cachedContractRequest<VisitStatsResponse>('visitStats', undefined, 30_000),
+  getOpsLogsSummary: () => apiContractRequest<OpsLogSummaryResponse>('opsLogsSummary'),
   getNotificationCenter: (status: 'all' | 'warning' | 'critical' | 'notified' = 'all') =>
-    cachedApiRequest<NotificationCenterResponse>(`/notifications/center?status=${encodeURIComponent(status)}`, 20_000),
+    cachedContractRequest<NotificationCenterResponse>('notificationCenter', { status }, 20_000),
   acknowledgeNotification: (id: number) =>
-    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/ack', { method: 'POST', body: { id } }),
+    apiContractRequest<{ ok: true; center: NotificationCenterResponse }>('notificationAck', { body: { id } }),
   retryNotificationDelivery: (id: number) =>
-    apiRequest<{ ok: true; center: NotificationCenterResponse }>('/notifications/retry-delivery', { method: 'POST', body: { id } }),
-  testWechatNotification: () => apiRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/wechat/test', { method: 'POST', body: {} }),
-  testBarkNotification: () => apiRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('/notifications/bark/test', { method: 'POST', body: {} }),
+    apiContractRequest<{ ok: true; center: NotificationCenterResponse }>('notificationRetry', { body: { id } }),
+  testWechatNotification: () => apiContractRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('notificationWechatTest', { body: {} }),
+  testBarkNotification: () => apiContractRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('notificationBarkTest', { body: {} }),
   saveTelegramSettings: (settings: { botToken?: string; chatId?: string; allowedUserId?: string; webhookUrl?: string }) =>
-    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/settings', { method: 'POST', body: settings }),
+    apiContractRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('notificationTelegramSettings', { body: settings }),
   registerTelegramWebhook: () =>
-    apiRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('/notifications/telegram/register', { method: 'POST', body: {} }),
+    apiContractRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('notificationTelegramRegister', { body: {} }),
   testTelegramNotification: () =>
-    apiRequest<{ ok: boolean; center: NotificationCenterResponse }>('/notifications/telegram/test', { method: 'POST', body: {} }),
+    apiContractRequest<{ ok: boolean; center: NotificationCenterResponse }>('notificationTelegramTest', { body: {} }),
   saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
-    apiRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('/notifications/wechat/settings', { method: 'POST', body: { enabled, generateTime } }),
+    apiContractRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('notificationWechatSettings', { body: { enabled, generateTime } }),
   getCalendarEvents: (from: string, to: string) =>
-    cachedApiRequest<CalendarResponse>(`/calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 30_000),
-  runSqliteMaintenance: () => apiRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('/maintenance/sqlite', { method: 'POST' }),
-  runPrecompute: () => apiRequest<{ ok: boolean; ranAt: string; error?: string }>('/maintenance/precompute', { method: 'POST' }),
-  getReports: () => cachedApiRequest<{ reports: LearningReport[] }>('/reports', 120_000),
+    cachedContractRequest<CalendarResponse>('calendar', { from, to }, 30_000),
+  runSqliteMaintenance: () => apiContractRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('sqliteMaintenance'),
+  runPrecompute: () => apiContractRequest<{ ok: boolean; ranAt: string; error?: string }>('precomputeMaintenance'),
+  getReports: () => cachedContractRequest<{ reports: LearningReport[] }>('reports', undefined, 120_000),
   generateReport: (kind: 'weekly' | 'monthly', period: 'current' | 'previous' = 'current') =>
-    apiRequest<{ ok: true; report: LearningReport }>('/reports/generate', { method: 'POST', body: { kind, period } }),
+    apiContractRequest<{ ok: true; report: LearningReport }>('reportGenerate', { body: { kind, period } }),
   getErrorThemeAnalysis: (from?: string, to?: string) => {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    const query = params.toString();
-    return cachedApiRequest<ErrorThemeAnalysis>(`/error-themes/analysis${query ? `?${query}` : ''}`, 120_000);
+    return apiContractRequest<ErrorThemeAnalysis>('errorThemeAnalysis', { query: params });
   },
-  getEmbeddingStatus: () => cachedApiRequest<EmbeddingStatus>('/error-themes/embedding/status', 120_000),
+  getEmbeddingStatus: () => cachedContractRequest<EmbeddingStatus>('embeddingStatus', undefined, 120_000),
   getErrorThemeDetail: (themeId: number, from?: string, to?: string) => {
     const params = new URLSearchParams({ themeId: String(themeId) });
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    return apiRequest<ErrorThemeDetail>(`/error-themes/detail?${params.toString()}`);
+    return apiContractRequest<ErrorThemeDetail>('errorThemeDetail', { query: params });
   },
-  getErrorThemeOptions: () => apiRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('/error-themes/options'),
-  getErrorThemeBatchStatus: () => apiRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('/error-themes/batch/status'),
+  getErrorThemeOptions: () => apiContractRequest<{ themes: ErrorThemeOption[]; readOnly?: boolean }>('errorThemeOptions'),
+  getErrorThemeBatchStatus: () => apiContractRequest<{ job: ErrorThemeBatchJob | null; readOnly?: boolean }>('errorThemeBatchStatus'),
   runErrorThemeBatch: (from?: string, to?: string, mode: 'embedding' | 'rules' = 'rules', modelProfile: EmbeddingModelProfile = 'rules') =>
-    apiRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('/error-themes/batch/run', { method: 'POST', body: { from, to, mode, modelProfile } }),
+    apiContractRequest<{ ok: true; started: boolean; job: ErrorThemeBatchJob | null }>('errorThemeBatchRun', { body: { from, to, mode, modelProfile } }),
   saveErrorThemeCorrection: (body: {
     occurrenceId: number;
     sentence: string;
@@ -152,6 +163,6 @@ export const serverApi = {
     sourceLabel?: string;
     from?: string;
     to?: string;
-  }) => apiRequest<{ ok: true; analysis: ErrorThemeAnalysis }>('/error-themes/corrections/save', { method: 'POST', body }),
-  reset: () => apiRequest<void>('/reset', { method: 'POST' }),
+  }) => apiContractRequest<{ ok: true; analysis: ErrorThemeAnalysis }>('errorThemeCorrectionSave', { body }),
+  reset: () => apiContractRequest<void>('dataReset'),
 };

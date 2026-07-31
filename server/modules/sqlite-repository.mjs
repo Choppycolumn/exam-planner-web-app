@@ -30,13 +30,29 @@ export function sqliteIntegrityCheck(sqliteFile) {
 
 export function createSqliteRepository({ sqliteFile, dataDir }) {
   let database = null;
-  const statistics = { calls: 0, totalDurationMs: 0, slowCalls: 0, lastDurationMs: 0 };
+  const statistics = {
+    calls: 0,
+    reads: 0,
+    writes: 0,
+    transactions: 0,
+    busyErrors: 0,
+    totalDurationMs: 0,
+    slowCalls: 0,
+    lastDurationMs: 0,
+  };
 
-  const measured = (operation) => {
+  const measured = (operation, kind = 'read') => {
     const startedAt = performance.now();
-    try { return operation(); } finally {
+    try {
+      return operation();
+    } catch (error) {
+      if (/busy|locked/i.test(String(error?.message || ''))) statistics.busyErrors += 1;
+      throw error;
+    } finally {
       const durationMs = performance.now() - startedAt;
       statistics.calls += 1;
+      if (kind === 'write') statistics.writes += 1;
+      else statistics.reads += 1;
       statistics.totalDurationMs += durationMs;
       statistics.lastDurationMs = durationMs;
       if (durationMs >= 100) statistics.slowCalls += 1;
@@ -47,8 +63,14 @@ export function createSqliteRepository({ sqliteFile, dataDir }) {
     if (database) return database;
     mkdirSync(dataDir, { recursive: true });
     database = new DatabaseSync(sqliteFile);
-    database.exec('PRAGMA busy_timeout = 5000;');
-    database.exec('PRAGMA foreign_keys = ON;');
+    database.exec(`PRAGMA busy_timeout=8000;
+PRAGMA foreign_keys=ON;
+PRAGMA synchronous=NORMAL;
+PRAGMA temp_store=MEMORY;
+PRAGMA cache_size=-8192;`);
+    if (sqliteFile !== ':memory:') {
+      database.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=1000;');
+    }
     return database;
   };
 
@@ -59,13 +81,13 @@ export function createSqliteRepository({ sqliteFile, dataDir }) {
   };
 
   const run = (script) => {
-    measured(() => open().exec(String(script || '')));
+    measured(() => open().exec(String(script || '')), 'write');
     return '';
   };
 
   const execute = (sql, parameters = []) => {
     const statement = open().prepare(sql);
-    return measured(() => (Array.isArray(parameters) ? statement.run(...parameters) : statement.run(parameters)));
+    return measured(() => (Array.isArray(parameters) ? statement.run(...parameters) : statement.run(parameters)), 'write');
   };
 
   const scalar = (sql, parameters = []) => {
@@ -79,19 +101,34 @@ export function createSqliteRepository({ sqliteFile, dataDir }) {
     return measured(() => (Array.isArray(parameters) ? statement.all(...parameters) : statement.all(parameters)));
   };
 
-  const transaction = (statements = []) => {
-    const body = Array.isArray(statements) ? statements.join('\n') : String(statements || '');
+  const transaction = (work = []) => {
     const db = open();
-    db.exec('BEGIN IMMEDIATE;');
-    try {
-      db.exec(body);
-      db.exec('COMMIT;');
-    } catch (error) {
-      try { db.exec('ROLLBACK;'); } catch { /* preserve the original failure */ }
-      throw error;
-    }
-    return '';
+    return measured(() => {
+      db.exec('BEGIN IMMEDIATE;');
+      try {
+        const result = typeof work === 'function'
+          ? work(db)
+          : db.exec(Array.isArray(work) ? work.join('\n') : String(work || ''));
+        db.exec('COMMIT;');
+        statistics.transactions += 1;
+        return result ?? '';
+      } catch (error) {
+        try { db.exec('ROLLBACK;'); } catch { /* preserve the original failure */ }
+        throw error;
+      }
+    }, 'write');
   };
+
+  const checkpoint = ({ truncate = false } = {}) => {
+    if (sqliteFile === ':memory:') return [];
+    const mode = truncate ? 'TRUNCATE' : 'PASSIVE';
+    return measured(() => open().prepare(`PRAGMA wal_checkpoint(${mode});`).all(), 'write');
+  };
+
+  const optimize = () => measured(() => {
+    const db = open();
+    db.exec('PRAGMA optimize; ANALYZE;');
+  }, 'write');
 
   return {
     file: sqliteFile,
@@ -102,6 +139,8 @@ export function createSqliteRepository({ sqliteFile, dataDir }) {
     scalar,
     json,
     transaction,
+    checkpoint,
+    optimize,
     metrics: () => ({
       ...statistics,
       open: Boolean(database),

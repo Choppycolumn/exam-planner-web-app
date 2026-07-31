@@ -5,15 +5,30 @@
 ## 通用约定
 
 - 成功响应：JSON。
-- 失败响应：`{ "error": "..." }` 或纯文本错误。
-- 前端 `apiRequest()` 已统一解析错误文案，并附加 `error.status`。
-- 非 GET 写入接口在只读会话下会返回 `403`。
+- 失败响应：`{ "error": { "code", "message", "requestId" }, "message", "requestId" }`。
+- `shared/api-contracts.js` 是前后端共享的路径、方法、基础字段和 capability 来源。
+- 前端 `apiContractRequest()` 统一拼接查询参数、超时、错误和凭据。
+- 非 GET 写入接口在只读会话下返回 `403`；缺少 capability 同样返回 `403`。
 
 ## 认证
 
 - `POST /login`：表单登录。
+- `POST /register-invite`：使用一次性邀请码建立成员学习空间。
 - `GET /health`：健康检查，不需要登录。
+- `GET /ready`：启动、静态资源、数据库和迁移就绪检查。
 - Cookie：`exam_planner_session`，HttpOnly，SameSite=Lax。
+
+## 账户与权限
+
+- `GET /api/session`
+- `GET /api/users`
+- `POST /api/users/invites`
+- `POST /api/users/invites/revoke`
+- `POST /api/users/update`
+- `POST /api/users/reset-password`
+- `POST /api/users/revoke-sessions`
+
+用户管理只允许 `users.manage`。停用账户、重置密码和手动撤销都会使现有会话失效。
 
 ## 学习核心
 
@@ -39,6 +54,9 @@
 - `GET /api/statistics/summary`
 - `GET /api/learning-progress`
 - `GET /api/project-progress`
+- `GET /api/study-comparison`
+- `GET /api/focus-timer`
+- `POST /api/focus-timer/action`
 
 ## 报告与错因
 

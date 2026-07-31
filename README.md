@@ -1,8 +1,8 @@
 # Exam Planner Web App
 
-一个面向考研复习的个人学习管理 Web App，也是我的 Codex 初尝试作品。项目从本地学习计划工具起步，逐步加入了服务器部署、多端同步、每日复盘、学习时间统计、模考成绩管理，以及英文易混单词整理功能。
+一个面向考研复习的小型多用户学习管理 Web App。项目从个人学习计划工具起步，现已支持独立学习空间、跨用户学习时长对比、多端同步、每日复盘、专注计时、模考成绩和英文易混单词整理。
 
-当前版本适合个人在电脑浏览器中长期使用：考研计划数据可部署到自己的服务器统一保存，易混单词模块保持本地优先，并支持定时备份到服务器。
+管理员通过一次性邀请码添加成员；每个成员拥有独立的课程、学习时间、任务、复盘、模考、单词和番茄钟数据，只有学习时长对比是共享视图。运维、通知、简报、备份和用户管理仅对具备对应能力的账户开放。
 
 ## 交接文档
 
@@ -30,15 +30,16 @@
 - 自动学习报告：服务器生成周报、月报，汇总学习时间、复盘、任务、喝水和模考
 - 学习进度仪表盘：近 30 天趋势、目标达成、复盘评分与任务完成
 - 项目进展看板：按项目查看投入、占比、最近活跃和短期趋势
-- 理财管理：本地加密保险箱、服务器密文同步、交易/计划/报表导出
-- 运维观察台：备份管理、访问统计和日志摘要
+- 网页专注计时：每个用户独立计时，断网操作可补传并幂等去重
+- 多用户学习空间：邀请码注册、账户停用、密码重置、会话撤销和数据隔离
+- 学习时长对比：只共享聚合时长，不共享个人任务、复盘或课程明细
+- 运维与健康中心：备份、访问统计、日志摘要、通知健康和磁盘 I/O 压力
 - 深色模式：支持全局浅色/深色切换并保存到本机
 
 ## 技术栈
 
 - React + TypeScript + Vite
 - Tailwind CSS
-- Framer Motion
 - Recharts
 - Dexie.js + IndexedDB
 - React Router
@@ -49,8 +50,8 @@
 
 ## 性能优化
 
-- 首页优先加载：路由按页面懒加载，进入首页后再后台预加载其他页面。
-- 图表按需加载：Recharts 被拆到独立 `Charts` chunk，只有首页图表、统计页和报告页需要时才加载。
+- 首页优先加载：路由按页面懒加载，只在悬停或聚焦导航时预取目标页面。
+- 图表按需加载：首页图表进入视口后才加载，Recharts 单独分包，不进入首屏预加载链。
 - 首屏轻量接口：首页使用 `/api/dashboard`，不再依赖全量 `/api/state`。
 - 统计服务端聚合：最近 7 天趋势、今日分布、最近 30 天项目累计由 SQLite 聚合后返回。
 - 历史数据分页：模考记录和完整复盘报告支持按页加载。
@@ -64,10 +65,10 @@
 
 项目当前采用混合数据策略：
 
-- 考研计划主数据由部署版服务器结构化 SQLite 保存，方便多端同步。
+- 每个正式账户的数据由服务器结构化 SQLite 保存，并以 `user_id` 强制隔离。
+- 密码使用带独立盐值的 scrypt 哈希；会话只在服务器保存哈希后的不透明 Token。
 - 旧版浏览器 IndexedDB 数据可通过迁移页导入服务器。
-- 易混单词模块本地优先，保存在当前浏览器 `localStorage`。
-- 易混单词支持每小时向服务器上传备份快照，也支持手动导入导出 JSON。
+- 易混单词仍支持浏览器本地使用，同时按账户备份到服务器并保留历史版本。
 - 服务器每日和每周自动创建 SQLite 快照，并按 daily、weekly、deploy、manual、migration 分类保留；设置页可手动备份和恢复。
 - 服务器端 ECDICT 英汉词典保存在独立的 `data/dictionary.sqlite`，查词不依赖外部 API，也不再拖大主业务库和每次业务备份。
 - 删除学习项目或科目不会破坏历史记录，历史数据保留名称快照。
@@ -85,6 +86,12 @@
 - `confusing_words_backup`
 - `backup_log`
 - `learning_reports`
+- `user_accounts`
+- `user_credentials`
+- `user_capabilities`
+- `user_sessions`
+- `user_invites`
+- `focus_timer_sessions`
 
 ECDICT 的 `dictionary_entries` 与导入元数据位于独立的 `data/dictionary.sqlite`。
 
@@ -133,7 +140,8 @@ scripts/start-exam-planner.bat
 - Node.js 服务：`server/auth-static-server.mjs`
 - Nginx 反向代理
 - systemd 服务：`exam-planner`
-- 简单密码登录，无用户名
+- 账户卡片加独立密码登录；成员由管理员生成的一次性邀请码注册
+- 权限使用持久化 capability 控制，不依赖固定用户编号
 - 登录防护：同一 IP 连续输错 3 次锁定 30 分钟，失败响应随机延迟 1-2 秒
 - Nginx 限流：`/login` 每 IP 约 6 次/分钟，超出返回 429
 
@@ -163,14 +171,14 @@ scripts/start-exam-planner.bat
 
 ```bash
 npm run lint
+npm test
 npm run build
+npm run check:bundle
 ```
 
-## 后续计划
+Break Guard 桌面端测试：
 
-- 番茄钟
-- AI 学习计划建议
-- 自动调整短期任务
-- 数据导出报告
-- 学习报告 PDF/Markdown 导出
-- SQLite FTS 全文搜索
+```bash
+cd desktop-break-guard
+python -m unittest discover -s tests -v
+```

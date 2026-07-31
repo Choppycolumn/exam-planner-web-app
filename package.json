@@ -14,7 +14,8 @@
     "visual:capture": "node scripts/capture-apple-ui.mjs",
     "check:data": "node scripts/check-data-integrity.mjs",
     "check:backups": "node scripts/verify-backups.mjs",
-    "check:queries": "node scripts/explain-sqlite-queries.mjs"
+    "check:queries": "node scripts/explain-sqlite-queries.mjs",
+    "check:bundle": "node scripts/check-bundle-budget.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",

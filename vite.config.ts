@@ -8,6 +8,12 @@ const apiProxyTarget = process.env.VITE_API_PROXY_TARGET
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
+    modulePreload: {
+      resolveDependencies(_filename, dependencies, context) {
+        if (context.hostType !== 'html') return dependencies;
+        return dependencies.filter((dependency) => !/(?:^|\/)(?:charts|local-db)-/.test(dependency));
+      },
+    },
     rollupOptions: {
       output: {
         manualChunks(id) {
