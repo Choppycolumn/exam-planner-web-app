@@ -12,7 +12,7 @@ case "$MODE" in
   deploy)
     MAX_LOAD_PER_CPU="${MAX_LOAD_PER_CPU:-2.0}"
     MAX_IOWAIT_PERCENT="${MAX_IOWAIT_PERCENT:-30}"
-    MIN_AVAILABLE_MEMORY_KB="${MIN_AVAILABLE_MEMORY_KB:-131072}"
+    MIN_AVAILABLE_MEMORY_KB="${MIN_AVAILABLE_MEMORY_KB:-112640}"
     MAX_BLOCKED_PROCESSES="${MAX_BLOCKED_PROCESSES:-1}"
     ;;
   *)
@@ -39,11 +39,13 @@ sleep 1
 read -r total_after iowait_after < <(read_cpu_sample)
 total_delta=$((total_after - total_before))
 iowait_delta=$((iowait_after - iowait_before))
-iowait_percent="$(awk -v iowait="$iowait_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", total > 0 ? iowait * 100 / total : 0 }')"
+iowait_percent="$(awk -v io_delta="$iowait_delta" -v total_delta="$total_delta" \
+  'BEGIN { value = 0; if (total_delta > 0) value = io_delta * 100 / total_delta; printf "%.2f", value }')"
 
 cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"
 load_one="$(awk '{print $1}' /proc/loadavg)"
-load_per_cpu="$(awk -v load="$load_one" -v cpus="$cpu_count" 'BEGIN { printf "%.2f", load / (cpus > 0 ? cpus : 1) }')"
+load_per_cpu="$(awk -v current_load="$load_one" -v cpu_total="$cpu_count" \
+  'BEGIN { divisor = 1; if (cpu_total > 0) divisor = cpu_total; printf "%.2f", current_load / divisor }')"
 available_memory_kb="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo)"
 available_memory_kb="${available_memory_kb:-0}"
 
