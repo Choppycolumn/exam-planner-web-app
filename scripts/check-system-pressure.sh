@@ -39,7 +39,7 @@ sleep 1
 read -r total_after iowait_after < <(read_cpu_sample)
 total_delta=$((total_after - total_before))
 iowait_delta=$((iowait_after - iowait_before))
-iowait_percent="$(awk -v wait="$iowait_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", total > 0 ? wait * 100 / total : 0 }')"
+iowait_percent="$(awk -v iowait="$iowait_delta" -v total="$total_delta" 'BEGIN { printf "%.2f", total > 0 ? iowait * 100 / total : 0 }')"
 
 cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"
 load_one="$(awk '{print $1}' /proc/loadavg)"
