@@ -33,6 +33,7 @@ suite('production server runtime', () => {
   let temporary;
   let baseUrl;
   let cookie;
+  let childOutput = '';
 
   beforeAll(async () => {
     temporary = mkdtempSync(join(tmpdir(), 'exam-planner-runtime-'));
@@ -54,16 +55,24 @@ suite('production server runtime', () => {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    child.stdout.on('data', (chunk) => { childOutput += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { childOutput += chunk.toString('utf8'); });
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
+      if (child.exitCode !== null) break;
       try {
         const ready = await request(baseUrl, '/ready');
         if (ready.status === 200) break;
       } catch {}
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
-    const ready = await request(baseUrl, '/ready');
-    if (ready.status !== 200) throw new Error(`server did not become ready: ${ready.text}`);
+    let ready;
+    try {
+      ready = await request(baseUrl, '/ready');
+    } catch (error) {
+      throw new Error(`server did not become ready: ${error.message}\n${childOutput}`);
+    }
+    if (ready.status !== 200) throw new Error(`server did not become ready: ${ready.text}\n${childOutput}`);
     const login = await fetch(`${baseUrl}/login`, {
       method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'password=runtime-test-password',
     });
@@ -71,7 +80,7 @@ suite('production server runtime', () => {
   }, 30_000);
 
   afterAll(async () => {
-    if (child && !child.killed) {
+    if (child && child.exitCode === null && !child.killed) {
       child.kill('SIGTERM');
       await new Promise((resolveWait) => child.once('exit', resolveWait));
     }

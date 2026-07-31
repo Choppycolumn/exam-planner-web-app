@@ -5,10 +5,18 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
             sqlite: runtime.sqliteRepository,
             migrationsDir: runtime.migrationsDir,
             currentVersion,
-            shouldApply: (fileName) => ![
-                '019_market_copilot_v1.sql',
-                '020_market_copilot_ledger_refactor.sql',
-            ].includes(fileName),
+            shouldApply: (fileName) => {
+                if ([
+                    '019_market_copilot_v1.sql',
+                    '020_market_copilot_ledger_refactor.sql',
+                ].includes(fileName))
+                    return false;
+                if (fileName === '029_archive_orphaned_investment_legs.sql') {
+                    return runtime.schemaBootstrapRepository.tableExists('investment_transaction_legs')
+                        && runtime.schemaBootstrapRepository.tableExists('investment_transactions');
+                }
+                return true;
+            },
             setVersion: (version) => runtime.appMetadataRepository.set('structured_schema_version', version),
         });
         if (applied.length) {

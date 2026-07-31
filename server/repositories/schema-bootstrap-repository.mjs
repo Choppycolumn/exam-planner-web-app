@@ -6,6 +6,13 @@ const TASK_REMINDER_COLUMNS = Object.freeze([
 ]);
 
 export function createSchemaBootstrapRepository(database) {
+  function tableExists(name) {
+    return Number(database.scalar(
+      "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?;",
+      [String(name || '')],
+    ) || 0) > 0;
+  }
+
   function initializeCoreTables() {
     database.run(`PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS app_metadata(
@@ -45,6 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_backup_log_created_at ON backup_log(created_at);`
   }
 
   return {
+    tableExists,
     initializeCoreTables,
     stateExists,
     ensureTaskReminderColumns,
