@@ -70,5 +70,43 @@ ON CONFLICT(date,project_id) DO UPDATE SET
   updated_at=datetime('now');`, [sessionDate, project.id, project.name, minutes, note, ownerId()]);
       return { sessionDate, projectId: Number(project.id), projectName: project.name, minutes, sessionSequence: Number(sessionSequence || 1) };
     },
+    adjustStudyTime({ sessionDate, projectId, previousDurationSeconds, durationSeconds, sessionSequence, deleted = false }) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) return null;
+      const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = ? LIMIT 1;', [projectId, ownerId()])[0];
+      if (!project) return null;
+      const roundedMinutes = (seconds) => Math.max(1, Math.min(24 * 60, Math.round(Number(seconds || 0) / 60)));
+      const previousMinutes = roundedMinutes(previousDurationSeconds);
+      const nextMinutes = deleted ? 0 : roundedMinutes(durationSeconds);
+      const deltaMinutes = nextMinutes - previousMinutes;
+      const existing = database.json(`SELECT id,minutes,note FROM study_time_records
+WHERE date=? AND project_id=? AND user_id=? LIMIT 1;`, [sessionDate, project.id, ownerId()])[0];
+      if (!existing) {
+        if (nextMinutes <= 0) {
+          return { sessionDate, projectId: Number(project.id), projectName: project.name, previousMinutes, minutes: 0, deltaMinutes: 0, totalMinutes: 0 };
+        }
+        const note = `Break Guard 修正记录 #${Math.max(1, Number(sessionSequence || 1))}`;
+        database.execute(`INSERT INTO study_time_records
+(date,project_id,project_name_snapshot,minutes,note,schema_version,created_at,updated_at,user_id)
+VALUES(?,?,?,?,?,1,datetime('now'),datetime('now'),?);`, [sessionDate, project.id, project.name, nextMinutes, note, ownerId()]);
+        return { sessionDate, projectId: Number(project.id), projectName: project.name, previousMinutes, minutes: nextMinutes, deltaMinutes: nextMinutes, totalMinutes: nextMinutes };
+      }
+      const currentMinutes = Math.max(0, Number(existing.minutes || 0));
+      const totalMinutes = Math.max(0, currentMinutes + deltaMinutes);
+      if (totalMinutes === 0) {
+        database.execute('DELETE FROM study_time_records WHERE id=? AND user_id=?;', [existing.id, ownerId()]);
+      } else {
+        database.execute(`UPDATE study_time_records SET minutes=?,project_name_snapshot=?,updated_at=datetime('now')
+WHERE id=? AND user_id=?;`, [totalMinutes, project.name, existing.id, ownerId()]);
+      }
+      return {
+        sessionDate,
+        projectId: Number(project.id),
+        projectName: project.name,
+        previousMinutes,
+        minutes: nextMinutes,
+        deltaMinutes,
+        totalMinutes,
+      };
+    },
   };
 }

@@ -262,6 +262,7 @@ export interface BreakGuardSummary {
 
 export interface BreakGuardScheduleConfig {
   dailyTargetMinutes: number;
+  longStudyMinutes: number;
   breakMinutes: number;
   lagGraceMinutes: number;
   lagRepeatMinutes: number;

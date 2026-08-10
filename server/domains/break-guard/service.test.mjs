@@ -13,6 +13,7 @@ function fixture() {
     getScheduleConfig: vi.fn(() => null),
     saveScheduleConfig: vi.fn((config) => config),
     appendStudyTime: vi.fn((input) => ({ ...input, projectName: '高等数学', minutes: 50 })),
+    adjustStudyTime: vi.fn((input) => ({ ...input, projectName: '高等数学', minutes: 30, deltaMinutes: -20 })),
   };
   const refreshStudySummariesForDate = vi.fn();
   const cancelScheduleLagNotifications = vi.fn();
@@ -100,6 +101,7 @@ describe('break guard service', () => {
     expect(result.config.dailyTargetMinutes).toBe(360);
     expect(result.config).toEqual({
       dailyTargetMinutes: 360,
+      longStudyMinutes: 180,
       breakMinutes: 10,
       lagGraceMinutes: 20,
       lagRepeatMinutes: 30,
@@ -129,6 +131,36 @@ describe('break guard service', () => {
       payload: { sessionDate: '2026-07-12', sessionCount: 3, studySeconds: 7200, targetMinutes: 240 },
     });
     expect(event.label).toBe('结束一天学习');
+    expect(repository.appendStudyTime).not.toHaveBeenCalled();
+  });
+
+  it('applies completed-session corrections once and refreshes the matching date', () => {
+    const { service, repository, refreshStudySummariesForDate } = fixture();
+    const body = {
+      eventId: 'session_12345678_corrected_1',
+      eventType: 'study_session_corrected',
+      payload: {
+        sessionDate: '2026-08-10', projectId: 10, sessionSequence: 2,
+        previousDurationSeconds: 3000, durationSeconds: 1800,
+      },
+    };
+    const first = service.recordEvent(body);
+    const second = service.recordEvent(body);
+    expect(first.studyRecord.deltaMinutes).toBe(-20);
+    expect(second.duplicate).toBe(true);
+    expect(repository.adjustStudyTime).toHaveBeenCalledOnce();
+    expect(refreshStudySummariesForDate).toHaveBeenCalledWith('2026-08-10');
+  });
+
+  it('supports deleting a completed session without treating it as another completion', () => {
+    const { service, repository } = fixture();
+    const event = service.recordEvent({
+      eventId: 'session_12345678_deleted_1',
+      eventType: 'study_session_deleted',
+      payload: { sessionDate: '2026-08-10', projectId: 10, previousDurationSeconds: 1800 },
+    });
+    expect(event.label).toBe('删除学习记录');
+    expect(repository.adjustStudyTime).toHaveBeenCalledWith(expect.objectContaining({ deleted: true }));
     expect(repository.appendStudyTime).not.toHaveBeenCalled();
   });
 });

@@ -10,13 +10,15 @@ class ScheduleSettingsDialog:
     WIDTH = 420
     HEIGHT = 548
 
-    def __init__(self, parent, config, on_save):
+    def __init__(self, parent, config, on_save, on_history):
         self.config = config
         self.on_save = on_save
+        self.on_history = on_history
         self.values = {
             "daily_target_minutes": config.daily_target_minutes,
             "break_minutes": config.break_minutes,
             "lag_grace_minutes": config.lag_grace_minutes,
+            "long_study_minutes": config.long_study_minutes,
         }
         self.value_items = {}
         self.buttons: list[CanvasButton] = []
@@ -74,18 +76,25 @@ class ScheduleSettingsDialog:
         self._button(366, 24, 30, 30, "×", self.close, "close")
 
     def show_menu(self) -> None:
-        self._shell("学习设置", "设置目标时长，课程自动从网站同步")
+        self._shell("学习设置", "管理学习节奏、核对规则与历史记录")
         self._menu_card(
-            28, 108, "课程列表", "查看从网站同步的可选学习科目", "01", self.show_courses, "menu_courses",
+            28, 98, "课程列表", "查看从网站同步的可选学习科目", "01", self.show_courses, "menu_courses",
         )
         self._menu_card(
-            28, 212, "目标与提醒", "设置每日总时长、课间休息和提醒宽限", "02", self.show_timing, "menu_timing",
+            28, 190, "目标与提醒", "设置每日目标、休息与超长计时核对", "02", self.show_timing, "menu_timing",
         )
-        rounded_rect(self.canvas, 28, 332, 392, 410, 22, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
-        self.canvas.create_oval(48, 354, 58, 364, fill=LIQUID.success, outline="")
-        self.canvas.create_text(72, 359, anchor="w", text="学习设置会自动同步到网站", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 10, "bold"))
-        self.canvas.create_text(48, 386, anchor="w", text="主面板直接选择科目，不再安排固定节次。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
+        self._menu_card(
+            28, 282, "学习记录", "修改或删除已经完成的课程计时", "03", self.open_history, "menu_history",
+        )
+        rounded_rect(self.canvas, 28, 386, 392, 448, 20, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        self.canvas.create_oval(48, 410, 58, 420, fill=LIQUID.success, outline="")
+        self.canvas.create_text(72, 415, anchor="w", text="设置与修正都会安全同步到网站", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 436, anchor="w", text="离线时先保存在本机，恢复连接后自动补传。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8))
         self._button(28, 478, 364, 42, "完成", self.close, "done", primary=True)
+
+    def open_history(self) -> None:
+        self.close()
+        self.on_history()
 
     def _menu_card(self, x, y, title, subtitle, index, command, tag) -> None:
         rounded_rect(
@@ -126,13 +135,14 @@ class ScheduleSettingsDialog:
             ("daily_target_minutes", "每日目标", "分钟", 30, 960, 30),
             ("break_minutes", "课间休息", "分钟", 1, 60, 1),
             ("lag_grace_minutes", "提醒宽限", "分钟", 0, 180, 5),
+            ("long_study_minutes", "超长核对", "分钟", 60, 720, 30),
         ]
         for index, row in enumerate(rows):
-            self._row(110 + index * 68, *row)
-        rounded_rect(self.canvas, 28, 330, 392, 412, 20, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
-        self.canvas.create_text(48, 353, anchor="w", text="时长制进度", fill=LIQUID.accent, font=("Microsoft YaHei UI", 9, "bold"))
-        self.canvas.create_text(48, 378, anchor="w", text="点击开始时记录起点，手动结束时记录真实课长。", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
-        self.canvas.create_text(48, 399, anchor="w", text="进度 = 今日已学时长 ÷ 每日目标时长。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 9))
+            self._row(100 + index * 57, *row)
+        rounded_rect(self.canvas, 28, 342, 392, 438, 20, fill=LIQUID.neutral_soft, outline=LIQUID.panel_border_soft, width=1)
+        self.canvas.create_text(48, 365, anchor="w", text="忘记结束保护", fill=LIQUID.accent, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 390, anchor="w", text="超过核对阈值后，结束课程前必须确认实际分钟。", fill=LIQUID.text_primary, font=("Microsoft YaHei UI", 9, "bold"))
+        self.canvas.create_text(48, 416, anchor="w", text="取消核对会继续计时，不会偷偷保存异常时长。", fill=LIQUID.text_secondary, font=("Microsoft YaHei UI", 8))
         self._button(28, 472, 174, 42, "返回", self.show_menu, "timing_cancel")
         self._button(216, 472, 176, 42, "保存时间", self.save_timing, "timing_save", primary=True)
 
@@ -173,6 +183,7 @@ class ScheduleSettingsDialog:
         self.config.daily_target_minutes = self.values["daily_target_minutes"]
         self.config.break_minutes = self.values["break_minutes"]
         self.config.lag_grace_minutes = self.values["lag_grace_minutes"]
+        self.config.long_study_minutes = self.values["long_study_minutes"]
         self.config.save()
         self.on_save()
         self.close()

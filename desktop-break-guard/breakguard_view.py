@@ -336,8 +336,10 @@ class ViewMixin:
         if self.planner.session:
             elapsed = self.planner.study_elapsed()
             started_text = time.strftime("%H:%M", time.localtime(self.planner.session.started_at))
-            self.set_timer(fmt_seconds(elapsed), f"{self.planner.session.project_name} · {started_text} 开始 · 正在记录")
-            self.set_tone("running")
+            is_long = elapsed >= self.config.long_study_minutes * 60
+            subtitle = "已超过核对阈值 · 结束时请确认实际时长" if is_long else f"{self.planner.session.project_name} · {started_text} 开始 · 正在记录"
+            self.set_timer(fmt_seconds(elapsed), subtitle)
+            self.set_tone("warning" if is_long else "running")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text="结束学习并休息")
         elif snapshot["running"] and snapshot["remaining"] > 0:
@@ -368,8 +370,10 @@ class ViewMixin:
             return
         elapsed = self.planner.study_elapsed()
         started_text = time.strftime("%H:%M", time.localtime(session.started_at))
-        self.set_timer(fmt_seconds(elapsed), f"{started_text} 开始 · 已自动记录")
-        self.set_tone("running")
+        is_long = elapsed >= self.config.long_study_minutes * 60
+        subtitle = "已超过核对阈值 · 结束时确认" if is_long else f"{started_text} 开始 · 已自动记录"
+        self.set_timer(fmt_seconds(elapsed), subtitle)
+        self.set_tone("warning" if is_long else "running")
         self.canvas.itemconfigure("btn_primary__label", text="结束课程")
         segment = self.planner.segment_snapshot()
         segment_count = len(segment["segments"])

@@ -65,6 +65,37 @@ const projectsResponse = await request('/api/projects', { cookie });
 const focusProject = JSON.parse(projectsResponse.body).items?.find((project) => project.isActive);
 if (projectsResponse.status !== 200 || !focusProject?.id) throw new Error('Focus timer project lookup failed');
 const focusStamp = Date.now();
+const correctionSessionId = `deployment_correction_${focusStamp}`;
+const completedStudy = await request('/api/break-guard/events', {
+  method: 'POST',
+  headers: { 'x-break-guard-token': breakGuardToken },
+  body: {
+    eventId: `${correctionSessionId}_completed`,
+    eventType: 'class_completed',
+    payload: { sessionId: correctionSessionId, sessionDate: dueDate, projectId: focusProject.id, durationSeconds: 3000, sessionSequence: 1 },
+  },
+});
+if (completedStudy.status !== 200) throw new Error(`Break Guard study completion failed: ${completedStudy.status}`);
+const correctionBody = {
+  eventId: `${correctionSessionId}_corrected`,
+  eventType: 'study_session_corrected',
+  payload: { sessionId: correctionSessionId, sessionDate: dueDate, projectId: focusProject.id, previousDurationSeconds: 3000, durationSeconds: 1800, sessionSequence: 1 },
+};
+const correctedStudy = await request('/api/break-guard/events', {
+  method: 'POST', headers: { 'x-break-guard-token': breakGuardToken }, body: correctionBody,
+});
+const replayedCorrection = await request('/api/break-guard/events', {
+  method: 'POST', headers: { 'x-break-guard-token': breakGuardToken }, body: correctionBody,
+});
+const correctedRecords = JSON.parse((await request(`/api/study-records?date=${dueDate}`, { cookie })).body).records || [];
+const correctedRecord = correctedRecords.find((record) => Number(record.projectId) === Number(focusProject.id));
+if (
+  correctedStudy.status !== 200
+  || JSON.parse(replayedCorrection.body).event?.duplicate !== true
+  || Number(correctedRecord?.minutes) !== 30
+) {
+  throw new Error('Break Guard study correction or idempotency failed');
+}
 const focusSessionId = `deployment_focus_${focusStamp}`;
 const focusStarted = await request('/api/focus-timer/action', {
   method: 'POST',
@@ -104,5 +135,5 @@ if ((await request('/api/market-copilot', { cookie })).status !== 410) throw new
 console.log(JSON.stringify({
   ok: true,
   baseUrl: baseUrl.origin,
-  checks: ['authenticated-login', 'task-write-readback', 'break-guard-idempotency', 'focus-timer-write-readback', 'focus-timer-idempotency', 'retired-route-boundaries'],
+  checks: ['authenticated-login', 'task-write-readback', 'break-guard-idempotency', 'break-guard-study-correction', 'focus-timer-write-readback', 'focus-timer-idempotency', 'retired-route-boundaries'],
 }));

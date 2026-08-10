@@ -101,12 +101,22 @@ class StudyPlanner:
         self.store.save_study_session(asdict(self.session))
         return self.session
 
-    def complete_study(self, now: float | None = None) -> tuple[StudySession | None, int]:
+    def complete_study(
+        self,
+        now: float | None = None,
+        duration_override_seconds: int | None = None,
+    ) -> tuple[StudySession | None, int]:
         if not self.session:
             return None, 0
         now = now if now is not None else time.time()
         current = self.session
-        duration = max(0, int(now - current.started_at))
+        elapsed = max(0, int(now - current.started_at))
+        if duration_override_seconds is None:
+            duration = elapsed
+        else:
+            minimum = 60 if elapsed >= 60 else 0
+            duration = min(elapsed, max(minimum, int(duration_override_seconds)))
+        ended_at = current.started_at + duration
         self.store.add_study_session({
             "session_id": current.session_id,
             "session_date": current.session_date,
@@ -114,7 +124,7 @@ class StudyPlanner:
             "project_id": current.project_id,
             "project_name": current.project_name,
             "started_at": current.started_at,
-            "ended_at": now,
+            "ended_at": ended_at,
             "duration_seconds": duration,
         })
         self.store.update_daily_study_state(current.session_date, selected_project_id=current.project_id)

@@ -4,6 +4,7 @@ import { serverApi, type BreakGuardScheduleConfig, type BreakGuardScheduleRespon
 
 const defaults: BreakGuardScheduleConfig = {
   dailyTargetMinutes: 400,
+  longStudyMinutes: 180,
   breakMinutes: 10,
   lagGraceMinutes: 20,
   lagRepeatMinutes: 30,
@@ -23,7 +24,7 @@ export function BreakGuardScheduleSection({ visible, readOnly }: BreakGuardSched
     if (!visible) return;
     void serverApi.getBreakGuardSchedule()
       .then((result) => {
-        setData(result);
+        setData({ ...result, config: { ...defaults, ...result.config } });
         setStatus('Break Guard 会每分钟同步一次课程与目标');
       })
       .catch(() => setStatus('学习设置读取失败，请稍后重试'));
@@ -56,10 +57,11 @@ export function BreakGuardScheduleSection({ visible, readOnly }: BreakGuardSched
         </div>
         <span className="inline-flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700"><Clock3 size={14} />{status}</span>
       </div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <label><span className="label">每日目标（分钟）</span><input className="field" type="number" min={30} max={960} step={30} value={data.config.dailyTargetMinutes} onChange={(event) => update({ dailyTargetMinutes: Math.max(30, Math.min(960, Number(event.target.value) || 30)) })} /></label>
         <label><span className="label">课间休息（分钟）</span><input className="field" type="number" min={1} max={60} value={data.config.breakMinutes} onChange={(event) => update({ breakMinutes: Number(event.target.value) })} /></label>
         <label><span className="label">进度宽限（分钟）</span><input className="field" type="number" min={0} max={180} step={5} value={data.config.lagGraceMinutes} onChange={(event) => update({ lagGraceMinutes: Number(event.target.value) })} /></label>
+        <label><span className="label">超长计时核对（分钟）</span><input className="field" type="number" min={60} max={720} step={30} value={data.config.longStudyMinutes} onChange={(event) => update({ longStudyMinutes: Math.max(60, Math.min(720, Number(event.target.value) || 180)) })} /></label>
       </div>
       <div className="mt-5">
         <p className="label">桌面端可选课程</p>

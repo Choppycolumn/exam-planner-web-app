@@ -14,6 +14,7 @@ class Config:
     token: str
     break_minutes: int = 10
     daily_target_minutes: int = 400
+    long_study_minutes: int = 180
     lag_grace_minutes: int = 20
     lag_repeat_minutes: int = 30
     available_projects: list[dict] = field(default_factory=list)
@@ -40,6 +41,7 @@ class Config:
             server_url=str(raw.get("server_url", "")).rstrip("/"), token=token,
             break_minutes=max(1, int(raw.get("break_minutes", 10))),
             daily_target_minutes=max(30, min(960, int(raw.get("daily_target_minutes", legacy_daily_lessons * legacy_lesson_minutes)))),
+            long_study_minutes=max(60, min(720, int(raw.get("long_study_minutes", 180)))),
             lag_grace_minutes=max(0, min(180, int(raw.get("lag_grace_minutes", 20)))),
             lag_repeat_minutes=max(5, min(180, int(raw.get("lag_repeat_minutes", 30)))),
             available_projects=[

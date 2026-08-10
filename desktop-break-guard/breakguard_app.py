@@ -8,6 +8,7 @@ from tkinter import Canvas, Tk, Toplevel, messagebox
 from breakguard_config import Config
 from breakguard_instance import SingleInstance
 from breakguard_logging import log_error
+from breakguard_records import StudyHistoryDialog, StudyMinutesDialog
 from breakguard_runtime import DATABASE_FILE, ICON_FILE
 from breakguard_settings import ScheduleSettingsDialog
 from breakguard_state import BreakStateMachine, utc_iso
@@ -83,6 +84,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.fullscreen_kind = ""
         self.settings_dialog = None
         self.summary_dialog = None
+        self.history_dialog = None
         self.last_fullscreen_raise = 0.0
 
         self.enable_acrylic()
@@ -117,6 +119,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
     def schedule_config_payload(self) -> dict:
         return {
             "dailyTargetMinutes": self.config.daily_target_minutes,
+            "longStudyMinutes": self.config.long_study_minutes,
             "breakMinutes": self.config.break_minutes,
             "lagGraceMinutes": self.config.lag_grace_minutes,
             "lagRepeatMinutes": self.config.lag_repeat_minutes,
@@ -129,6 +132,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         config = message.get("config") or {}
         projects = message.get("projects") or []
         self.config.daily_target_minutes = max(30, min(960, int(config.get("dailyTargetMinutes", self.config.daily_target_minutes))))
+        self.config.long_study_minutes = max(60, min(720, int(config.get("longStudyMinutes", self.config.long_study_minutes))))
         self.config.break_minutes = max(1, min(60, int(config.get("breakMinutes", self.config.break_minutes))))
         self.config.lag_grace_minutes = max(0, min(180, int(config.get("lagGraceMinutes", self.config.lag_grace_minutes))))
         self.config.lag_repeat_minutes = max(5, min(180, int(config.get("lagRepeatMinutes", self.config.lag_repeat_minutes))))
@@ -224,16 +228,36 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.refresh_view_state()
 
     def complete_study_record(self, auto: bool = False):
-        completed, duration = self.planner.complete_study()
+        session = self.planner.session
+        if not session:
+            return None, 0
+        elapsed = self.planner.study_elapsed()
+        duration_override = None
+        if not auto and elapsed >= self.config.long_study_minutes * 60:
+            duration_override = StudyMinutesDialog(
+                self.root,
+                title="核对本次学习时长",
+                subtitle=f"计时已超过 {self.config.long_study_minutes} 分钟，可能忘记结束",
+                project_name=session.project_name,
+                elapsed_seconds=elapsed,
+                initial_minutes=max(1, elapsed // 60),
+                confirm_label="确认并结束",
+                cancel_label="继续计时",
+            ).wait()
+            if duration_override is None:
+                self.set_status("已继续计时，本次课程尚未保存")
+                return None, 0
+        completed, duration = self.planner.complete_study(duration_override_seconds=duration_override)
         if not completed:
             return None, 0
         self.client.post_event(
             "class_completed",
             f"{completed.session_id}_class_completed",
             startedAt=completed.started_iso,
-            endedAt=utc_iso(),
+            endedAt=utc_iso(completed.started_at + duration),
             note=f"{completed.project_name}{'到时自动' if auto else '手动'}结束学习",
             payload={
+                "sessionId": completed.session_id,
                 "sessionSequence": completed.sequence_number,
                 "durationSeconds": duration,
                 "projectId": completed.project_id,
@@ -252,7 +276,9 @@ class BreakGuardApp(WindowMixin, ViewMixin):
             )
             if not confirmed:
                 return
-            self.complete_study_record(auto=False)
+            completed, _duration = self.complete_study_record(auto=False)
+            if not completed:
+                return
             self.exit_compact_mode()
         if self.machine.session:
             confirmed = messagebox.askyesno(
@@ -317,7 +343,71 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         if self.settings_dialog and self.settings_dialog.window.winfo_exists():
             bring_to_front(self.settings_dialog.window)
             return
-        self.settings_dialog = ScheduleSettingsDialog(self.root, self.config, self.on_schedule_settings_saved)
+        self.settings_dialog = ScheduleSettingsDialog(self.root, self.config, self.on_schedule_settings_saved, self.open_study_history)
+
+    def open_study_history(self) -> None:
+        if self.history_dialog and self.history_dialog.window.winfo_exists():
+            bring_to_front(self.history_dialog.window)
+            return
+        self.history_dialog = StudyHistoryDialog(
+            self.root,
+            self.store,
+            self.update_study_session,
+            self.delete_study_session,
+            on_close=lambda: setattr(self, "history_dialog", None),
+        )
+
+    def update_study_session(self, session_id: str, duration_seconds: int) -> bool:
+        try:
+            before, after = self.store.update_study_session_duration(session_id, duration_seconds)
+        except Exception as exc:
+            log_error("study session update failed", exc)
+            messagebox.showerror("修改失败", "这条学习记录无法修改，请稍后重试。", parent=self.root)
+            return False
+        event_id = f"{session_id}_corrected_{int(time.time() * 1000)}"
+        self.client.post_event(
+            "study_session_corrected",
+            event_id,
+            note=f"修正 {after['project_name']} 学习时长",
+            payload={
+                "sessionId": session_id,
+                "sessionDate": after["session_date"],
+                "sessionSequence": after["sequence_number"],
+                "projectId": after["project_id"],
+                "projectName": after["project_name"],
+                "previousDurationSeconds": before["duration_seconds"],
+                "durationSeconds": after["duration_seconds"],
+            },
+        )
+        self.set_status(f"已将 {after['project_name']} 修正为 {after['duration_seconds'] // 60} 分钟")
+        self.refresh_view_state()
+        return True
+
+    def delete_study_session(self, session_id: str) -> bool:
+        try:
+            record = self.store.delete_study_session(session_id)
+        except Exception as exc:
+            log_error("study session deletion failed", exc)
+            messagebox.showerror("删除失败", "这条学习记录无法删除，请稍后重试。", parent=self.root)
+            return False
+        event_id = f"{session_id}_deleted_{int(time.time() * 1000)}"
+        self.client.post_event(
+            "study_session_deleted",
+            event_id,
+            note=f"删除 {record['project_name']} 学习记录",
+            payload={
+                "sessionId": session_id,
+                "sessionDate": record["session_date"],
+                "sessionSequence": record["sequence_number"],
+                "projectId": record["project_id"],
+                "projectName": record["project_name"],
+                "previousDurationSeconds": record["duration_seconds"],
+                "durationSeconds": 0,
+            },
+        )
+        self.set_status(f"已删除 {record['project_name']} 的学习记录")
+        self.refresh_view_state()
+        return True
     def on_schedule_settings_saved(self, sync: bool = True) -> None:
         self.machine.break_seconds = self.config.break_minutes * 60
         self.planner.configure(

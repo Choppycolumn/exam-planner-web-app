@@ -3,6 +3,7 @@
   "token": "fill-break-guard-token-here",
   "break_minutes": 10,
   "daily_target_minutes": 400,
+  "long_study_minutes": 180,
   "lag_grace_minutes": 20,
   "lag_repeat_minutes": 30,
   "notify_after_seconds": 60,

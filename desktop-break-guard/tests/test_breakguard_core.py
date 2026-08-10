@@ -22,12 +22,14 @@ from breakguard_sync import SyncWorker
 class BreakGuardCoreTests(unittest.TestCase):
     def test_ui_modules_import_after_split(self):
         import breakguard_app
+        import breakguard_records
         import breakguard_summary
         import breakguard_view
         import breakguard_widgets
         import breakguard_window
 
         self.assertTrue(callable(breakguard_app.main))
+        self.assertTrue(hasattr(breakguard_records, "StudyHistoryDialog"))
         self.assertTrue(hasattr(breakguard_summary, "DailySummaryDialog"))
         self.assertTrue(hasattr(breakguard_view, "ViewMixin"))
         self.assertTrue(hasattr(breakguard_window, "WindowMixin"))
@@ -77,6 +79,7 @@ class BreakGuardCoreTests(unittest.TestCase):
         from breakguard_view import ViewMixin
 
         view = ViewMixin()
+        view.config = SimpleNamespace(long_study_minutes=180)
         view.planner = SimpleNamespace(
             session=SimpleNamespace(project_name="英一", started_at=1_000),
             study_elapsed=Mock(return_value=2_400),
@@ -263,6 +266,53 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertIsNotNone(planner.session)
         _session, duration = planner.complete_study(start + 75 * 60)
         self.assertEqual(duration, 4500)
+
+    def test_long_course_can_be_saved_with_a_confirmed_shorter_duration(self):
+        start = datetime(2026, 8, 10, 8, 0).timestamp()
+        planner = self.planner()
+        planner.start_study(start, project_id=20, project_name="英一")
+
+        _session, duration = planner.complete_study(
+            start + 4 * 60 * 60,
+            duration_override_seconds=30 * 60,
+        )
+
+        self.assertEqual(duration, 30 * 60)
+        record = self.store.list_daily_study_sessions("2026-08-10")[0]
+        self.assertEqual(record["duration_seconds"], 30 * 60)
+        self.assertEqual(record["ended_at"], start + 30 * 60)
+
+    def test_completed_session_can_be_corrected_then_deleted(self):
+        start = datetime(2026, 8, 10, 8, 0).timestamp()
+        planner = self.planner()
+        session = planner.start_study(start, project_id=20, project_name="英一")
+        planner.complete_study(start + 90 * 60)
+
+        before, after = self.store.update_study_session_duration(session.session_id, 30 * 60)
+
+        self.assertEqual(before["duration_seconds"], 90 * 60)
+        self.assertEqual(after["duration_seconds"], 30 * 60)
+        self.assertEqual(self.store.daily_study_summary("2026-08-10")["study_seconds"], 30 * 60)
+
+        deleted = self.store.delete_study_session(session.session_id)
+
+        self.assertEqual(deleted["duration_seconds"], 30 * 60)
+        self.assertEqual(self.store.list_daily_study_sessions("2026-08-10"), [])
+        self.assertEqual(self.store.daily_study_summary("2026-08-10")["study_seconds"], 0)
+
+    def test_schedule_payload_includes_long_session_threshold(self):
+        from breakguard_app import BreakGuardApp
+
+        app = BreakGuardApp.__new__(BreakGuardApp)
+        app.config = SimpleNamespace(
+            daily_target_minutes=400,
+            long_study_minutes=180,
+            break_minutes=10,
+            lag_grace_minutes=20,
+            lag_repeat_minutes=30,
+        )
+
+        self.assertEqual(app.schedule_config_payload()["longStudyMinutes"], 180)
 
     def test_course_segments_persist_until_the_total_timer_ends(self):
         start = datetime(2026, 7, 12, 9, 0).timestamp()

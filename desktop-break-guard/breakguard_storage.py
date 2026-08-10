@@ -249,6 +249,43 @@ class BreakGuardStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def study_session(self, session_id: str) -> dict | None:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT session_id,session_date,sequence_number,project_id,project_name,started_at,ended_at,duration_seconds FROM study_sessions WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_study_session_duration(self, session_id: str, duration_seconds: int) -> tuple[dict, dict]:
+        duration = max(60, min(24 * 60 * 60, int(duration_seconds)))
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT session_id,session_date,sequence_number,project_id,project_name,started_at,ended_at,duration_seconds FROM study_sessions WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if not row:
+                raise KeyError("study session not found")
+            before = dict(row)
+            ended_at = float(before["started_at"]) + duration
+            connection.execute(
+                "UPDATE study_sessions SET ended_at = ?, duration_seconds = ? WHERE session_id = ?",
+                (ended_at, duration, str(session_id)),
+            )
+        return before, {**before, "ended_at": ended_at, "duration_seconds": duration}
+
+    def delete_study_session(self, session_id: str) -> dict:
+        with self.lock, self._connection() as connection:
+            row = connection.execute(
+                "SELECT session_id,session_date,sequence_number,project_id,project_name,started_at,ended_at,duration_seconds FROM study_sessions WHERE session_id = ?",
+                (str(session_id),),
+            ).fetchone()
+            if not row:
+                raise KeyError("study session not found")
+            record = dict(row)
+            connection.execute("DELETE FROM study_sessions WHERE session_id = ?", (str(session_id),))
+        return record
+
     def daily_study_state(self, session_date: str) -> dict:
         with self.lock, self._connection() as connection:
             row = connection.execute(

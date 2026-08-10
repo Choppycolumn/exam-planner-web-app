@@ -5,6 +5,8 @@ const EVENT_LABELS = {
   unfocused: '不专注记录',
   class_started: '开始上课',
   class_completed: '完成课程',
+  study_session_corrected: '修正学习记录',
+  study_session_deleted: '删除学习记录',
   study_day_completed: '结束一天学习',
   schedule_lag: '学习进度落后',
   schedule_config_updated: '学习设置更新',
@@ -30,6 +32,7 @@ export function createBreakGuardService({
     )));
     return {
       dailyTargetMinutes: Math.max(30, Math.min(960, Math.round(Number(input.dailyTargetMinutes || legacyTarget)))),
+      longStudyMinutes: Math.max(60, Math.min(720, Math.round(Number(input.longStudyMinutes || 180)))),
       breakMinutes: Math.max(1, Math.min(60, Math.round(Number(input.breakMinutes || 10)))),
       lagGraceMinutes: Math.max(0, Math.min(180, Math.round(Number(input.lagGraceMinutes ?? 20)))),
       lagRepeatMinutes: Math.max(5, Math.min(180, Math.round(Number(input.lagRepeatMinutes || 30)))),
@@ -98,6 +101,17 @@ export function createBreakGuardService({
         projectId: Number(event.payload?.projectId || 0),
         durationSeconds: Number(event.payload?.durationSeconds || 0),
         sessionSequence: Number(event.payload?.sessionSequence || event.payload?.lessonNumber || 0),
+      });
+      if (studyRecord) refreshStudySummariesForDate?.(studyRecord.sessionDate);
+    }
+    if (['study_session_corrected', 'study_session_deleted'].includes(event.eventType)) {
+      studyRecord = repository.adjustStudyTime({
+        sessionDate: event.payload?.sessionDate,
+        projectId: Number(event.payload?.projectId || 0),
+        previousDurationSeconds: Number(event.payload?.previousDurationSeconds || 0),
+        durationSeconds: Number(event.payload?.durationSeconds || 0),
+        sessionSequence: Number(event.payload?.sessionSequence || 0),
+        deleted: event.eventType === 'study_session_deleted',
       });
       if (studyRecord) refreshStudySummariesForDate?.(studyRecord.sessionDate);
     }
