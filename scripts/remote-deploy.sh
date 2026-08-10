@@ -41,6 +41,17 @@ restore_worker_if_needed() {
   systemctl start exam-planner-worker.service >/dev/null 2>&1 || true
 }
 
+wait_for_deploy_pressure() {
+  local attempt
+  for attempt in $(seq 1 8); do
+    if bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy; then
+      return 0
+    fi
+    (( attempt < 8 )) && sleep 5
+  done
+  return 1
+}
+
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" >/dev/null 2>&1 || true; fi
@@ -80,7 +91,7 @@ if systemctl is-active --quiet exam-planner-worker.service; then
   systemctl stop exam-planner-worker.service
   WORKER_RESTORE_PENDING=1
 fi
-bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy
+wait_for_deploy_pressure
 
 PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" "$APP_NODE_BIN" "$STAGE_DIR/server/privileged-helper.mjs" >"$TEST_DATA_DIR/helper.log" 2>&1 &
 HELPER_PID="$!"
@@ -110,9 +121,8 @@ TEST_PID=""
 kill "$HELPER_PID" >/dev/null 2>&1 || true
 wait "$HELPER_PID" 2>/dev/null || true
 HELPER_PID=""
-restore_worker_if_needed
 
-bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy
+wait_for_deploy_pressure
 
 if [[ -f "$APP_DIR/data/exam-planner.sqlite" ]]; then
   DB_BACKUP_DIR="$APP_DIR/data/backups"
