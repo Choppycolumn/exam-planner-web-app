@@ -20,6 +20,7 @@ TEST_PID=""
 HELPER_PID=""
 PREVIOUS_RELEASE=""
 HBR_RESTORE_PENDING=0
+WORKER_RESTORE_PENDING=0
 
 exec 9>/run/lock/exam-planner-deploy.lock
 flock -w 30 9 || { echo "another deployment or recovery action is active" >&2; exit 1; }
@@ -34,11 +35,18 @@ restore_hbr_if_needed() {
   fi
 }
 
+restore_worker_if_needed() {
+  (( WORKER_RESTORE_PENDING )) || return 0
+  WORKER_RESTORE_PENDING=0
+  systemctl start exam-planner-worker.service >/dev/null 2>&1 || true
+}
+
 cleanup() {
   if [[ -n "$TEST_PID" ]]; then kill "$TEST_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" >/dev/null 2>&1 || true; fi
   if [[ -n "$STAGE_DIR" && "$STAGE_DIR" == /opt/exam-planner-stage.* ]]; then rm -r -- "$STAGE_DIR" 2>/dev/null || true; fi
   [[ "$TEST_DATA_DIR" == /tmp/exam-planner-smoke-data.* ]] && rm -r -- "$TEST_DATA_DIR" 2>/dev/null || true
+  restore_worker_if_needed
   restore_hbr_if_needed
 }
 trap cleanup EXIT
@@ -65,6 +73,14 @@ bash -n "$STAGE_DIR/scripts/publish-release-assets.sh"
 bash -n "$STAGE_DIR/scripts/rollback-release.sh"
 bash -n "$STAGE_DIR/scripts/check-system-pressure.sh"
 bash -n "$STAGE_DIR/scripts/hbr-window-control.sh"
+
+# Candidate validation briefly needs a second web process. Pausing the durable
+# worker frees enough memory on the 1 GB host; queued jobs remain in SQLite.
+if systemctl is-active --quiet exam-planner-worker.service; then
+  systemctl stop exam-planner-worker.service
+  WORKER_RESTORE_PENDING=1
+fi
+bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy
 
 PRIVILEGED_HELPER_SOCKET="$TEST_DATA_DIR/privileged.sock" "$APP_NODE_BIN" "$STAGE_DIR/server/privileged-helper.mjs" >"$TEST_DATA_DIR/helper.log" 2>&1 &
 HELPER_PID="$!"
@@ -94,6 +110,7 @@ TEST_PID=""
 kill "$HELPER_PID" >/dev/null 2>&1 || true
 wait "$HELPER_PID" 2>/dev/null || true
 HELPER_PID=""
+restore_worker_if_needed
 
 bash "$STAGE_DIR/scripts/check-system-pressure.sh" deploy
 
