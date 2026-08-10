@@ -21,10 +21,14 @@ inside_window() {
 
 stop_hbr() {
   systemctl stop "${UNITS[@]}" 2>/dev/null || true
+  # The vendor updater re-enables both units after it starts. Keep the timer
+  # as the only authority allowed to open the backup window.
+  systemctl disable "${UNITS[@]}" >/dev/null 2>&1 || true
 }
 
 case "$ACTION" in
   open)
+    systemctl disable "${UNITS[@]}" >/dev/null 2>&1 || true
     if [[ "${HBR_FORCE_OPEN:-0}" != "1" ]] && ! inside_window; then
       echo "HBR start skipped outside the maintenance window"
       exit 0
@@ -51,6 +55,7 @@ case "$ACTION" in
     done
     ;;
   guard)
+    systemctl disable "${UNITS[@]}" >/dev/null 2>&1 || true
     if ! systemctl is-active --quiet hbrclient.service && ! systemctl is-active --quiet hbrclientupdater.service; then
       exit 0
     fi
