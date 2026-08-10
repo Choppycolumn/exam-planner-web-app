@@ -25,9 +25,10 @@ try {
   tar -czf $package dist server public shared package.json package-lock.json docs scripts infra README.md $runtimeDependency
   & $pscp -batch -hostkey $hostKey -pw $Password $package "${UserName}@${HostName}:$remotePackage"
   if ($LASTEXITCODE -ne 0) { throw "Upload failed." }
-  & $pscp -batch -hostkey $hostKey -pw $Password (Join-Path $root "scripts\remote-deploy.sh") "${UserName}@${HostName}:$remoteScript"
-  if ($LASTEXITCODE -ne 0) { throw "Deployment script upload failed." }
-  & $plink -batch -ssh -hostkey $hostKey -pw $Password "${UserName}@${HostName}" "bash '$remoteScript' '$remotePackage'; status=`$?; rm -f '$remoteScript'; exit `$status"
+  $remoteCommand = "tar -xOf '$remotePackage' scripts/remote-deploy.sh > '$remoteScript' && chmod 0700 '$remoteScript'; " +
+    "status=1; if [ -x '$remoteScript' ]; then bash '$remoteScript' '$remotePackage'; status=`$?; fi; " +
+    "rm -f '$remoteScript'; exit `$status"
+  & $plink -batch -ssh -hostkey $hostKey -pw $Password "${UserName}@${HostName}" $remoteCommand
   if ($LASTEXITCODE -ne 0) { throw "Remote deployment failed and rollback was attempted." }
 } finally {
   Pop-Location
