@@ -64,6 +64,26 @@ describe('break guard service', () => {
     expect(queued).toHaveLength(1);
   });
 
+  it('suppresses progress alerts left over from a previous study day', () => {
+    const { service, queued } = fixture();
+    const event = service.recordEvent({
+      eventId: 'schedule_lag_stale_day',
+      eventType: 'schedule_lag',
+      payload: {
+        sessionDate: '2026-07-09',
+        projectId: 10,
+        studyMinutes: 120,
+        targetMinutes: 400,
+      },
+    });
+
+    expect(service.queueNotification(event)).toMatchObject({
+      status: 'suppressed',
+      reason: 'stale_study_day',
+    });
+    expect(queued).toHaveLength(0);
+  });
+
   it('suppresses schedule progress alerts while a meal pause is active', () => {
     const { service, queued, repository, cancelScheduleLagNotifications } = fixture();
     service.recordEvent({ eventId: 'dinner_20260713', eventType: 'dinner' });

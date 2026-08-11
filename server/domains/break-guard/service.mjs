@@ -148,6 +148,10 @@ export function createBreakGuardService({
     const isUnfocused = event.eventType === 'unfocused';
     const isScheduleLag = event.eventType === 'schedule_lag';
     if (isScheduleLag) {
+      const sessionDate = String(event.payload?.sessionDate || '');
+      if (sessionDate && sessionDate !== todayISO()) {
+        return { ok: true, queued: false, status: 'suppressed', reason: 'stale_study_day' };
+      }
       const latest = repository.latestEvents(20);
       const mealIndex = latest.findIndex((item) => ['lunch', 'dinner', 'meal'].includes(item.eventType));
       const resumedIndex = latest.findIndex((item) => item.eventType === 'class_started');

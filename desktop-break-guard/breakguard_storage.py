@@ -233,6 +233,29 @@ class BreakGuardStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def close_unfinished_study_days_before(self, session_date: str) -> list[str]:
+        """Close completed study days that were left open past midnight."""
+        now = time.time()
+        with self.lock, self._connection() as connection:
+            rows = connection.execute(
+                """SELECT sessions.session_date,MAX(sessions.ended_at) AS ended_at
+                FROM study_sessions AS sessions
+                LEFT JOIN study_day_closures AS closures
+                  ON closures.session_date = sessions.session_date
+                WHERE sessions.session_date < ? AND closures.session_date IS NULL
+                GROUP BY sessions.session_date
+                ORDER BY sessions.session_date""",
+                (str(session_date),),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """INSERT OR IGNORE INTO study_day_closures(
+                        session_date,ended_at,created_at,updated_at
+                    ) VALUES(?,?,?,?)""",
+                    (row["session_date"], float(row["ended_at"]), now, now),
+                )
+        return [str(row["session_date"]) for row in rows]
+
     def next_study_sequence(self, session_date: str) -> int:
         with self.lock, self._connection() as connection:
             row = connection.execute(
@@ -361,6 +384,32 @@ class BreakGuardStore:
                 (str(reason)[:500], str(event_type)),
             )
         return int(cursor.rowcount or 0)
+
+    def cancel_schedule_lag_events_before(self, session_date: str) -> int:
+        current_date = str(session_date)
+        cancelled = 0
+        with self.lock, self._connection() as connection:
+            rows = connection.execute(
+                "SELECT event_id,payload_json FROM event_outbox WHERE event_type='schedule_lag' AND status='pending'"
+            ).fetchall()
+            for row in rows:
+                try:
+                    body = json.loads(row["payload_json"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    body = {}
+                event_date = str((body.get("payload") or {}).get("sessionDate") or "")
+                if not event_date:
+                    event_id = str(row["event_id"])
+                    prefix = "schedule_lag_"
+                    event_date = event_id[len(prefix):len(prefix) + 10] if event_id.startswith(prefix) else ""
+                if len(event_date) != 10 or event_date >= current_date:
+                    continue
+                connection.execute(
+                    "UPDATE event_outbox SET status='cancelled',next_attempt_at=0,last_error=? WHERE event_id=?",
+                    ("cancelled after study day rollover", row["event_id"]),
+                )
+                cancelled += 1
+        return cancelled
 
     def expedite_pending_events(self, now: float | None = None) -> int:
         target = time.time() if now is None else float(now)

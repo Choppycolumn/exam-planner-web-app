@@ -97,6 +97,29 @@ class BreakGuardCoreTests(unittest.TestCase):
         view.canvas.itemconfigure.assert_any_call("btn_primary__label", text="结束课程")
         view.canvas.itemconfigure.assert_any_call("btn_segment__label", text="开始分段")
 
+    def test_runtime_rollover_closes_a_stale_lag_window(self):
+        from breakguard_app import BreakGuardApp
+
+        app = BreakGuardApp.__new__(BreakGuardApp)
+        app.planner = SimpleNamespace(rollover_day=Mock(return_value={
+            "changed": True,
+            "previous_date": "2026-08-10",
+            "current_date": "2026-08-11",
+            "closed_dates": ["2026-08-10"],
+        }))
+        app.store = SimpleNamespace(cancel_schedule_lag_events_before=Mock(return_value=1))
+        app.fullscreen_kind = "lag"
+        app.hide_fullscreen = Mock()
+        app.set_status = Mock()
+        app.refresh_view_state = Mock()
+
+        app.update_day_rollover()
+
+        app.store.cancel_schedule_lag_events_before.assert_called_once_with("2026-08-11")
+        app.hide_fullscreen.assert_called_once()
+        app.set_status.assert_called_once_with("新的一天已开始，昨日学习记录已自动收口")
+        app.refresh_view_state.assert_called_once()
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.database = Path(self.temporary.name) / "break-guard.sqlite"
@@ -225,6 +248,21 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.store.enqueue_event("schedule_lag", {}, "schedule_lag_pending")
         self.store.enqueue_event("class_started", {}, "class_started_pending")
         self.assertEqual(self.store.cancel_pending_events("schedule_lag"), 1)
+        self.assertEqual(self.store.pending_count(), 1)
+
+    def test_rollover_cancels_only_stale_schedule_lag_events(self):
+        self.store.enqueue_event(
+            "schedule_lag",
+            {"payload": {"sessionDate": "2026-08-10"}},
+            "schedule_lag_2026-08-10_100_0",
+        )
+        self.store.enqueue_event(
+            "schedule_lag",
+            {"payload": {"sessionDate": "2026-08-11"}},
+            "schedule_lag_2026-08-11_100_0",
+        )
+
+        self.assertEqual(self.store.cancel_schedule_lag_events_before("2026-08-11"), 1)
         self.assertEqual(self.store.pending_count(), 1)
 
     def test_secret_round_trip(self):
@@ -430,6 +468,48 @@ class BreakGuardCoreTests(unittest.TestCase):
         planner.mark_lag_reminded(19, due)
         self.assertFalse(planner.lag_snapshot(due + 29 * 60)["due"])
         self.assertTrue(planner.lag_snapshot(due + 31 * 60)["due"])
+
+    def test_switching_projects_does_not_repeat_the_same_lag_warning(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner()
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+        planner.complete_study(start + 50 * 60)
+        due = start + 81 * 60
+
+        self.assertTrue(planner.lag_snapshot(due, [19, 20])["due"])
+        planner.mark_lag_reminded(19, due)
+        planner.select_project(20, due + 1)
+
+        self.assertFalse(planner.lag_snapshot(due + 2, [19, 20])["due"])
+        self.assertTrue(planner.lag_snapshot(due + 31 * 60, [19, 20])["due"])
+
+    def test_starting_study_resets_the_lag_reminder_cycle(self):
+        start = datetime(2026, 7, 12, 8, 0).timestamp()
+        planner = self.planner()
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+        planner.complete_study(start + 50 * 60)
+        first_due = start + 81 * 60
+        planner.mark_lag_reminded(19, first_due)
+
+        planner.start_study(first_due + 60, project_id=20, project_name="高等数学")
+        planner.complete_study(first_due + 11 * 60)
+        next_due = first_due + 42 * 60
+
+        self.assertTrue(planner.lag_snapshot(next_due, [19, 20])["due"])
+
+    def test_day_rollover_closes_an_unfinished_day_and_starts_clean(self):
+        start = datetime(2026, 7, 12, 22, 0).timestamp()
+        planner = self.planner()
+        planner.observed_date = "2026-07-12"
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+        planner.complete_study(start + 40 * 60)
+
+        rollover = planner.rollover_day(datetime(2026, 7, 13, 0, 1).timestamp())
+
+        self.assertTrue(rollover["changed"])
+        self.assertEqual(rollover["closed_dates"], ["2026-07-12"])
+        self.assertIsNotNone(self.store.study_day_closure("2026-07-12"))
+        self.assertFalse(planner.lag_snapshot(datetime(2026, 7, 13, 8, 0).timestamp(), [19])["due"])
 
     def test_meal_pause_suppresses_progress_warning_until_next_course(self):
         now = datetime(2026, 7, 12, 12, 0).timestamp()

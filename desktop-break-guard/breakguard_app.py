@@ -491,18 +491,35 @@ class BreakGuardApp(WindowMixin, ViewMixin):
             self.client.post_event("unfocused", f"{session.session_id}_unfocused", startedAt=session.started_iso, overdueSeconds=snapshot["overtime"], note="休息结束 5 分钟后仍未取消")
             self.machine.mark_unfocused_recorded()
             self.set_status("不专注记录已进入同步队列")
+    def update_day_rollover(self) -> None:
+        rollover = self.planner.rollover_day()
+        if not rollover["changed"] and not rollover["closed_dates"]:
+            return
+        self.store.cancel_schedule_lag_events_before(rollover["current_date"])
+        if self.fullscreen_kind == "lag":
+            self.hide_fullscreen()
+        if rollover["changed"]:
+            self.set_status("新的一天已开始，昨日学习记录已自动收口")
+        else:
+            self.set_status("此前未结束的学习日已自动收口")
+        self.refresh_view_state()
     def update_schedule_lag(self) -> None:
         if self.machine.session or self.planner.session:
             return
-        snapshot = self.planner.lag_snapshot(available_project_ids=self.project_ids())
+        now = time.time()
+        snapshot = self.planner.lag_snapshot(now, available_project_ids=self.project_ids())
         if not snapshot.get("due"):
             return
-        self.planner.mark_lag_reminded(snapshot["project_id"])
+        self.planner.mark_lag_reminded(snapshot["project_id"], now)
+        session_date = self.planner.summary(now, available_project_ids=self.project_ids())["date"]
+        repeat_seconds = self.config.lag_repeat_minutes * 60
+        repeat_index = int(max(0, now - snapshot["due_at"]) // repeat_seconds)
         self.client.post_event(
             "schedule_lag",
-            f"schedule_lag_{self.planner.summary(available_project_ids=self.project_ids())['date']}_{snapshot['project_id']}_{int(time.time() // (self.config.lag_repeat_minutes * 60))}",
+            f"schedule_lag_{session_date}_{int(snapshot['inactivity_started_at'])}_{repeat_index}",
             note=f"每日学习时长未达标，已学 {snapshot['study_minutes']} / {snapshot['target_minutes']} 分钟",
             payload={
+                "sessionDate": session_date,
                 "projectId": snapshot["project_id"],
                 "studyMinutes": snapshot["study_minutes"],
                 "targetMinutes": snapshot["target_minutes"],
@@ -513,6 +530,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.show_progress_warning(snapshot)
     def tick(self) -> None:
         try:
+            self.update_day_rollover()
             self.update_study_state()
             self.update_break_state()
             self.update_schedule_lag()

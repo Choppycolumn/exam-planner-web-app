@@ -31,6 +31,8 @@ class StudyPlanner:
         self.store = store
         self.configure(break_minutes, lag_grace_minutes, lag_repeat_minutes, daily_target_minutes)
         self.session = self._restore_session(self.store.load_study_session())
+        self.observed_date = local_date()
+        self.rollover_initialized = False
 
     def configure(self, break_minutes: int, lag_grace_minutes: int, lag_repeat_minutes: int, daily_target_minutes: int) -> None:
         self.break_minutes = max(1, min(60, int(break_minutes)))
@@ -89,6 +91,7 @@ class StudyPlanner:
         self.store.reopen_study_day(day)
         selected_project_id = self.select_project(project_id, now)
         self.clear_pause(now)
+        self.store.update_daily_study_state(day, last_lag_project_id=0, last_lag_at=None)
         self.session = StudySession(
             session_id=uuid.uuid4().hex,
             session_date=day,
@@ -130,6 +133,9 @@ class StudyPlanner:
         self.store.update_daily_study_state(current.session_date, selected_project_id=current.project_id)
         self.session = None
         self.store.clear_study_session()
+        current_date = local_date(now)
+        if current.session_date < current_date:
+            self.store.close_unfinished_study_days_before(current_date)
         return current, duration
 
     def study_elapsed(self, now: float | None = None) -> int:
@@ -237,6 +243,22 @@ class StudyPlanner:
     def reopen_day(self, now: float | None = None) -> None:
         self.store.reopen_study_day(local_date(now))
 
+    def rollover_day(self, now: float | None = None) -> dict:
+        now = now if now is not None else time.time()
+        current_date = local_date(now)
+        previous_date = self.observed_date
+        day_changed = current_date != previous_date
+        should_reconcile = day_changed or not self.rollover_initialized
+        closed_dates = self.store.close_unfinished_study_days_before(current_date) if should_reconcile else []
+        self.observed_date = current_date
+        self.rollover_initialized = True
+        return {
+            "changed": day_changed,
+            "previous_date": previous_date,
+            "current_date": current_date,
+            "closed_dates": closed_dates,
+        }
+
     def lag_snapshot(self, now: float | None = None, available_project_ids: list[int] | None = None) -> dict:
         now = now if now is not None else time.time()
         summary = self.summary(now, available_project_ids)
@@ -259,7 +281,7 @@ class StudyPlanner:
         if now < due_at:
             return {"due": False, "project_id": project_id, "due_at": due_at}
         last_lag_at = float(state.get("last_lag_at") or 0)
-        already_recent = int(state.get("last_lag_project_id") or 0) == project_id and now - last_lag_at < self.lag_repeat_minutes * 60
+        already_recent = last_lag_at > 0 and now - last_lag_at < self.lag_repeat_minutes * 60
         return {
             "due": not already_recent,
             "project_id": project_id,
@@ -268,6 +290,7 @@ class StudyPlanner:
             "inactive_minutes": max(0, int((now - last_ended_at - excluded_pause_seconds) / 60)),
             "behind_minutes": max(0, int((now - due_at) / 60)),
             "due_at": due_at,
+            "inactivity_started_at": last_ended_at + excluded_pause_seconds,
         }
 
     def mark_lag_reminded(self, project_id: int, now: float | None = None) -> None:
