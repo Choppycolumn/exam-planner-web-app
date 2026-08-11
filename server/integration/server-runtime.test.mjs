@@ -301,4 +301,5 @@ suite('production server runtime', () => {
     expect(JSON.parse((await request(baseUrl, `/api/study-records?date=${date}`, { cookie: thirdUserCookie })).text).records)
       .toEqual([expect.objectContaining({ minutes: 35, note: 'third learner fixture' })]);
   });
+
 });

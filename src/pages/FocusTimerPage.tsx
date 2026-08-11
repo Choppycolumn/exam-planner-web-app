@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlarmClock,
+  AlertTriangle,
   BookOpen,
   Check,
   CirclePause,
@@ -216,7 +217,7 @@ export function FocusTimerPage() {
   };
 
   if (!session || !userId) {
-    return <Page title="专注计时" subtitle="正在读取账户..."><div className="card p-6 text-sm text-slate-500">加载中...</div></Page>;
+    return <Page title="专注计时" subtitle="正在读取账户..."><div className="card p-6 text-sm text-secondary">加载中...</div></Page>;
   }
 
   if (!dashboard) {
@@ -348,6 +349,19 @@ export function FocusTimerPage() {
             <span>{online ? (timer.pendingCount ? `正在补传 ${timer.pendingCount} 条记录` : '已与网站同步') : `离线计时中 · ${timer.pendingCount} 条待补传`}</span>
           </div>
           {timer.syncError ? <p className="focus-sync-error">{timer.syncError}</p> : null}
+          {timer.conflicts.length ? (
+            <div className="focus-sync-conflicts" role="alert">
+              <div>
+                <AlertTriangle size={17} />
+                <span>{timer.conflicts.length} 条操作需要处理</span>
+              </div>
+              <p>{timer.conflicts[0].message}</p>
+              <div>
+                <button type="button" onClick={() => void timer.retryConflicts()}>重新同步</button>
+                <button type="button" onClick={timer.discardConflicts}>以服务器状态为准</button>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <section className="focus-summary card">
@@ -368,7 +382,7 @@ export function FocusTimerPage() {
                 <span>{project.projectName}</span>
                 <strong>{formatStudyTime(project.studySeconds)}</strong>
               </div>
-            )) : <p className="text-sm text-slate-500">今天还没有完成的专注记录。</p>}
+            )) : <p className="text-sm text-secondary">今天还没有完成的专注记录。</p>}
           </div>
         </section>
 
@@ -386,7 +400,7 @@ export function FocusTimerPage() {
                 </div>
                 <strong>{formatStudyTime(item.durationSeconds)}</strong>
               </div>
-            )) : <p className="text-sm text-slate-500">完成一次专注后会自动出现在这里。</p>}
+            )) : <p className="text-sm text-secondary">完成一次专注后会自动出现在这里。</p>}
           </div>
           <button
             className="btn btn-soft mt-4 w-full"

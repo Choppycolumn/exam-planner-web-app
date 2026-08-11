@@ -29,4 +29,6 @@ python -m unittest discover -s tests -v
 
 打包结果为 `dist\BreakGuard.exe`。程序使用 Windows Named Mutex 保证单实例，第二次启动只会显示已有窗口。
 
+`dist\build-manifest.json` 记录版本、构建时间、SHA-256 和签名状态。`install_startup.ps1` 优先安装登录计划任务，异常退出后最多自动重启 10 次；权限不足时退化为启动文件夹快捷方式。
+
 桌面和开机启动快捷方式统一调用无控制台启动器。系统允许本地未签名程序时优先运行打包版；Windows Smart App Control 拦截未签名 EXE 时自动改用已签名的 `pythonw.exe` 运行同一份源码，不关闭或绕过系统安全策略。

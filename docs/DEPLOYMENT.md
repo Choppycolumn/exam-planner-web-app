@@ -24,11 +24,15 @@ VITE_API_PROXY_TARGET=http://127.0.0.1:8080
 ```bash
 npm run lint
 npm test
+npm run check:domain-deps
+npm run check:semantic-colors
 npm run build
 npm run check:bundle
+npm audit --omit=dev --audit-level=high
 ```
 
 构建产物在 `dist/`。
+每次构建同时生成 `dist/build-meta.json`，记录应用版本、Git commit、分支、构建时间和工作区状态；`/health?full=1` 会返回同一份版本信息。
 
 ## 生产运行
 
@@ -63,7 +67,7 @@ Telegram Bot 可以在通知中心配置。Webhook URL 填写网站 HTTPS 根地
 
 ## 发布流程
 
-1. 本地确认 `npm run lint && npm test && npm run build` 通过。
+1. 本地确认依赖清单、语义色、Lint、全量测试、Break Guard 测试、构建预算和生产依赖审计通过。`deploy-production.ps1` 默认自动执行这些检查。
 2. `scripts/deploy-production.ps1` 上传完整候选包。
 3. 服务器暂停正在运行的 HBR，取得统一重 I/O 锁，在临时目录执行语法、健康、认证写入和 Break Guard 幂等测试。
 4. 切换线上服务前检查负载、可用内存、I/O wait 和 D 状态进程；超出预算则停止发布。
@@ -95,3 +99,4 @@ bash /opt/exam-planner/current/scripts/rollback-release.sh previous
 ## 辅助脚本
 
 `scripts/deploy-production.ps1` 与 `scripts/remote-deploy.sh` 是当前生产发布入口。脚本不在仓库保存服务器密码。
+旧的 `scripts/deploy-exam-planner.ps1` 只保留兼容入口，内部会转交原子发布脚本，不再允许原地覆盖线上目录。

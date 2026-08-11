@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 
 export async function probeServerHealth(timeoutMs = 4000): Promise<boolean> {
   const controller = new AbortController();
@@ -17,47 +17,61 @@ export async function probeServerHealth(timeoutMs = 4000): Promise<boolean> {
   }
 }
 
+let currentOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+let probeTimer = 0;
+let started = false;
+let probeGeneration = 0;
+const subscribers = new Set<() => void>();
+
+function publish(nextOnline: boolean) {
+  if (nextOnline === currentOnline) return;
+  const wasOnline = currentOnline;
+  currentOnline = nextOnline;
+  for (const subscriber of subscribers) subscriber();
+  if (!wasOnline && nextOnline && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('server-reconnected'));
+  }
+}
+
+function scheduleProbe(delayMs: number) {
+  window.clearTimeout(probeTimer);
+  probeTimer = window.setTimeout(runProbe, delayMs);
+}
+
+async function runProbe() {
+  const generation = ++probeGeneration;
+  if (!navigator.onLine) {
+    publish(false);
+    scheduleProbe(10_000);
+    return;
+  }
+  const reachable = await probeServerHealth();
+  if (!started || generation !== probeGeneration) return;
+  publish(reachable);
+  scheduleProbe(reachable ? 60_000 : 10_000);
+}
+
+function startNetworkMonitor() {
+  if (started || typeof window === 'undefined') return;
+  started = true;
+  const handleOnline = () => void runProbe();
+  const handleOffline = () => publish(false);
+  const handleVisibility = () => {
+    if (document.visibilityState === 'visible') void runProbe();
+  };
+  window.addEventListener('online', handleOnline);
+  window.addEventListener('offline', handleOffline);
+  document.addEventListener('visibilitychange', handleVisibility);
+  void runProbe();
+}
+
+function subscribe(subscriber: () => void) {
+  subscribers.add(subscriber);
+  startNetworkMonitor();
+  return () => subscribers.delete(subscriber);
+}
+
 export function useNetworkStatus() {
-  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
-
-  useEffect(() => {
-    let disposed = false;
-    let probeTimer = 0;
-
-    const scheduleProbe = (delayMs: number) => {
-      window.clearTimeout(probeTimer);
-      probeTimer = window.setTimeout(runProbe, delayMs);
-    };
-    const runProbe = async () => {
-      if (!navigator.onLine) {
-        if (!disposed) setOnline(false);
-        scheduleProbe(10_000);
-        return;
-      }
-      const reachable = await probeServerHealth();
-      if (disposed) return;
-      setOnline(reachable);
-      scheduleProbe(reachable ? 60_000 : 10_000);
-    };
-    const handleOnline = () => {
-      void runProbe();
-    };
-    const handleOffline = () => setOnline(false);
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') void runProbe();
-    };
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    document.addEventListener('visibilitychange', handleVisibility);
-    void runProbe();
-    return () => {
-      disposed = true;
-      window.clearTimeout(probeTimer);
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, []);
-
+  const online = useSyncExternalStore(subscribe, () => currentOnline, () => true);
   return { online };
 }

@@ -16,6 +16,7 @@ Environment=DATA_DIR=/opt/exam-planner/data
 Environment=STATIC_ROOT=/opt/exam-planner/current/dist
 Environment=COOKIE_SECURE=1
 Environment=TELEGRAM_ENV_FILE=/opt/exam-planner/data/telegram.env
+Environment=HBR_STATUS_FILE=/opt/exam-planner/data/hbr-status.json
 Environment=PRIVILEGED_HELPER_SOCKET=/run/exam-planner/privileged.sock
 EnvironmentFile=-/etc/exam-planner/runtime.env
 EnvironmentFile=-/etc/exam-planner/bark.env

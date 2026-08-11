@@ -712,6 +712,59 @@ details > summary {
   outline-offset: 3px;
 }
 
+/* Semantic utilities keep component markup independent from a light-only palette. */
+.text-primary { color: var(--text-primary) !important; }
+.text-strong { color: var(--text-strong) !important; }
+.text-secondary { color: var(--text-secondary) !important; }
+.text-tertiary { color: var(--text-tertiary) !important; }
+.text-accent { color: var(--accent-text) !important; }
+.text-success { color: var(--success) !important; }
+.text-warning { color: var(--warning) !important; }
+.text-danger { color: var(--danger) !important; }
+.text-violet { color: var(--violet) !important; }
+.text-sky { color: var(--sky) !important; }
+
+.bg-surface-strong { background-color: var(--surface-strong) !important; }
+.bg-surface-muted { background-color: var(--surface-muted) !important; }
+.bg-surface-inset { background-color: var(--surface-inset) !important; }
+.bg-accent-soft { background-color: var(--accent-soft) !important; }
+.bg-accent { background-color: var(--accent) !important; }
+.bg-success-soft { background-color: var(--success-soft) !important; }
+.bg-success { background-color: var(--success) !important; }
+.bg-warning-soft { background-color: var(--warning-soft) !important; }
+.bg-warning { background-color: var(--warning) !important; }
+.bg-danger-soft { background-color: var(--danger-soft) !important; }
+.bg-danger { background-color: var(--danger) !important; }
+.bg-violet-soft { background-color: var(--violet-soft) !important; }
+.bg-violet { background-color: var(--violet) !important; }
+.bg-sky-soft { background-color: var(--sky-soft) !important; }
+
+.border-line { border-color: var(--line) !important; }
+.border-line-strong { border-color: var(--line-strong) !important; }
+.border-highlight { border-color: var(--highlight) !important; }
+.border-accent { border-color: var(--accent-border) !important; }
+.border-success { border-color: var(--success-border) !important; }
+.border-warning { border-color: var(--warning-border) !important; }
+.border-danger { border-color: var(--danger-border) !important; }
+.border-violet { border-color: var(--violet-border) !important; }
+.border-sky { border-color: var(--sky-border) !important; }
+
+.ring-line { --tw-ring-color: var(--line) !important; }
+.ring-line-strong { --tw-ring-color: var(--line-strong) !important; }
+.ring-accent { --tw-ring-color: var(--accent-border) !important; }
+.ring-highlight { --tw-ring-color: var(--highlight) !important; }
+.hover\:bg-surface-hover:hover { background-color: var(--surface-hover) !important; }
+.hover\:bg-accent-soft:hover { background-color: var(--accent-soft) !important; }
+.hover\:bg-success-soft:hover { background-color: var(--success-soft) !important; }
+.hover\:bg-warning-soft:hover { background-color: var(--warning-soft) !important; }
+.hover\:bg-danger-soft:hover { background-color: var(--danger-soft) !important; }
+.hover\:text-primary:hover { color: var(--text-primary) !important; }
+.hover\:text-accent:hover { color: var(--accent-text) !important; }
+.hover\:text-danger:hover { color: var(--danger) !important; }
+.hover\:border-line-strong:hover { border-color: var(--line-strong) !important; }
+.hover\:border-accent:hover { border-color: var(--accent-border) !important; }
+.focus\:ring-accent:focus { --tw-ring-color: var(--accent-border) !important; }
+
 .recharts-default-tooltip {
   border: 1px solid var(--line) !important;
   border-radius: var(--radius-md) !important;

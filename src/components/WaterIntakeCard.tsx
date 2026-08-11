@@ -9,9 +9,9 @@ const targetCups = 6;
 const holdMs = 2000;
 
 function tone(cups: number) {
-  if (cups <= 0) return { className: 'border-rose-200 bg-rose-50 text-rose-800', label: '还没喝水' };
-  if (cups < targetCups) return { className: 'border-amber-200 bg-amber-50 text-amber-800', label: '继续补水' };
-  return { className: 'border-emerald-200 bg-emerald-50 text-emerald-800', label: '今日达标' };
+  if (cups <= 0) return { className: 'border-danger bg-danger-soft text-danger', label: '还没喝水' };
+  if (cups < targetCups) return { className: 'border-warning bg-warning-soft text-warning', label: '继续补水' };
+  return { className: 'border-success bg-success-soft text-success', label: '今日达标' };
 }
 
 export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIntakeRecord; readOnly?: boolean }) {
@@ -78,7 +78,7 @@ export function WaterIntakeCard({ record, readOnly = false }: { record?: WaterIn
           <h2 className="mt-2 text-2xl font-semibold">{currentCups}/{targetCups} 杯</h2>
           <p className="mt-1 text-sm opacity-80">{targetCups * cupMl}ml · {style.label}</p>
         </div>
-        {!readOnly ? <button className="rounded-lg bg-white/70 px-2 py-1 text-xs font-semibold" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void reset(); }}>清零</button> : null}
+        {!readOnly ? <button className="rounded-lg bg-surface-strong px-2 py-1 text-xs font-semibold" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); void reset(); }}>清零</button> : null}
       </div>
 
       <p className="mt-4 text-xs font-medium opacity-75">{readOnly ? '只读模式不可记录' : currentCups >= targetCups ? '今天喝够了' : holding ? '继续按住...' : '长按卡片任意位置 2 秒记一杯'}</p>

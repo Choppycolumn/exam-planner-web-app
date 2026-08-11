@@ -2,116 +2,18 @@
 
 :root {
   color-scheme: light;
-  color: #162033;
-  background: #eef4fb;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  background: var(--app-bg-start);
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-
-  --app-bg-start: #edf4ff;
-  --app-bg-middle: #f8fbff;
-  --app-bg-end: #eef9f5;
-  --surface: rgba(255, 255, 255, 0.72);
-  --surface-strong: rgba(255, 255, 255, 0.9);
-  --surface-solid: #fdfefe;
-  --surface-muted: rgba(244, 248, 252, 0.82);
-  --surface-inset: rgba(225, 234, 244, 0.62);
-  --surface-hover: rgba(255, 255, 255, 0.96);
-  --text-primary: #111c2e;
-  --text-strong: #26354a;
-  --text-secondary: #52647a;
-  --text-tertiary: #728399;
-  --text-disabled: #9aa8ba;
-  --line: rgba(116, 139, 168, 0.24);
-  --line-strong: rgba(86, 118, 157, 0.36);
-  --highlight: rgba(255, 255, 255, 0.86);
-  --accent: #1687ff;
-  --accent-hover: #0879ea;
-  --accent-text: #0967c5;
-  --accent-soft: rgba(22, 135, 255, 0.1);
-  --accent-border: rgba(22, 135, 255, 0.23);
-  --success: #13986c;
-  --success-soft: rgba(19, 152, 108, 0.1);
-  --success-border: rgba(19, 152, 108, 0.24);
-  --warning: #ad6a08;
-  --warning-soft: rgba(224, 144, 24, 0.11);
-  --warning-border: rgba(190, 114, 10, 0.24);
-  --danger: #cf3f62;
-  --danger-soft: rgba(207, 63, 98, 0.1);
-  --danger-border: rgba(207, 63, 98, 0.23);
-  --violet: #7564d7;
-  --violet-soft: rgba(117, 100, 215, 0.1);
-  --violet-border: rgba(117, 100, 215, 0.22);
-  --sky: #087ea4;
-  --sky-soft: rgba(8, 126, 164, 0.1);
-  --sky-border: rgba(8, 126, 164, 0.22);
-  --chart-grid: rgba(90, 117, 151, 0.18);
-  --shadow-card: 0 12px 34px rgba(42, 78, 118, 0.08), inset 0 1px 0 var(--highlight);
-  --shadow-raised: 0 18px 48px rgba(36, 74, 115, 0.14), inset 0 1px 0 var(--highlight);
-  --shadow-focus: 0 0 0 4px rgba(22, 135, 255, 0.14);
-  --blur-nav: 24px;
-  --blur-card: 14px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --motion-fast: 150ms;
-  --motion-base: 220ms;
-  --motion-slow: 320ms;
-  --motion-curve: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  color: #edf5ff;
-  background: #07101d;
-  --app-bg-start: #07101d;
-  --app-bg-middle: #0a1524;
-  --app-bg-end: #091915;
-  --surface: rgba(16, 28, 44, 0.76);
-  --surface-strong: rgba(18, 32, 50, 0.92);
-  --surface-solid: #111e30;
-  --surface-muted: rgba(23, 38, 57, 0.8);
-  --surface-inset: rgba(38, 56, 78, 0.68);
-  --surface-hover: rgba(29, 46, 68, 0.96);
-  --text-primary: #f4f8fd;
-  --text-strong: #dbe7f3;
-  --text-secondary: #b7c6d8;
-  --text-tertiary: #8fa2b8;
-  --text-disabled: #65778c;
-  --line: rgba(207, 225, 245, 0.13);
-  --line-strong: rgba(207, 225, 245, 0.22);
-  --highlight: rgba(255, 255, 255, 0.08);
-  --accent: #62aefe;
-  --accent-hover: #80bdff;
-  --accent-text: #8bc5ff;
-  --accent-soft: rgba(72, 159, 249, 0.16);
-  --accent-border: rgba(102, 177, 255, 0.3);
-  --success: #62d3aa;
-  --success-soft: rgba(62, 190, 145, 0.15);
-  --success-border: rgba(98, 211, 170, 0.27);
-  --warning: #f0b65b;
-  --warning-soft: rgba(225, 157, 49, 0.15);
-  --warning-border: rgba(240, 182, 91, 0.27);
-  --danger: #ff8ba3;
-  --danger-soft: rgba(226, 77, 111, 0.16);
-  --danger-border: rgba(255, 139, 163, 0.27);
-  --violet: #b2a4ff;
-  --violet-soft: rgba(152, 132, 255, 0.16);
-  --violet-border: rgba(178, 164, 255, 0.27);
-  --sky: #73d4ef;
-  --sky-soft: rgba(74, 187, 219, 0.15);
-  --sky-border: rgba(115, 212, 239, 0.26);
-  --chart-grid: rgba(196, 216, 238, 0.14);
-  --shadow-card: 0 16px 40px rgba(0, 0, 0, 0.2), inset 0 1px 0 var(--highlight);
-  --shadow-raised: 0 22px 58px rgba(0, 0, 0, 0.34), inset 0 1px 0 var(--highlight);
-  --shadow-focus: 0 0 0 4px rgba(98, 174, 254, 0.18);
+  color: var(--text-primary);
+  background: var(--app-bg-start);
 }
 
 * {
@@ -417,70 +319,6 @@ hr,
 .divide-y > :not(:last-child) {
   border-color: var(--line);
 }
-
-/* Semantic bridge for legacy Tailwind color utilities. */
-:root :is(.text-slate-950, .text-slate-900) { color: var(--text-primary); }
-:root :is(.text-slate-800, .text-slate-700) { color: var(--text-strong); }
-:root :is(.text-slate-600, .text-slate-500) { color: var(--text-secondary); }
-:root :is(.text-slate-400, .text-slate-300) { color: var(--text-tertiary); }
-
-:root :is(.bg-white, .bg-white\/70, .bg-white\/80, .bg-white\/85, .bg-white\/90, .bg-white\/95) {
-  color: var(--text-primary);
-  background-color: var(--surface-strong);
-}
-
-:root :is(.bg-slate-50, .bg-slate-50\/70, .bg-slate-50\/80) { background-color: var(--surface-muted); }
-:root .bg-slate-100 { background-color: var(--surface-inset); }
-
-:root :is(.border-slate-100, .border-slate-200) { border-color: var(--line); }
-:root :is(.border-slate-300, .border-slate-950) { border-color: var(--line-strong); }
-:root :is(.ring-slate-200, .ring-slate-300) { --tw-ring-color: var(--line-strong); }
-:root .ring-white { --tw-ring-color: var(--highlight); }
-:root .border-white { border-color: var(--highlight); }
-
-:root :is(.bg-blue-50, .bg-blue-50\/60, .bg-blue-50\/70, .bg-blue-50\/95, .bg-blue-100) { background-color: var(--accent-soft); }
-:root :is(.border-blue-100, .border-blue-200) { border-color: var(--accent-border); }
-:root .ring-blue-200 { --tw-ring-color: var(--accent-border); }
-:root :is(.text-blue-600, .text-blue-700, .text-blue-700\/80, .text-blue-800, .text-blue-900, .text-blue-950) { color: var(--accent-text); }
-:root :is(.bg-blue-400, .bg-blue-500, .bg-blue-600) { background-color: var(--accent); }
-:root .border-blue-600 { border-color: var(--accent); }
-
-:root :is(.bg-emerald-50, .bg-emerald-100) { background-color: var(--success-soft); }
-:root :is(.border-emerald-100, .border-emerald-200) { border-color: var(--success-border); }
-:root :is(.text-emerald-600, .text-emerald-700, .text-emerald-700\/80, .text-emerald-800) { color: var(--success); }
-:root :is(.bg-emerald-500, .bg-emerald-600) { background-color: var(--success); }
-
-:root :is(.bg-amber-50, .bg-amber-50\/95, .bg-amber-100) { background-color: var(--warning-soft); }
-:root :is(.border-amber-100, .border-amber-200) { border-color: var(--warning-border); }
-:root :is(.text-amber-600, .text-amber-700, .text-amber-800) { color: var(--warning); }
-:root .bg-amber-300 { background-color: var(--warning); }
-
-:root :is(.bg-rose-50, .bg-rose-50\/60, .bg-rose-50\/95, .bg-rose-100) { background-color: var(--danger-soft); }
-:root :is(.border-rose-100, .border-rose-200) { border-color: var(--danger-border); }
-:root :is(.text-rose-600, .text-rose-700, .text-rose-700\/80, .text-rose-800) { color: var(--danger); }
-:root .bg-rose-400 { background-color: var(--danger); }
-
-:root :is(.bg-violet-50, .bg-indigo-50\/70) { background-color: var(--violet-soft); }
-:root .border-indigo-100 { border-color: var(--violet-border); }
-:root :is(.text-violet-700, .text-indigo-700) { color: var(--violet); }
-:root .bg-violet-500 { background-color: var(--violet); }
-
-:root .bg-sky-50 { background-color: var(--sky-soft); }
-:root .border-sky-100 { border-color: var(--sky-border); }
-:root .text-sky-700 { color: var(--sky); }
-
-:root .hover\:bg-slate-100:hover { background-color: var(--surface-hover); }
-:root :is(.hover\:bg-slate-50:hover, .hover\:bg-white:hover) { background-color: var(--surface-hover); }
-:root :is(.hover\:bg-blue-50:hover, .hover\:bg-blue-100:hover) { background-color: var(--accent-soft); }
-:root :is(.hover\:bg-emerald-50:hover, .hover\:bg-emerald-100:hover) { background-color: var(--success-soft); }
-:root :is(.hover\:bg-amber-50:hover, .hover\:bg-amber-100:hover) { background-color: var(--warning-soft); }
-:root :is(.hover\:bg-rose-50:hover, .hover\:bg-rose-100:hover) { background-color: var(--danger-soft); }
-:root .hover\:text-slate-800:hover,
-:root .hover\:text-slate-950:hover { color: var(--text-primary); }
-:root :is(.hover\:text-blue-700:hover) { color: var(--accent-text); }
-:root :is(.hover\:text-rose-600:hover, .hover\:text-rose-700:hover) { color: var(--danger); }
-:root .hover\:border-blue-200:hover { border-color: var(--accent-border); }
-:root .hover\:border-slate-300:hover { border-color: var(--line-strong); }
 
 .recharts-cartesian-axis-tick-value,
 .recharts-legend-item-text {
@@ -837,6 +675,52 @@ hr,
   font-size: 12px;
   line-height: 1.5;
   text-align: center;
+}
+
+.focus-sync-conflicts {
+  width: min(100%, 360px);
+  margin: 12px auto 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--line));
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--warning) 9%, var(--surface-strong));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.focus-sync-conflicts > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.focus-sync-conflicts > div:first-child {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.focus-sync-conflicts p {
+  margin: 7px 0;
+  text-align: center;
+}
+
+.focus-sync-conflicts button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--text-primary);
+  background: var(--surface-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--motion-curve), transform var(--motion-fast) var(--motion-curve);
+}
+
+.focus-sync-conflicts button:hover {
+  background: var(--surface-hover);
+  transform: translateY(-1px);
 }
 
 .focus-summary,

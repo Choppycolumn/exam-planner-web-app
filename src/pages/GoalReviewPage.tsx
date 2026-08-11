@@ -10,10 +10,10 @@ import { useDashboardData } from '../hooks/useDashboardData';
 import { calculateCountdownDays, minutesToHoursText } from '../utils/date';
 
 function statusTone(value: number) {
-  if (value >= 80) return 'border-emerald-100 bg-emerald-50 text-emerald-700';
-  if (value >= 55) return 'border-blue-100 bg-blue-50 text-blue-700';
-  if (value >= 35) return 'border-amber-100 bg-amber-50 text-amber-700';
-  return 'border-rose-100 bg-rose-50 text-rose-700';
+  if (value >= 80) return 'border-success bg-success-soft text-success';
+  if (value >= 55) return 'border-accent bg-accent-soft text-accent';
+  if (value >= 35) return 'border-warning bg-warning-soft text-warning';
+  return 'border-danger bg-danger-soft text-danger';
 }
 
 export function GoalReviewPage() {
@@ -55,30 +55,30 @@ export function GoalReviewPage() {
         <section className="card p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">本轮复盘问题</h2>
-              <p className="mt-1 text-sm text-slate-500">每周打开一次，把这些问题回答到日报或报告里。</p>
+              <h2 className="text-base font-semibold text-primary">本轮复盘问题</h2>
+              <p className="mt-1 text-sm text-secondary">每周打开一次，把这些问题回答到日报或报告里。</p>
             </div>
             <Link className="btn btn-primary" to="/settings"><Settings size={16} />简报设置</Link>
           </div>
           <div className="mt-4 space-y-3">
             {reviewQuestions.map((question, index) => (
-              <div key={question} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-semibold text-blue-700">Q{index + 1}</p>
-                <p className="mt-1 text-sm font-semibold leading-6 text-slate-800">{question}</p>
+              <div key={question} className="rounded-lg border border-line bg-surface-muted p-4">
+                <p className="text-xs font-semibold text-accent">Q{index + 1}</p>
+                <p className="mt-1 text-sm font-semibold leading-6 text-strong">{question}</p>
               </div>
             ))}
           </div>
         </section>
 
         <section className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">校准结论草稿</h2>
+          <h2 className="text-base font-semibold text-primary">校准结论草稿</h2>
           <div className="mt-4 space-y-3">
             <div className={`rounded-lg border p-4 ${statusTone(progressPercent)}`}>
               <p className="text-sm font-semibold">长期进度：{progressPercent}%</p>
               <p className="mt-1 text-xs leading-5 opacity-80">{studyTargetMinutes ? '按总学习目标估算，适合每周复盘一次偏差。' : '先补齐目标总时长，进度判断会更有意义。'}</p>
             </div>
             {latestReport ? (
-              <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700">
+              <div className="rounded-lg border border-accent bg-accent-soft p-4 text-accent">
                 <p className="text-sm font-semibold">最近报告：{latestReport.title}</p>
                 <p className="mt-1 text-xs leading-5 opacity-80">学习 {minutesToHoursText(latestReport.summary.totalMinutes)}，复盘 {latestReport.summary.reviewCount} 篇，任务完成率 {latestReport.summary.taskCompletionRate ?? '暂无'}%。</p>
               </div>
@@ -89,27 +89,27 @@ export function GoalReviewPage() {
 
       <section className="mt-5 grid gap-4 lg:grid-cols-2">
         <div className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">待推进任务</h2>
+          <h2 className="text-base font-semibold text-primary">待推进任务</h2>
           <div className="mt-3 space-y-2">
             {urgentTasks.length ? urgentTasks.map((task) => (
-              <Link key={task.id} to="/task-center" className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <Link key={task.id} to="/task-center" className="flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-strong px-3 py-2 text-sm text-strong">
                 <span className="min-w-0 truncate font-semibold">{task.title}</span>
-                <ArrowRight size={15} className="shrink-0 text-slate-400" />
+                <ArrowRight size={15} className="shrink-0 text-tertiary" />
               </Link>
             )) : <EmptyState title="没有明显待闭环任务" />}
           </div>
         </div>
         <div className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">项目动量</h2>
+          <h2 className="text-base font-semibold text-primary">项目动量</h2>
           <div className="mt-3 space-y-2">
             {activeProjects.slice(0, 8).map((item) => (
-              <div key={item.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <div key={item.id} className="rounded-lg border border-line bg-surface-strong px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="truncate text-sm font-semibold text-slate-800">{item.name}</p>
-                  <span className="text-xs text-slate-500">{item.momentum === 'up' ? '升温' : item.momentum === 'down' ? '放缓' : '平稳'}</span>
+                  <p className="truncate text-sm font-semibold text-strong">{item.name}</p>
+                  <span className="text-xs text-secondary">{item.momentum === 'up' ? '升温' : item.momentum === 'down' ? '放缓' : '平稳'}</span>
                 </div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                  <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.min(100, item.sharePercent)}%` }} />
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-inset">
+                  <div className="h-full rounded-full bg-accent" style={{ width: `${Math.min(100, item.sharePercent)}%` }} />
                 </div>
               </div>
             ))}

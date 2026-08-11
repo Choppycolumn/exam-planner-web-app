@@ -147,7 +147,7 @@ export function ReportsPage() {
             <RefreshCw size={16} />补生成上月
           </button>
         </div>
-        <p className="text-sm text-slate-500">上一个完整周和上一个完整月会由服务器自动生成。</p>
+        <p className="text-sm text-secondary">上一个完整周和上一个完整月会由服务器自动生成。</p>
       </div>
 
       {selectedReport ? (
@@ -158,7 +158,7 @@ export function ReportsPage() {
                 <button
                   key={report.id}
                   className={`w-full rounded-lg border p-3 text-left transition ${
-                    selectedReport.id === report.id ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                    selectedReport.id === report.id ? 'border-accent bg-accent-soft text-accent' : 'border-line bg-surface-strong text-strong hover:border-line-strong'
                   }`}
                   onClick={() => setSelectedReportId(report.id ?? null)}
                 >
@@ -175,9 +175,9 @@ export function ReportsPage() {
             <section className="card p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <p className="flex items-center gap-2 text-sm font-semibold text-blue-700"><CalendarDays size={16} />{kindLabel[selectedReport.kind]}</p>
-                  <h2 className="mt-1 text-xl font-semibold text-slate-950">{selectedReport.title}</h2>
-                  <p className="mt-1 text-sm text-slate-500">生成时间：{new Date(selectedReport.generatedAt).toLocaleString()}</p>
+                  <p className="flex items-center gap-2 text-sm font-semibold text-accent"><CalendarDays size={16} />{kindLabel[selectedReport.kind]}</p>
+                  <h2 className="mt-1 text-xl font-semibold text-primary">{selectedReport.title}</h2>
+                  <p className="mt-1 text-sm text-secondary">生成时间：{new Date(selectedReport.generatedAt).toLocaleString()}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button className="btn btn-soft" onClick={() => void copyText(selectedReportMarkdown, '报告 Markdown 已复制')}>
@@ -192,50 +192,50 @@ export function ReportsPage() {
                 </div>
               </div>
 
-              <dl className="mt-5 grid gap-4 border-y border-slate-100 py-4 md:grid-cols-4">
+              <dl className="mt-5 grid gap-4 border-y border-line py-4 md:grid-cols-4">
                 <div>
-                  <dt className="text-xs font-semibold text-slate-500">累计学习</dt>
-                  <dd className="mt-1 text-lg font-semibold text-slate-950">{minutesToHoursText(selectedReport.summary.totalMinutes)}</dd>
+                  <dt className="text-xs font-semibold text-secondary">累计学习</dt>
+                  <dd className="mt-1 text-lg font-semibold text-primary">{minutesToHoursText(selectedReport.summary.totalMinutes)}</dd>
                 </div>
                 <div>
-                  <dt className="text-xs font-semibold text-slate-500">学习天数</dt>
-                  <dd className="mt-1 text-lg font-semibold text-slate-950">{selectedReport.summary.studyDays} 天</dd>
-                  <p className="mt-1 text-xs text-slate-500">学习日均 {minutesToHoursText(selectedReport.summary.averageStudyDayMinutes)}</p>
+                  <dt className="text-xs font-semibold text-secondary">学习天数</dt>
+                  <dd className="mt-1 text-lg font-semibold text-primary">{selectedReport.summary.studyDays} 天</dd>
+                  <p className="mt-1 text-xs text-secondary">学习日均 {minutesToHoursText(selectedReport.summary.averageStudyDayMinutes)}</p>
                 </div>
                 <div>
-                  <dt className="text-xs font-semibold text-slate-500">复盘均分</dt>
-                  <dd className="mt-1 text-lg font-semibold text-slate-950">{selectedReport.summary.averageReviewScore ? `${selectedReport.summary.averageReviewScore}/10` : '暂无'}</dd>
-                  <p className="mt-1 text-xs text-slate-500">{selectedReport.summary.reviewCount} 篇复盘</p>
+                  <dt className="text-xs font-semibold text-secondary">复盘均分</dt>
+                  <dd className="mt-1 text-lg font-semibold text-primary">{selectedReport.summary.averageReviewScore ? `${selectedReport.summary.averageReviewScore}/10` : '暂无'}</dd>
+                  <p className="mt-1 text-xs text-secondary">{selectedReport.summary.reviewCount} 篇复盘</p>
                 </div>
                 <div>
-                  <dt className="text-xs font-semibold text-slate-500">短期目标</dt>
-                  <dd className="mt-1 text-lg font-semibold text-slate-950">{selectedReport.summary.totalTasks ? `${selectedReport.summary.completedTasks}/${selectedReport.summary.totalTasks}` : '暂无'}</dd>
-                  <p className="mt-1 text-xs text-slate-500">{selectedReport.summary.taskCompletionRate !== null ? `完成率 ${selectedReport.summary.taskCompletionRate}%` : '本周期无目标'}</p>
+                  <dt className="text-xs font-semibold text-secondary">短期目标</dt>
+                  <dd className="mt-1 text-lg font-semibold text-primary">{selectedReport.summary.totalTasks ? `${selectedReport.summary.completedTasks}/${selectedReport.summary.totalTasks}` : '暂无'}</dd>
+                  <p className="mt-1 text-xs text-secondary">{selectedReport.summary.taskCompletionRate !== null ? `完成率 ${selectedReport.summary.taskCompletionRate}%` : '本周期无目标'}</p>
                 </div>
               </dl>
 
               <div className="mt-5 grid gap-4 lg:grid-cols-2">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">本期摘要</h3>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-600">
+                  <h3 className="text-sm font-semibold text-primary">本期摘要</h3>
+                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-secondary">
                     {selectedReport.highlights.map((item) => <li key={item}>{item}</li>)}
                   </ul>
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">共性错误总结</h3>
+                  <h3 className="text-sm font-semibold text-primary">共性错误总结</h3>
                   {selectedReport.commonProblems?.length ? (
                     <div className="mt-3 space-y-3">
                       {selectedReport.commonProblems.map((problem) => (
-                        <article key={problem.id} className="rounded-lg border border-rose-100 bg-rose-50/60 p-3">
+                        <article key={problem.id} className="rounded-lg border border-danger bg-danger-soft p-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="text-sm font-semibold text-rose-800">{problem.label}</p>
-                            <span className="rounded bg-white/80 px-2 py-1 text-xs font-semibold text-rose-700">{problem.count} 天提到</span>
+                            <p className="text-sm font-semibold text-danger">{problem.label}</p>
+                            <span className="rounded bg-surface-strong px-2 py-1 text-xs font-semibold text-danger">{problem.count} 天提到</span>
                           </div>
-                          <p className="mt-2 text-xs leading-5 text-rose-700">出现日期：{problem.dates.join('、')}</p>
+                          <p className="mt-2 text-xs leading-5 text-danger">出现日期：{problem.dates.join('、')}</p>
                           <div className="mt-2 space-y-2">
                             {problem.examples.map((example) => (
-                              <p key={`${example.date}-${example.field}-${example.text}`} className="rounded bg-white/80 p-2 text-xs leading-5 text-slate-600">
-                                <span className="font-semibold text-slate-800">{example.date} · {example.field}：</span>{example.text}
+                              <p key={`${example.date}-${example.field}-${example.text}`} className="rounded bg-surface-strong p-2 text-xs leading-5 text-secondary">
+                                <span className="font-semibold text-strong">{example.date} · {example.field}：</span>{example.text}
                               </p>
                             ))}
                           </div>
@@ -243,7 +243,7 @@ export function ReportsPage() {
                       ))}
                     </div>
                   ) : (
-                    <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-6 text-slate-500">
+                    <p className="mt-3 rounded-lg border border-line bg-surface-muted p-3 text-sm leading-6 text-secondary">
                       本周期未识别到反复出现的共性问题。刷新报告后会按复盘文字重新统计。
                     </p>
                   )}
@@ -264,8 +264,8 @@ export function ReportsPage() {
           <section className="mt-5 card p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">AI 总结报告助手</h2>
-                <p className="mt-1 text-sm text-slate-500">这里会把报告整理成可直接交给 AI 的上下文，用于生成下一周期行动计划。</p>
+                <h2 className="text-base font-semibold text-primary">AI 总结报告助手</h2>
+                <p className="mt-1 text-sm text-secondary">这里会把报告整理成可直接交给 AI 的上下文，用于生成下一周期行动计划。</p>
               </div>
               <button className="btn btn-primary" onClick={() => void copyText(selectedAiPrompt, 'AI 总结提示词已复制')}>
                 <Sparkles size={16} />复制提示词
@@ -275,19 +275,19 @@ export function ReportsPage() {
           </section>
 
           <section className="mt-5 card p-5">
-            <h2 className="text-base font-semibold text-slate-900">复盘摘录</h2>
+            <h2 className="text-base font-semibold text-primary">复盘摘录</h2>
             <div className="mt-4 space-y-3">
               {selectedReport.reviews.length ? selectedReport.reviews.map((review) => (
-                <article key={review.date} className="rounded-lg border border-slate-200 bg-white p-4">
+                <article key={review.date} className="rounded-lg border border-line bg-surface-strong p-4">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-semibold text-slate-900">{review.date}</h3>
-                    <span className="rounded border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600">{review.score}/10</span>
+                    <h3 className="font-semibold text-primary">{review.date}</h3>
+                    <span className="rounded border border-line px-2 py-1 text-xs font-semibold text-secondary">{review.score}/10</span>
                   </div>
-                  <div className="mt-3 grid gap-3 text-sm leading-6 text-slate-600 md:grid-cols-2">
-                    <p><span className="font-semibold text-slate-800">总结：</span>{review.summary || '未填写'}</p>
-                    <p><span className="font-semibold text-slate-800">做得好：</span>{review.wins || '未填写'}</p>
-                    <p><span className="font-semibold text-slate-800">问题：</span>{review.problems || '未填写'}</p>
-                    <p><span className="font-semibold text-slate-800">下一步：</span>{review.tomorrowPlan || '未填写'}</p>
+                  <div className="mt-3 grid gap-3 text-sm leading-6 text-secondary md:grid-cols-2">
+                    <p><span className="font-semibold text-strong">总结：</span>{review.summary || '未填写'}</p>
+                    <p><span className="font-semibold text-strong">做得好：</span>{review.wins || '未填写'}</p>
+                    <p><span className="font-semibold text-strong">问题：</span>{review.problems || '未填写'}</p>
+                    <p><span className="font-semibold text-strong">下一步：</span>{review.tomorrowPlan || '未填写'}</p>
                   </div>
                 </article>
               )) : <EmptyState title="本周期没有复盘记录" />}

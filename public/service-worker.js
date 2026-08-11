@@ -1,7 +1,7 @@
 const CACHE_PREFIX = 'exam-planner-';
-const ASSET_CACHE_NAME = `${CACHE_PREFIX}assets-v8`;
-const PUBLIC_CACHE_NAME = `${CACHE_PREFIX}public-v8`;
-const NAVIGATION_CACHE_NAME = `${CACHE_PREFIX}navigation-v8`;
+const ASSET_CACHE_NAME = `${CACHE_PREFIX}assets-v9`;
+const PUBLIC_CACHE_NAME = `${CACHE_PREFIX}public-v9`;
+const NAVIGATION_CACHE_NAME = `${CACHE_PREFIX}navigation-v9`;
 const PUBLIC_PATHS = new Set([
   '/manifest.webmanifest',
   '/app-icon.svg',
@@ -111,7 +111,12 @@ async function navigationResponse(request) {
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(
+    caches.open(PUBLIC_CACHE_NAME)
+      .then((cache) => cache.addAll([...PUBLIC_PATHS]))
+      .catch(() => undefined)
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (event) => {

@@ -7,11 +7,11 @@ import { serverApi, type CalendarEventItem } from '../api/client';
 import { queryKeys } from '../api/queryClient';
 
 const toneClass: Record<string, string> = {
-  slate: 'border-slate-200 bg-slate-50 text-slate-700',
-  emerald: 'border-emerald-100 bg-emerald-50 text-emerald-700',
-  blue: 'border-blue-100 bg-blue-50 text-blue-700',
-  amber: 'border-amber-100 bg-amber-50 text-amber-700',
-  rose: 'border-rose-100 bg-rose-50 text-rose-700',
+  slate: 'border-line bg-surface-muted text-strong',
+  emerald: 'border-success bg-success-soft text-success',
+  blue: 'border-accent bg-accent-soft text-accent',
+  amber: 'border-warning bg-warning-soft text-warning',
+  rose: 'border-danger bg-danger-soft text-danger',
 };
 
 const typeIcon: Record<string, typeof CalendarDays> = {
@@ -90,7 +90,7 @@ export function CalendarPage() {
           <button className="btn btn-soft h-10 w-10 px-0" type="button" title="上个月" onClick={() => setMonthDate((current) => subMonths(current, 1))}>
             <ChevronLeft size={17} />
           </button>
-          <div className="min-w-36 rounded-lg border border-slate-200 bg-white px-4 py-2 text-center font-semibold text-slate-900">{selectedMonth}</div>
+          <div className="min-w-36 rounded-lg border border-line bg-surface-strong px-4 py-2 text-center font-semibold text-primary">{selectedMonth}</div>
           <button className="btn btn-soft h-10 w-10 px-0" type="button" title="下个月" onClick={() => setMonthDate((current) => addMonths(current, 1))}>
             <ChevronRight size={17} />
           </button>
@@ -99,22 +99,22 @@ export function CalendarPage() {
       </div>
 
       <div className="mb-5 grid gap-4 md:grid-cols-3">
-        <div className="rounded-lg border border-slate-200 bg-white p-4">
-          <p className="text-xs font-semibold text-slate-500">本视图事件</p>
-          <p className="mt-1 text-2xl font-semibold text-slate-950">{totalEvents}</p>
+        <div className="rounded-lg border border-line bg-surface-strong p-4">
+          <p className="text-xs font-semibold text-secondary">本视图事件</p>
+          <p className="mt-1 text-2xl font-semibold text-primary">{totalEvents}</p>
         </div>
-        <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-blue-700">
+        <div className="rounded-lg border border-accent bg-accent-soft p-4 text-accent">
           <p className="text-xs font-semibold opacity-80">有学习记录天数</p>
           <p className="mt-1 text-2xl font-semibold">{studyDays}</p>
         </div>
-        <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-amber-700">
+        <div className="rounded-lg border border-warning bg-warning-soft p-4 text-warning">
           <p className="text-xs font-semibold opacity-80">需关注通知</p>
           <p className="mt-1 text-2xl font-semibold">{openNotifications}</p>
         </div>
       </div>
 
       <section className="card overflow-hidden">
-        <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center text-xs font-semibold text-slate-500">
+        <div className="grid grid-cols-7 border-b border-line bg-surface-muted text-center text-xs font-semibold text-secondary">
           {['周一', '周二', '周三', '周四', '周五', '周六', '周日'].map((item) => <div key={item} className="px-2 py-2">{item}</div>)}
         </div>
         <div className="grid grid-cols-7">
@@ -123,20 +123,20 @@ export function CalendarPage() {
             const events = eventsByDate.get(date) ?? [];
             const inMonth = date.startsWith(selectedMonth);
             return (
-              <div key={date} className={`min-h-32 border-b border-r border-slate-100 p-2 ${inMonth ? 'bg-white' : 'bg-slate-50/70'}`}>
+              <div key={date} className={`min-h-32 border-b border-r border-line p-2 ${inMonth ? 'bg-surface-strong' : 'bg-surface-muted'}`}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className={`text-sm font-semibold ${inMonth ? 'text-slate-800' : 'text-slate-400'}`}>{format(day, 'd')}</span>
-                  {events.length ? <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500">{events.length}</span> : null}
+                  <span className={`text-sm font-semibold ${inMonth ? 'text-strong' : 'text-tertiary'}`}>{format(day, 'd')}</span>
+                  {events.length ? <span className="rounded bg-surface-inset px-1.5 py-0.5 text-[11px] font-semibold text-secondary">{events.length}</span> : null}
                 </div>
                 <div className="mt-2 space-y-1">
                   {events.slice(0, 4).map((event) => <EventPill key={event.id} event={event} />)}
-                  {events.length > 4 ? <p className="text-xs font-semibold text-slate-400">还有 {events.length - 4} 项</p> : null}
+                  {events.length > 4 ? <p className="text-xs font-semibold text-tertiary">还有 {events.length - 4} 项</p> : null}
                 </div>
               </div>
             );
           })}
         </div>
-        {isLoading ? <div className="border-t border-slate-100 px-4 py-3 text-sm text-slate-500">日历同步中...</div> : null}
+        {isLoading ? <div className="border-t border-line px-4 py-3 text-sm text-secondary">日历同步中...</div> : null}
       </section>
 
       <section className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -144,9 +144,9 @@ export function CalendarPage() {
           const Icon = typeIcon[type];
           const count = data?.events.filter((event) => event.type === type).length ?? 0;
           return (
-            <div key={type} className="rounded-lg border border-slate-200 bg-white px-4 py-3">
-              <p className="flex items-center gap-2 text-sm font-semibold text-slate-800"><Icon size={15} />{eventLabel({ type } as CalendarEventItem)}</p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">{count}</p>
+            <div key={type} className="rounded-lg border border-line bg-surface-strong px-4 py-3">
+              <p className="flex items-center gap-2 text-sm font-semibold text-strong"><Icon size={15} />{eventLabel({ type } as CalendarEventItem)}</p>
+              <p className="mt-1 text-xl font-semibold text-primary">{count}</p>
             </div>
           );
         })}

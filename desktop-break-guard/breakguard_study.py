@@ -143,6 +143,21 @@ class StudyPlanner:
             return 0
         return max(0, int((now if now is not None else time.time()) - self.session.started_at))
 
+    def exclude_inactive_time(self, seconds: int, now: float | None = None) -> int:
+        if not self.session:
+            return 0
+        now = float(now if now is not None else time.time())
+        maximum = max(0, int(now - self.session.started_at))
+        excluded = min(maximum, max(0, int(seconds)))
+        if excluded <= 0:
+            return 0
+        self.session.started_at = min(now, self.session.started_at + excluded)
+        self.session.started_iso = utc_iso(self.session.started_at)
+        if self.session.segment_started_at is not None:
+            self.session.segment_started_at = min(now, self.session.segment_started_at + excluded)
+        self.store.save_study_session(asdict(self.session))
+        return excluded
+
     def segment_snapshot(self, now: float | None = None) -> dict:
         if not self.session:
             return {"active": False, "active_seconds": 0, "segments": [], "total_seconds": 0, "next_sequence_number": 1}
@@ -284,6 +299,7 @@ class StudyPlanner:
         already_recent = last_lag_at > 0 and now - last_lag_at < self.lag_repeat_minutes * 60
         return {
             "due": not already_recent,
+            "date": summary["date"],
             "project_id": project_id,
             "study_minutes": int(summary["study_seconds"] / 60),
             "target_minutes": summary["target_minutes"],

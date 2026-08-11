@@ -9,9 +9,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from breakguard_config import Config
+from breakguard_activity import RuntimeActivityGuard
 from breakguard_secrets import protect_secret, unprotect_secret
 from breakguard_study import StudyPlanner
 from breakguard_state import BreakStateMachine
@@ -188,6 +189,55 @@ class BreakGuardCoreTests(unittest.TestCase):
 
         self.assertEqual(event["event_id"], event_id)
 
+    def test_config_pull_applies_only_when_payload_changes(self):
+        payload = {
+            "config": {"dailyTargetMinutes": 400, "breakMinutes": 10},
+            "projects": [{"id": 19, "name": "信号与系统"}],
+        }
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        messages = queue.Queue()
+        worker = SyncWorker(
+            Config(server_url=f"http://127.0.0.1:{server.server_port}", token="test-token"),
+            self.store,
+            messages,
+        )
+        try:
+            self.assertTrue(worker._pull_schedule_config())
+            first = messages.get_nowait()
+            self.assertEqual(first["type"], "schedule_config")
+            self.assertTrue(worker._pull_schedule_config())
+            self.assertTrue(messages.empty())
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=2)
+
+    def test_config_pull_failure_uses_bounded_backoff(self):
+        worker = SyncWorker(
+            Config(server_url="http://127.0.0.1:1", token="test-token"),
+            self.store,
+            queue.Queue(),
+        )
+        with patch("breakguard_sync.time.time", return_value=1_000):
+            self.assertFalse(worker._pull_schedule_config())
+        self.assertEqual(worker.config_pull_failures, 1)
+        self.assertEqual(worker.next_config_pull_at, 1_015)
+
     def test_offline_event_is_delivered_after_server_recovers(self):
         received = []
 
@@ -304,6 +354,27 @@ class BreakGuardCoreTests(unittest.TestCase):
         self.assertIsNotNone(planner.session)
         _session, duration = planner.complete_study(start + 75 * 60)
         self.assertEqual(duration, 4500)
+
+    def test_sleep_or_lock_gap_is_excluded_from_active_course(self):
+        start = datetime(2026, 7, 12, 9, 0).timestamp()
+        planner = self.planner()
+        planner.start_study(start, project_id=19, project_name="信号与系统")
+        guard = RuntimeActivityGuard(long_gap_seconds=90)
+        guard.observe(start)
+
+        excluded = guard.observe(start + 10 * 60)
+        planner.exclude_inactive_time(excluded, start + 10 * 60)
+
+        self.assertEqual(excluded, 599)
+        self.assertEqual(planner.study_elapsed(start + 10 * 60), 1)
+
+    def test_session_lock_is_excluded_when_ticks_continue(self):
+        guard = RuntimeActivityGuard(long_gap_seconds=90)
+        guard.observe(1_000, locked=False)
+        guard.observe(1_001, locked=True)
+        guard.observe(1_060, locked=True)
+
+        self.assertEqual(guard.observe(1_121, locked=False), 120)
 
     def test_long_course_can_be_saved_with_a_confirmed_shorter_duration(self):
         start = datetime(2026, 8, 10, 8, 0).timestamp()

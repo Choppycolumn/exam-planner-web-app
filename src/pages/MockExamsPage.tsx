@@ -61,8 +61,8 @@ export function MockExamsPage() {
       <div className="card mb-5 p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">科目选择</h2>
-            <p className="mt-1 text-sm text-slate-500">可以自由新增科目；选择后，图表、历史记录和新增成绩会同步到该科目。</p>
+            <h2 className="text-base font-semibold text-primary">科目选择</h2>
+            <p className="mt-1 text-sm text-secondary">可以自由新增科目；选择后，图表、历史记录和新增成绩会同步到该科目。</p>
           </div>
           <div className="grid w-full gap-3 md:w-auto md:grid-cols-[150px_180px_auto_auto]">
             <input className="field" placeholder="新增科目" value={subjectDraft.name ?? ''} onChange={(e) => setSubjectDraft({ ...subjectDraft, name: e.target.value })} />
@@ -76,7 +76,7 @@ export function MockExamsPage() {
             <button
               key={subject.id}
               className={`inline-flex min-w-28 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition ${
-                filter === subject.id ? 'border-blue-600 bg-blue-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50'
+                filter === subject.id ? 'border-accent bg-accent text-white shadow-sm' : 'border-line bg-surface-strong text-strong hover:border-accent hover:bg-accent-soft'
               }`}
               onClick={() => subject.id && selectSubject(subject.id)}
             >
@@ -97,7 +97,7 @@ export function MockExamsPage() {
           </div>
           <ChartBox title="成绩趋势折线图">{trend.length ? <TrendLine data={trend} dataKey="score" label="分数" /> : <EmptyState title="暂无成绩数据" />}</ChartBox>
           <div className="card overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line p-4">
               <h2 className="font-semibold">历史记录</h2>
               <select className="field w-48" value={filter} onChange={(e) => selectSubject(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
                 <option value="all">全部科目</option>
@@ -107,10 +107,10 @@ export function MockExamsPage() {
             {scoped.length ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[760px] text-left text-sm">
-                  <thead className="bg-slate-50 text-slate-500"><tr><th className="p-3">日期</th><th className="p-3">科目</th><th className="p-3">试卷</th><th className="p-3">分数</th><th className="p-3">用时</th><th className="p-3">错题</th><th className="p-3">操作</th></tr></thead>
+                  <thead className="bg-surface-muted text-secondary"><tr><th className="p-3">日期</th><th className="p-3">科目</th><th className="p-3">试卷</th><th className="p-3">分数</th><th className="p-3">用时</th><th className="p-3">错题</th><th className="p-3">操作</th></tr></thead>
                   <tbody>
                     {scoped.map((exam) => (
-                      <tr key={exam.id} className="border-t border-slate-100">
+                      <tr key={exam.id} className="border-t border-line">
                         <td className="p-3">{exam.date}</td><td className="p-3">{exam.subjectNameSnapshot}</td><td className="p-3">{exam.paperName}</td><td className="p-3 font-semibold">{exam.score}/{exam.fullScore}</td><td className="p-3">{exam.durationMinutes} 分钟</td><td className="p-3">{exam.wrongCount}</td>
                         <td className="p-3"><button className="btn btn-danger" onClick={() => exam.id && confirm('确定删除这条模考记录吗？') && subjectsRepository.removeExam(exam.id)}><Trash2 size={15} /></button></td>
                       </tr>
@@ -120,7 +120,7 @@ export function MockExamsPage() {
               </div>
             ) : <div className="p-5"><EmptyState title="暂无模考记录" /></div>}
             {examData?.total ? (
-              <div className="flex items-center justify-between border-t border-slate-200 p-4 text-sm text-slate-500">
+              <div className="flex items-center justify-between border-t border-line p-4 text-sm text-secondary">
                 <span>共 {examData.total} 条记录，第 {page} / {totalPages} 页</span>
                 <div className="flex gap-2">
                   <button className="btn btn-soft" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>上一页</button>
@@ -157,8 +157,8 @@ export function MockExamsPage() {
           </div>
           <div className="card p-5">
             <h2 className="text-base font-semibold">科目管理</h2>
-            <p className="mt-1 text-sm text-slate-500">点击科目名称可载入编辑；删除不会影响历史模考记录。</p>
-            <div className="mt-4 space-y-2">{subjects.map((subject) => <div key={subject.id} className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2"><button className="flex items-center gap-2" onClick={() => setSubjectDraft(subject)}><span className="h-3 w-3 rounded-full" style={{ background: subject.color }} />{subject.name}</button>{subject.isActive && <button onClick={() => subject.id && confirm('删除后历史模考记录会保留科目名称快照，确定删除吗？') && subjectsRepository.removeSubject(subject.id)}><Trash2 size={16} /></button>}</div>)}</div>
+            <p className="mt-1 text-sm text-secondary">点击科目名称可载入编辑；删除不会影响历史模考记录。</p>
+            <div className="mt-4 space-y-2">{subjects.map((subject) => <div key={subject.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2"><button className="flex items-center gap-2" onClick={() => setSubjectDraft(subject)}><span className="h-3 w-3 rounded-full" style={{ background: subject.color }} />{subject.name}</button>{subject.isActive && <button onClick={() => subject.id && confirm('删除后历史模考记录会保留科目名称快照，确定删除吗？') && subjectsRepository.removeSubject(subject.id)}><Trash2 size={16} /></button>}</div>)}</div>
           </div>
         </div>
       </div>

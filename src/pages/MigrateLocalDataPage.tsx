@@ -1,18 +1,18 @@
 import { useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import { Page } from '../components/Page';
-import { db } from '../db/database';
+import { legacyIndexedDb } from '../legacy/indexedDb/database';
 import type { ServerState } from '../api/client';
 
 async function readLocalIndexedDb(): Promise<ServerState> {
   return {
-    goals: await db.goals.toArray(),
-    dailyReviews: await db.dailyReviews.toArray(),
-    studyProjects: await db.studyProjects.toArray(),
-    studyTimeRecords: await db.studyTimeRecords.toArray(),
-    subjects: await db.subjects.toArray(),
-    mockExamRecords: await db.mockExamRecords.toArray(),
-    shortTermTasks: await db.shortTermTasks.toArray(),
+    goals: await legacyIndexedDb.goals.toArray(),
+    dailyReviews: await legacyIndexedDb.dailyReviews.toArray(),
+    studyProjects: await legacyIndexedDb.studyProjects.toArray(),
+    studyTimeRecords: await legacyIndexedDb.studyTimeRecords.toArray(),
+    subjects: await legacyIndexedDb.subjects.toArray(),
+    mockExamRecords: await legacyIndexedDb.mockExamRecords.toArray(),
+    shortTermTasks: await legacyIndexedDb.shortTermTasks.toArray(),
     waterIntakeRecords: [],
   };
 }
@@ -48,8 +48,8 @@ export function MigrateLocalDataPage() {
         <button className="btn btn-primary mt-4" onClick={() => void migrate().catch((error) => setStatus(error instanceof Error ? error.message : String(error)))}>
           <UploadCloud size={16} />上传本地数据
         </button>
-        <p className="mt-4 text-sm text-slate-600">{status}</p>
-        {Object.keys(counts).length ? <div className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-2">{Object.entries(counts).map(([key, value]) => <div key={key} className="rounded bg-slate-50 px-3 py-2">{key}: {value} 条</div>)}</div> : null}
+        <p className="mt-4 text-sm text-secondary">{status}</p>
+        {Object.keys(counts).length ? <div className="mt-4 grid gap-2 text-sm text-secondary md:grid-cols-2">{Object.entries(counts).map(([key, value]) => <div key={key} className="rounded bg-surface-muted px-3 py-2">{key}: {value} 条</div>)}</div> : null}
       </div>
     </Page>
   );

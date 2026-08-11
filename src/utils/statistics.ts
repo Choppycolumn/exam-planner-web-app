@@ -70,9 +70,9 @@ export const getReviewAverageScore = (review?: DailyReview) => {
 };
 
 export const getReviewTone = (score: number) => {
-  if (score >= 8) return { label: '较好', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' };
-  if (score <= 4) return { label: '较差', className: 'border-rose-200 bg-rose-50 text-rose-700' };
-  return { label: '平稳', className: 'border-amber-200 bg-amber-50 text-amber-700' };
+  if (score >= 8) return { label: '较好', className: 'border-success bg-success-soft text-success' };
+  if (score <= 4) return { label: '较差', className: 'border-danger bg-danger-soft text-danger' };
+  return { label: '平稳', className: 'border-warning bg-warning-soft text-warning' };
 };
 
 export const getReviewTrend = (reviews: DailyReview[], days = 30) => {
@@ -95,9 +95,9 @@ export const urgencyLabel: Record<TaskUrgency, string> = {
 };
 
 export const urgencyClassName: Record<TaskUrgency, string> = {
-  high: 'border-rose-200 bg-rose-50 text-rose-700',
-  medium: 'border-amber-200 bg-amber-50 text-amber-700',
-  low: 'border-slate-200 bg-slate-50 text-slate-600',
+  high: 'border-danger bg-danger-soft text-danger',
+  medium: 'border-warning bg-warning-soft text-warning',
+  low: 'border-line bg-surface-muted text-secondary',
 };
 
 export const getVisibleShortTermTasks = (tasks: ShortTermTask[], currentDate = todayISO()) =>

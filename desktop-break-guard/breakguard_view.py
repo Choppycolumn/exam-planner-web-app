@@ -342,16 +342,8 @@ class ViewMixin:
             self.set_tone("warning" if is_long else "running")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text="结束学习并休息")
-        elif snapshot["running"] and snapshot["remaining"] > 0:
-            self.set_timer(fmt_seconds(snapshot["remaining"]), "课间休息中，到时会全屏提醒")
-            self.set_tone("running")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="提前结束休息")
         elif snapshot["running"]:
-            self.set_timer(f"+{fmt_seconds(snapshot['overtime'])}", "休息已结束，请回来")
-            self.set_tone("warning")
-            if self.canvas is not None:
-                self.canvas.itemconfigure("btn_primary__label", text="结束休息")
+            self.refresh_break_view(snapshot)
         elif summary["day_ended"]:
             self.set_timer("今天辛苦了", f"已学 {summary['study_seconds'] // 60} 分钟 · 点击今日总结回顾")
             self.set_tone("idle")
@@ -364,6 +356,18 @@ class ViewMixin:
             self.set_tone("idle")
             if self.canvas is not None:
                 self.canvas.itemconfigure("btn_primary__label", text=label)
+
+    def refresh_break_view(self, snapshot: dict) -> None:
+        if snapshot["remaining"] > 0:
+            self.set_timer(fmt_seconds(snapshot["remaining"]), "课间休息中，到时会全屏提醒")
+            self.set_tone("running")
+            label = "提前结束休息"
+        else:
+            self.set_timer(f"+{fmt_seconds(snapshot['overtime'])}", "休息已结束，请回来")
+            self.set_tone("warning")
+            label = "结束休息"
+        if self.canvas is not None:
+            self.canvas.itemconfigure("btn_primary__label", text=label)
     def refresh_compact_view(self) -> None:
         session = self.planner.session
         if not session or self.canvas is None:

@@ -23,10 +23,10 @@ export const getDueStatus = (date: string) => {
   const label = days < 0 ? `已逾期 ${Math.abs(days)} 天` : days === 0 ? '今天到期' : `剩余 ${days} 天`;
   const className =
     days <= 3
-      ? 'border-rose-200 bg-rose-50 text-rose-700'
+      ? 'border-danger bg-danger-soft text-danger'
       : days <= 7
-        ? 'border-amber-200 bg-amber-50 text-amber-700'
-        : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+        ? 'border-warning bg-warning-soft text-warning'
+        : 'border-success bg-success-soft text-success';
 
   return { days, label, className };
 };

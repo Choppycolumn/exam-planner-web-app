@@ -69,6 +69,7 @@ import { createPrivilegedClient } from './privileged/client.mjs';
 import { clientHashForRequest, createSessionAuth, getClientIp, lockMessage, safeSecretEqual, sleep, } from './auth/session-auth.mjs';
 import { createRequire } from 'node:module';
 import { createApplicationContext } from './app/application-context.mjs';
+import { domainDependencies } from './app/domain-dependencies.generated.mjs';
 import {
     installPersistenceStateDomain,
     installPersistenceSchemaDomain,
@@ -111,7 +112,7 @@ import { installApiDomain } from './app/domains/api.mjs';
 import { installBootstrapDomain } from './app/domains/bootstrap.mjs';
 
 const require = createRequire(import.meta.url);
-const { runtime, exposeRuntime, installDomain } = createApplicationContext();
+const { runtime, exposeRuntime, installDomain } = createApplicationContext({ domainDependencies });
 const appRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const root = resolve(process.env.STATIC_ROOT || join(appRoot, 'dist'));
 const dataDir = resolve(process.env.DATA_DIR || join(appRoot, 'data'));
@@ -126,6 +127,7 @@ const dictionarySqliteFile = join(dataDir, 'dictionary.sqlite');
 const loginAttemptsFile = join(dataDir, 'login-attempts.json');
 const proxySettingsEnvFile = process.env.PROXY_SETTINGS_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'proxy.env') : '/etc/exam-planner/proxy.env');
 const telegramEnvFile = process.env.TELEGRAM_ENV_FILE || (process.platform === 'win32' ? join(dataDir, 'telegram.env') : '/etc/exam-planner/telegram.env');
+const hbrStatusFile = process.env.HBR_STATUS_FILE || '';
 const embeddingWorkerFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'embedding_worker.py');
 const openClawWeixinSenderFile = join(resolve(fileURLToPath(new URL('.', import.meta.url))), 'openclaw-weixin-send.mjs');
 const embeddingCacheDir = process.env.EMBEDDING_CACHE_DIR || join(dataDir, 'embedding-models');
@@ -335,6 +337,8 @@ exposeRuntime({
     breakGuardRepository: () => breakGuardRepository,
     backupRepository: () => backupRepository,
     dictionaryRepository: () => dictionaryRepository,
+    dictionaryDatabase: () => dictionaryDatabase,
+    hbrStatusFile: () => hbrStatusFile,
     userAccountRepository: () => userAccountRepository,
     sessionRepository: () => sessionRepository,
     taskRepository: () => taskRepository,

@@ -9,13 +9,8 @@ if (Test-Path $packagedApp) {
   $canRunPackagedApp = $false
 }
 if ($canRunPackagedApp) {
-  try {
-    Start-Process -FilePath $packagedApp -WorkingDirectory $scriptDir -WindowStyle Hidden -ErrorAction Stop
-    exit 0
-  } catch {
-    # Smart App Control can reject an unsigned local build. The signed Python
-    # runtime provides the same tray application without weakening Windows policy.
-  }
+  & $packagedApp
+  exit $LASTEXITCODE
 }
 $pythonwCommand = Get-Command pythonw.exe -ErrorAction SilentlyContinue
 $pythonw = if ($pythonwCommand) { $pythonwCommand.Source } else { $null }
@@ -32,16 +27,14 @@ if (-not $pythonw) {
 }
 
 $leaf = Split-Path -Leaf $pythonw
-$arguments = if ($leaf -ieq "py.exe" -or $leaf -ieq "pyw.exe") {
-  "-3 `"$app`""
-} else {
-  "`"$app`""
+Push-Location $scriptDir
+try {
+  if ($leaf -ieq "py.exe" -or $leaf -ieq "pyw.exe") {
+    & $pythonw -3 $app
+  } else {
+    & $pythonw $app
+  }
+  exit $LASTEXITCODE
+} finally {
+  Pop-Location
 }
-
-$startInfo = New-Object System.Diagnostics.ProcessStartInfo
-$startInfo.FileName = $pythonw
-$startInfo.Arguments = $arguments
-$startInfo.WorkingDirectory = $scriptDir
-$startInfo.UseShellExecute = $true
-$startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-[System.Diagnostics.Process]::Start($startInfo) | Out-Null

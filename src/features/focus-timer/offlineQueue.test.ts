@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { FocusTimerAction, FocusTimerDashboard } from '../../api/contracts';
 import {
   applyOptimisticFocusTimerAction,
+  addFocusTimerConflict,
+  loadFocusTimerConflicts,
   enqueueFocusTimerAction,
   loadFocusTimerQueue,
   removeFocusTimerAction,
+  retryFocusTimerConflicts,
 } from './offlineQueue';
 
 function memoryStorage() {
@@ -89,5 +92,24 @@ describe('focus timer offline queue', () => {
     expect(completed.state.mode).toBe('break');
     expect(completed.summary.studySeconds).toBe(2400);
     expect(completed.sessions[0]).toMatchObject({ projectId: 202, durationSeconds: 2400 });
+  });
+
+  it('keeps rejected offline actions in a visible conflict inbox', () => {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: memoryStorage() });
+    const action: FocusTimerAction = {
+      action: 'finish_break',
+      operationId: 'operation_conflict_001',
+      occurredAt: '2026-07-24T03:00:00.000Z',
+    };
+    addFocusTimerConflict(2, action, Object.assign(new Error('状态版本冲突'), { status: 409 }));
+
+    expect(loadFocusTimerConflicts(2)).toMatchObject([{
+      action: { operationId: 'operation_conflict_001' },
+      message: '状态版本冲突',
+      status: 409,
+    }]);
+    expect(retryFocusTimerConflicts(2)).toBe(1);
+    expect(loadFocusTimerConflicts(2)).toEqual([]);
+    expect(loadFocusTimerQueue(2)[0].operationId).toBe('operation_conflict_001');
   });
 });

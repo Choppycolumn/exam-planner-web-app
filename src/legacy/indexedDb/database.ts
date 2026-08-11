@@ -1,7 +1,7 @@
 import Dexie, { type Table } from 'dexie';
-import type { AppSetting, DailyReview, Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject } from '../types/models';
+import type { AppSetting, DailyReview, Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject } from '../../types/models';
 import { DB_NAME, ENTITY_SCHEMA_VERSION } from './schema';
-import { nowISO } from '../utils/date';
+import { nowISO } from '../../utils/date';
 
 class ExamPlannerDatabase extends Dexie {
   goals!: Table<Goal, number>;
@@ -81,4 +81,4 @@ class ExamPlannerDatabase extends Dexie {
   }
 }
 
-export const db = new ExamPlannerDatabase();
+export const legacyIndexedDb = new ExamPlannerDatabase();

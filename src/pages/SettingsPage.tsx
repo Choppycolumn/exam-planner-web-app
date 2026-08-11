@@ -2,7 +2,7 @@ import { Cloud, Download, Hourglass, RotateCcw, ShieldCheck, Trash2, UploadCloud
 import { Page } from '../components/Page';
 import { MetricCard } from '../components/MetricCard';
 import { useAppData } from '../hooks/useAppData';
-import { DB_SCHEMA_VERSION } from '../db/schema';
+import { DATA_EXPORT_SCHEMA_VERSION } from '../utils/dataExport';
 import { Toast } from '../components/Toast';
 import { GoalsManager } from '../components/GoalsManager';
 import { useEffect, useState } from 'react';
@@ -146,7 +146,7 @@ export function SettingsPage() {
   }, []);
 
   const exportData = () => {
-    const data = { exportedAt: new Date().toISOString(), dbSchemaVersion: DB_SCHEMA_VERSION, goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks };
+    const data = { exportedAt: new Date().toISOString(), dataSchemaVersion: DATA_EXPORT_SCHEMA_VERSION, goals, projects, studyRecords, reviews, subjects, exams, shortTermTasks };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -329,7 +329,7 @@ export function SettingsPage() {
   return (
     <Page title="设置" subtitle="本地数据、版本和后续扩展入口。">
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="数据库版本" value={`v${DB_SCHEMA_VERSION}`} hint="已预留迁移机制" icon={<ShieldCheck size={18} />} />
+        <MetricCard label="导出格式" value={`v${DATA_EXPORT_SCHEMA_VERSION}`} hint="服务器数据独立迁移" icon={<ShieldCheck size={18} />} />
         <MetricCard label="学习记录" value={`${studyRecords.length} 条`} />
         <MetricCard label="模考记录" value={`${exams.length} 条`} />
       </div>
@@ -337,12 +337,12 @@ export function SettingsPage() {
       <UserManagementSection visible={showSection('users')} onMessage={(message) => { setToast(message); setTimeout(() => setToast(''), 2400); }} />
       <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">数据保存说明</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
+        <p className="mt-2 text-sm leading-6 text-secondary">学习计划数据已统一保存在服务器 SQLite 中，多端登录后读取同一份数据。删除学习项目和科目时，历史记录会保留名称快照；后续新增 AI 计划、番茄钟、导出报告时可以继续扩展表结构和迁移逻辑。</p>
         <button className="btn btn-soft mt-4" onClick={exportData}><Download size={16} />导出当前数据 JSON</button>
       </div>
       <div className={showSection('general') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Hourglass size={18} />学习总时长目标</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">这里设置的是到当前长期目标截止日期前，希望累计完成的总学习小时数。首页会自动显示已完成总时长、距离目标还差多少，以及平均每天还需要学多久。</p>
+        <p className="mt-2 text-sm leading-6 text-secondary">这里设置的是到当前长期目标截止日期前，希望累计完成的总学习小时数。首页会自动显示已完成总时长、距离目标还差多少，以及平均每天还需要学多久。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-[240px_auto]">
           <label>
             <span className="label">目标总时长（小时）</span>
@@ -375,26 +375,26 @@ export function SettingsPage() {
       />
       <div className={showSection('backups') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">服务器备份系统</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">服务器会每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。词典已建立本地 SQLite 索引，查询时不依赖外部 API。</p>
-        <dl className="mt-4 grid gap-4 border-y border-slate-100 py-4 md:grid-cols-4">
+        <p className="mt-2 text-sm leading-6 text-secondary">服务器会每周自动创建一次 SQLite 快照，并保留最近 12 个周备份。词典已建立本地 SQLite 索引，查询时不依赖外部 API。</p>
+        <dl className="mt-4 grid gap-4 border-y border-line py-4 md:grid-cols-4">
           <div>
-            <dt className="text-xs font-semibold text-slate-500">存储方式</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus?.storage === 'sqlite-tables' ? '结构化 SQLite' : backupStatus?.storage ?? '读取中'}</dd>
+            <dt className="text-xs font-semibold text-secondary">存储方式</dt>
+            <dd className="mt-1 text-lg font-semibold text-primary">{backupStatus?.storage === 'sqlite-tables' ? '结构化 SQLite' : backupStatus?.storage ?? '读取中'}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold text-slate-500">数据库大小</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? formatBytes(backupStatus.sqliteSizeBytes) : '--'}</dd>
+            <dt className="text-xs font-semibold text-secondary">数据库大小</dt>
+            <dd className="mt-1 text-lg font-semibold text-primary">{backupStatus ? formatBytes(backupStatus.sqliteSizeBytes) : '--'}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold text-slate-500">备份数量</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? `${backupStatus.backupCount} 个` : '--'}</dd>
+            <dt className="text-xs font-semibold text-secondary">备份数量</dt>
+            <dd className="mt-1 text-lg font-semibold text-primary">{backupStatus ? `${backupStatus.backupCount} 个` : '--'}</dd>
           </div>
           <div>
-            <dt className="text-xs font-semibold text-slate-500">词典词条</dt>
-            <dd className="mt-1 text-lg font-semibold text-slate-900">{backupStatus ? `${backupStatus.dictionaryCount.toLocaleString()} 条` : '--'}</dd>
+            <dt className="text-xs font-semibold text-secondary">词典词条</dt>
+            <dd className="mt-1 text-lg font-semibold text-primary">{backupStatus ? `${backupStatus.dictionaryCount.toLocaleString()} 条` : '--'}</dd>
           </div>
         </dl>
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-secondary">
           <span>最近周备份：{backupStatus?.lastWeeklyBackupAt ? new Date(backupStatus.lastWeeklyBackupAt).toLocaleString() : '暂无'}</span>
           <span>词典索引：{backupStatus?.dictionaryIndexedAt ? new Date(backupStatus.dictionaryIndexedAt).toLocaleString() : '暂无'}</span>
         </div>
@@ -402,40 +402,40 @@ export function SettingsPage() {
           <button className="btn btn-soft" onClick={() => void runServerBackup()}><Cloud size={16} />立即创建服务器备份</button>
           <button className="btn btn-soft" onClick={() => void refreshBackupStatus()}>刷新状态</button>
         </div>
-        <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
-          <div className="grid grid-cols-[1fr_90px_110px_92px] bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+        <div className="mt-5 overflow-hidden rounded-lg border border-line">
+          <div className="grid grid-cols-[1fr_90px_110px_92px] bg-surface-muted px-3 py-2 text-xs font-semibold text-secondary">
             <span>备份文件</span>
             <span>类型</span>
             <span>大小</span>
             <span className="text-right">操作</span>
           </div>
           {backupStatus?.backups?.length ? backupStatus.backups.slice(0, 12).map((backup) => (
-            <div key={backup.fileName} className="grid grid-cols-[1fr_90px_110px_92px] items-center gap-2 border-t border-slate-100 px-3 py-2 text-sm">
+            <div key={backup.fileName} className="grid grid-cols-[1fr_90px_110px_92px] items-center gap-2 border-t border-line px-3 py-2 text-sm">
               <div className="min-w-0">
-                <p className="truncate font-medium text-slate-800">{backup.fileName}</p>
-                <p className="mt-0.5 text-xs text-slate-500">{new Date(backup.createdAt).toLocaleString()}</p>
+                <p className="truncate font-medium text-strong">{backup.fileName}</p>
+                <p className="mt-0.5 text-xs text-secondary">{new Date(backup.createdAt).toLocaleString()}</p>
               </div>
-              <span className="text-slate-600">{backupKindLabel[backup.kind] ?? backup.kind}</span>
-              <span className="text-slate-600">{formatBytes(backup.sizeBytes)}</span>
-              <button className="justify-self-end rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => void restoreServerBackup(backup.fileName)}>
+              <span className="text-secondary">{backupKindLabel[backup.kind] ?? backup.kind}</span>
+              <span className="text-secondary">{formatBytes(backup.sizeBytes)}</span>
+              <button className="justify-self-end rounded-lg border border-line px-2 py-1 text-xs font-semibold text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent" onClick={() => void restoreServerBackup(backup.fileName)}>
                 <RotateCcw size={13} className="mr-1 inline" />恢复
               </button>
             </div>
           )) : (
-            <div className="border-t border-slate-100 px-3 py-6 text-center text-sm text-slate-500">还没有可恢复的服务器备份</div>
+            <div className="border-t border-line px-3 py-6 text-center text-sm text-secondary">还没有可恢复的服务器备份</div>
           )}
         </div>
       </div>
       <div className={showSection('goals') ? 'mt-5' : 'hidden'}>
         <div className="mb-3">
-          <h2 className="text-base font-semibold text-slate-900">长期目标管理</h2>
-          <p className="mt-1 text-sm text-slate-500">长期目标入口已收纳到设置页，首页仍会显示当前启用目标倒计时。</p>
+          <h2 className="text-base font-semibold text-primary">长期目标管理</h2>
+          <p className="mt-1 text-sm text-secondary">长期目标入口已收纳到设置页，首页仍会显示当前启用目标倒计时。</p>
         </div>
         <GoalsManager />
       </div>
       <div className={showSection('dictionary') ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="text-base font-semibold">易混单词数据</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">易混单词保存在当前浏览器本地，共 {confusingGroups.length} 组。可以导出 JSON，也可以设置服务器地址用于每小时备份。</p>
+        <p className="mt-2 text-sm leading-6 text-secondary">易混单词保存在当前浏览器本地，共 {confusingGroups.length} 组。可以导出 JSON，也可以设置服务器地址用于每小时备份。</p>
         <div className="mt-4 flex flex-wrap gap-3">
           <button className="btn btn-soft" onClick={exportConfusingWords}><Download size={16} />导出易混单词 JSON</button>
           <label className="btn btn-soft cursor-pointer"><UploadCloud size={16} />导入易混单词 JSON<input className="hidden" type="file" accept="application/json" onChange={(event) => void importConfusingWords(event.target.files?.[0])} /></label>
@@ -455,46 +455,46 @@ export function SettingsPage() {
             <button className="btn btn-soft" onClick={() => void refreshConfusingWordsBackups()}>刷新服务器版本</button>
           </div>
           <div className="mt-5 grid gap-3 md:grid-cols-3">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">本机易混单词</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{confusingGroups.length} 组 / {confusingLocalWordCount} 个词</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">本机易混单词</p>
+              <p className="mt-1 text-lg font-semibold text-primary">{confusingGroups.length} 组 / {confusingLocalWordCount} 个词</p>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">服务器当前备份</p>
-              <p className="mt-1 text-lg font-semibold text-slate-900">{confusingServerBackup ? `${confusingServerBackup.groups.length} 组 / ${confusingServerWordCount} 个词` : '未读取'}</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">服务器当前备份</p>
+              <p className="mt-1 text-lg font-semibold text-primary">{confusingServerBackup ? `${confusingServerBackup.groups.length} 组 / ${confusingServerWordCount} 个词` : '未读取'}</p>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">服务器备份时间</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{confusingServerBackup?.backedUpAt ? new Date(confusingServerBackup.backedUpAt).toLocaleString() : '--'}</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">服务器备份时间</p>
+              <p className="mt-1 text-sm font-semibold text-primary">{confusingServerBackup?.backedUpAt ? new Date(confusingServerBackup.backedUpAt).toLocaleString() : '--'}</p>
             </div>
           </div>
-          <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
-            <div className="grid grid-cols-[1fr_90px_90px_86px] bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+          <div className="mt-5 overflow-hidden rounded-lg border border-line">
+            <div className="grid grid-cols-[1fr_90px_90px_86px] bg-surface-muted px-3 py-2 text-xs font-semibold text-secondary">
               <span>历史版本</span>
               <span>组数</span>
               <span>词数</span>
               <span className="text-right">操作</span>
             </div>
             {confusingBackupVersions.length ? confusingBackupVersions.slice(0, 10).map((version) => (
-              <div key={version.id} className="grid grid-cols-[1fr_90px_90px_86px] items-center gap-2 border-t border-slate-100 px-3 py-2 text-sm">
+              <div key={version.id} className="grid grid-cols-[1fr_90px_90px_86px] items-center gap-2 border-t border-line px-3 py-2 text-sm">
                 <div className="min-w-0">
-                  <p className="truncate font-medium text-slate-800">{new Date(version.createdAt).toLocaleString()}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">{version.source} · {formatBytes(version.payloadBytes)}</p>
+                  <p className="truncate font-medium text-strong">{new Date(version.createdAt).toLocaleString()}</p>
+                  <p className="mt-0.5 text-xs text-secondary">{version.source} · {formatBytes(version.payloadBytes)}</p>
                 </div>
-                <span className="text-slate-600">{version.groupCount}</span>
-                <span className="text-slate-600">{version.wordCount}</span>
-                <button className="justify-self-end rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => void restoreConfusingWordsVersion(version)}>
+                <span className="text-secondary">{version.groupCount}</span>
+                <span className="text-secondary">{version.wordCount}</span>
+                <button className="justify-self-end rounded-lg border border-line px-2 py-1 text-xs font-semibold text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent" onClick={() => void restoreConfusingWordsVersion(version)}>
                   恢复
                 </button>
               </div>
             )) : (
-              <div className="border-t border-slate-100 px-3 py-6 text-center text-sm text-slate-500">暂无服务器历史版本；点击“立即备份”后会开始保留。</div>
+              <div className="border-t border-line px-3 py-6 text-center text-sm text-secondary">暂无服务器历史版本；点击“立即备份”后会开始保留。</div>
             )}
           </div>
         </div>
-      <div className={showSection('danger') ? 'mt-5 rounded-lg border border-rose-200 bg-rose-50 p-5' : 'hidden'}>
-        <h2 className="text-base font-semibold text-rose-800">危险操作</h2>
-        <p className="mt-2 text-sm leading-6 text-rose-700">一键清空会删除当前浏览器中的所有本地数据，包括复盘、学习时间、模考成绩、目标和短期任务。操作会进行二次确认，清空后会自动恢复默认学习项目和默认科目。</p>
+      <div className={showSection('danger') ? 'mt-5 rounded-lg border border-danger bg-danger-soft p-5' : 'hidden'}>
+        <h2 className="text-base font-semibold text-danger">危险操作</h2>
+        <p className="mt-2 text-sm leading-6 text-danger">一键清空会删除当前浏览器中的所有本地数据，包括复盘、学习时间、模考成绩、目标和短期任务。操作会进行二次确认，清空后会自动恢复默认学习项目和默认科目。</p>
         <button className="btn btn-danger mt-4" onClick={clearAllData}><Trash2 size={16} />一键清空所有数据</button>
       </div>
       <Toast message={toast} />

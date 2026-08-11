@@ -11,7 +11,7 @@ export default defineConfig({
     modulePreload: {
       resolveDependencies(_filename, dependencies, context) {
         if (context.hostType !== 'html') return dependencies;
-        return dependencies.filter((dependency) => !/(?:^|\/)(?:charts|local-db)-/.test(dependency));
+        return dependencies.filter((dependency) => !/(?:^|\/)(?:charts|legacy-migration)-/.test(dependency));
       },
     },
     rollupOptions: {
@@ -20,7 +20,7 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('recharts') || id.includes('d3-')) return 'charts';
           if (id.includes('pdfjs-dist')) return 'pdf';
-          if (id.includes('dexie')) return 'local-db';
+          if (id.includes('dexie')) return 'legacy-migration';
           if (id.includes('framer-motion')) return 'motion';
           if (id.includes('lucide-react')) return 'icons';
           if (id.includes('@tanstack')) return 'query';

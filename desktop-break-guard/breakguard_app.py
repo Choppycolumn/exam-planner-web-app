@@ -5,6 +5,7 @@ import os
 import time
 from tkinter import Canvas, Tk, Toplevel, messagebox
 
+from breakguard_activity import RuntimeActivityGuard, windows_session_locked
 from breakguard_config import Config
 from breakguard_instance import SingleInstance
 from breakguard_logging import log_error
@@ -86,6 +87,9 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.summary_dialog = None
         self.history_dialog = None
         self.last_fullscreen_raise = 0.0
+        self.last_rollover_check = 0.0
+        self.last_lag_check = 0.0
+        self.activity_guard = RuntimeActivityGuard()
 
         self.enable_acrylic()
         self.build_ui()
@@ -473,12 +477,15 @@ class BreakGuardApp(WindowMixin, ViewMixin):
     def update_study_state(self) -> None:
         if not self.planner.session:
             return
-        self.refresh_view_state()
+        if self.compact_mode:
+            self.refresh_compact_view()
+        else:
+            self.refresh_view_state()
     def update_break_state(self) -> None:
         snapshot = self.machine.snapshot()
         if not snapshot["running"]:
             return
-        self.refresh_view_state()
+        self.refresh_break_view(snapshot)
         if snapshot["remaining"] > 0:
             return
         self.show_fullscreen(snapshot["overtime"])
@@ -511,7 +518,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         if not snapshot.get("due"):
             return
         self.planner.mark_lag_reminded(snapshot["project_id"], now)
-        session_date = self.planner.summary(now, available_project_ids=self.project_ids())["date"]
+        session_date = snapshot["date"]
         repeat_seconds = self.config.lag_repeat_minutes * 60
         repeat_index = int(max(0, now - snapshot["due_at"]) // repeat_seconds)
         self.client.post_event(
@@ -530,10 +537,20 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         self.show_progress_warning(snapshot)
     def tick(self) -> None:
         try:
-            self.update_day_rollover()
+            now = time.time()
+            excluded = self.activity_guard.observe(now, windows_session_locked())
+            if excluded and self.planner.session:
+                excluded = self.planner.exclude_inactive_time(excluded, now)
+                if excluded:
+                    self.set_status(f"已自动剔除 {max(1, excluded // 60)} 分钟休眠或锁屏时间")
+            if now - self.last_rollover_check >= 15:
+                self.update_day_rollover()
+                self.last_rollover_check = now
             self.update_study_state()
             self.update_break_state()
-            self.update_schedule_lag()
+            if now - self.last_lag_check >= 15:
+                self.update_schedule_lag()
+                self.last_lag_check = now
         except Exception as exc:
             log_error("timer tick failed", exc)
         if not self.exiting:
@@ -589,3 +606,4 @@ def main() -> None:
             messagebox.showerror("休息守护启动失败", "程序启动失败，详细信息已写入本地日志。")
         finally:
             instance.close()
+        raise

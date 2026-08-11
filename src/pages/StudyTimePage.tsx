@@ -107,23 +107,23 @@ export function StudyTimePage() {
         <div className="card p-5">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <label><span className="label">选择日期</span><input className="field w-52" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-            <div className="text-right"><p className="text-sm text-slate-500">当天总学习时长</p><p className="text-2xl font-semibold text-slate-950">{minutesToHoursText(total)}</p></div>
+            <div className="text-right"><p className="text-sm text-secondary">当天总学习时长</p><p className="text-2xl font-semibold text-primary">{minutesToHoursText(total)}</p></div>
           </div>
           {activeProjects.length ? (
             <div className="space-y-3">
               <div className={`sticky top-20 z-20 rounded-lg border p-3 shadow-sm backdrop-blur ${
                 saveError
-                  ? 'border-rose-200 bg-rose-50/95'
+                  ? 'border-danger bg-danger-soft'
                   : isSaving
-                    ? 'border-blue-200 bg-blue-50/95'
+                    ? 'border-accent bg-accent-soft'
                     : isDirty
-                      ? 'border-amber-200 bg-amber-50/95'
-                      : 'border-emerald-100 bg-white/95'
+                      ? 'border-warning bg-warning-soft'
+                      : 'border-success bg-surface-strong'
               }`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">当天合计：{minutesToHoursText(total)}</p>
-                    <p className="mt-1 text-xs text-slate-500">
+                    <p className="text-sm font-semibold text-primary">当天合计：{minutesToHoursText(total)}</p>
+                    <p className="mt-1 text-xs text-secondary">
                       {saveError ? '保存失败，请点击立即保存重试' : isSaving ? '正在保存...' : isDirty ? '停止输入 2 秒后自动保存' : savedAt ? `已自动保存于 ${savedAt}` : '当前没有未保存修改'}
                     </p>
                   </div>
@@ -133,12 +133,12 @@ export function StudyTimePage() {
                 </div>
               </div>
               {activeProjects.map((project) => (
-                <div key={project.id} className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[160px_190px_1fr]">
+                <div key={project.id} className="grid gap-3 rounded-lg border border-line bg-surface-strong p-3 md:grid-cols-[160px_190px_1fr]">
                   <div className="flex items-center gap-2 font-medium"><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</div>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="relative">
                       <input
-                        className="field pr-8 placeholder:text-slate-300"
+                        className="field pr-8 placeholder:text-tertiary"
                         type="number"
                         min={0}
                         placeholder="0"
@@ -146,11 +146,11 @@ export function StudyTimePage() {
                         onChange={(e) => updateRow(project.id!, { hours: e.target.value === '' ? '' : Number(e.target.value) })}
                         disabled={readOnly}
                       />
-                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">时</span>
+                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-tertiary">时</span>
                     </label>
                     <label className="relative">
                       <input
-                        className="field pr-8 placeholder:text-slate-300"
+                        className="field pr-8 placeholder:text-tertiary"
                         type="number"
                         min={0}
                         max={59}
@@ -159,7 +159,7 @@ export function StudyTimePage() {
                         onChange={(e) => updateRow(project.id!, { minutes: e.target.value === '' ? '' : Math.min(59, Number(e.target.value)) })}
                         disabled={readOnly}
                       />
-                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-slate-400">分</span>
+                      <span className="pointer-events-none absolute right-3 top-2.5 text-sm text-tertiary">分</span>
                     </label>
                   </div>
                   <input className="field" placeholder="备注" value={rows[project.id!]?.note ?? ''} onChange={(e) => updateRow(project.id!, { note: e.target.value })} disabled={readOnly} />
@@ -182,7 +182,7 @@ export function StudyTimePage() {
           </div>
           <div className="mt-5 space-y-2">
             {projects.map((project) => (
-              <div key={project.id} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${project.isActive ? 'border-slate-200' : 'border-slate-100 opacity-50'}`}>
+              <div key={project.id} className={`flex items-center justify-between rounded-lg border px-3 py-2 ${project.isActive ? 'border-line' : 'border-line opacity-50'}`}>
                 <button className="flex items-center gap-2 text-left" onClick={() => setProjectDraft(project)}><span className="h-3 w-3 rounded-full" style={{ background: project.color }} />{project.name}</button>
                 {project.isActive && !readOnly && <button title="删除项目" onClick={() => project.id && confirm('删除后历史记录会保留项目名称快照，确定删除吗？') && studyRepository.removeProject(project.id)}><Trash2 size={16} /></button>}
               </div>

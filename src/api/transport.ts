@@ -1,4 +1,5 @@
 import { apiContract, type ApiContractName } from '../../shared/api-contracts.js';
+import { validateApiContractResponse } from './responseValidation';
 
 export type ApiOptions = {
   method?: string;
@@ -16,7 +17,7 @@ type ApiErrorEnvelope = {
 
 export async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), options.timeoutMs ?? 20_000);
   const response = await fetch(`/api${path}`, {
     method: options.method ?? 'GET',
     credentials: 'same-origin',
@@ -25,7 +26,7 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
       : { accept: 'application/json', 'x-exam-planner-client': 'web' },
     body: options.body ? JSON.stringify(options.body) : undefined,
     signal: controller.signal,
-  }).finally(() => window.clearTimeout(timeoutId));
+  }).finally(() => globalThis.clearTimeout(timeoutId));
 
   if (!response.ok) {
     const text = await response.text();
@@ -44,6 +45,12 @@ export async function apiRequest<T>(path: string, options: ApiOptions = {}): Pro
     throw error;
   }
 
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    const error = new Error('服务器返回了非 JSON 响应，请稍后刷新重试') as Error & { status?: number };
+    error.status = 502;
+    throw error;
+  }
   return response.json() as Promise<T>;
 }
 
@@ -60,5 +67,8 @@ export function apiContractRequest<T>(
       .map(([key, value]) => [key, String(value)]));
   const suffix = params.toString();
   const path = `${contract.path.replace(/^\/api/, '')}${suffix ? `?${suffix}` : ''}`;
-  return apiRequest<T>(path, { ...requestOptions, method: contract.method });
+  return apiRequest<T>(path, { ...requestOptions, method: contract.method }).then((payload) => {
+    validateApiContractResponse(name, payload);
+    return payload;
+  });
 }

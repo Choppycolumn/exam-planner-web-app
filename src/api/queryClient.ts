@@ -54,6 +54,6 @@ export const queryKeys = {
   mockExams: (subjectId: number | 'all', limit: number, offset: number) => ['server', 'mock-exams', subjectId, limit, offset] as const,
 };
 
-export function invalidateServerQueries() {
-  void queryClient.invalidateQueries({ queryKey: queryKeys.all });
+export function invalidateServerQueries(keys: readonly (readonly unknown[])[] = [queryKeys.state, queryKeys.dashboard]) {
+  for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
 }

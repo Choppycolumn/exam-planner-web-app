@@ -5,11 +5,15 @@ import { serverApi } from '../api/client';
 import { queryClient, queryKeys } from '../api/queryClient';
 import {
   applyOptimisticFocusTimerAction,
+  addFocusTimerConflict,
+  clearFocusTimerConflicts,
   createFocusTimerId,
   enqueueFocusTimerAction,
   loadFocusTimerCache,
+  loadFocusTimerConflicts,
   loadFocusTimerQueue,
   removeFocusTimerAction,
+  retryFocusTimerConflicts,
   saveFocusTimerCache,
 } from '../features/focus-timer/offlineQueue';
 
@@ -44,7 +48,9 @@ async function flushUserQueue(userId: number) {
         saveFocusTimerCache(userId, latest);
       } catch (error) {
         if (isRetryable(error)) throw error;
-        queue = removeFocusTimerAction(userId, current.operationId);
+        addFocusTimerConflict(userId, current, error);
+        removeFocusTimerAction(userId, current.operationId);
+        break;
       }
     }
     latest = await serverApi.getFocusTimer();
@@ -57,6 +63,7 @@ async function flushUserQueue(userId: number) {
 
 export function useFocusTimer(userId: number, online: boolean) {
   const [pendingCount, setPendingCount] = useState(() => loadFocusTimerQueue(userId).length);
+  const [conflicts, setConflicts] = useState(() => loadFocusTimerConflicts(userId));
   const [syncError, setSyncError] = useState('');
   const mounted = useRef(true);
   const focusKey = useMemo(() => queryKeys.focusTimer(userId), [userId]);
@@ -85,7 +92,9 @@ export function useFocusTimer(userId: number, online: boolean) {
       if (latest) queryClient.setQueryData(focusKey, latest);
       if (mounted.current) {
         setPendingCount(loadFocusTimerQueue(userId).length);
-        setSyncError('');
+        const nextConflicts = loadFocusTimerConflicts(userId);
+        setConflicts(nextConflicts);
+        setSyncError(nextConflicts.length ? `${nextConflicts.length} 条离线操作与服务器状态冲突，请处理后再继续同步。` : '');
       }
       void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard });
       void queryClient.invalidateQueries({ queryKey: ['server', 'study-records'] });
@@ -99,6 +108,21 @@ export function useFocusTimer(userId: number, online: boolean) {
       return undefined;
     }
   }, [focusKey, online, userId]);
+
+  const retryConflicts = useCallback(async () => {
+    retryFocusTimerConflicts(userId);
+    setConflicts([]);
+    setPendingCount(loadFocusTimerQueue(userId).length);
+    setSyncError('');
+    if (online) await flush();
+  }, [flush, online, userId]);
+
+  const discardConflicts = useCallback(() => {
+    clearFocusTimerConflicts(userId);
+    setConflicts([]);
+    setSyncError('');
+    void queryClient.invalidateQueries({ queryKey: focusKey });
+  }, [focusKey, userId]);
 
   useEffect(() => {
     if (!online) return undefined;
@@ -131,7 +155,10 @@ export function useFocusTimer(userId: number, online: boolean) {
     dashboard: query.data,
     pendingCount,
     syncError,
+    conflicts,
     dispatch,
     flush,
+    retryConflicts,
+    discardConflicts,
   };
 }

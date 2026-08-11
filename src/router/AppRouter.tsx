@@ -24,7 +24,7 @@ const MigrateLocalDataPage = lazy(() => routeLoaders.migrateLocalData().then((mo
 
 function RouteFallback() {
   return (
-    <div className="card p-5 text-sm text-slate-500">
+    <div className="card p-5 text-sm text-secondary">
       页面加载中...
     </div>
   );

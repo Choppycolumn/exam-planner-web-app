@@ -41,11 +41,11 @@ export function ColorPicker({ value, onChange }: { value?: string; onChange: (co
   return (
     <div ref={rootRef} className="relative">
       <button type="button" className="field flex h-11 items-center justify-between gap-3" onClick={() => setOpen((current) => !current)}>
-        <span className="flex items-center gap-2 text-sm text-slate-700">
-          <span className="h-4 w-4 rounded-full ring-1 ring-slate-200" style={{ background: selected }} />
+        <span className="flex items-center gap-2 text-sm text-strong">
+          <span className="h-4 w-4 rounded-full ring-1 ring-line" style={{ background: selected }} />
           选择颜色
         </span>
-        <ChevronDown size={16} className={`text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown size={16} className={`text-tertiary transition ${open ? 'rotate-180' : ''}`} />
       </button>
       {open ? (
         <div className="app-popover absolute left-0 top-12 z-40 w-64 rounded-lg border p-3">
@@ -54,7 +54,7 @@ export function ColorPicker({ value, onChange }: { value?: string; onChange: (co
               <button
                 key={color}
                 type="button"
-                className={`h-8 w-8 rounded-full border transition hover:scale-105 ${selected === color ? 'border-slate-950 ring-2 ring-slate-300' : 'border-white ring-1 ring-slate-200'}`}
+                className={`h-8 w-8 rounded-full border transition hover:scale-105 ${selected === color ? 'border-line-strong ring-2 ring-line-strong' : 'border-highlight ring-1 ring-line'}`}
                 style={{ background: color }}
                 title={color}
                 aria-label={`选择颜色 ${color}`}

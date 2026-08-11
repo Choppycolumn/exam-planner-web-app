@@ -104,6 +104,78 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
             nodeVersion: process.version,
         };
     }
+    function getBackgroundJobStatus() {
+        const reminderSettings = runtime.getDailyBriefSettings({ includeSecret: true }).taskReminders;
+        const reminderEnabled = Boolean(reminderSettings?.enabled);
+        const reminderSuccessAt = runtime.appMetadataRepository.get('worker_task_reminder_last_success_at', '');
+        const reminderErrorAt = runtime.appMetadataRepository.get('worker_task_reminder_last_error_at', '');
+        const reminderError = runtime.appMetadataRepository.get('worker_task_reminder_last_error', '');
+        const successMs = Date.parse(reminderSuccessAt);
+        const errorMs = Date.parse(reminderErrorAt);
+        const reminderFailed = reminderEnabled && Boolean(reminderError)
+            && (!Number.isFinite(successMs) || (Number.isFinite(errorMs) && errorMs >= successMs));
+        const reminderStale = reminderEnabled && !reminderFailed
+            && (!Number.isFinite(successMs) || Date.now() - successMs > 3 * 60 * 1000);
+        const latestByName = new Map();
+        for (const run of runtime.taskRunsRepository.listLatest(40)) {
+            if (!latestByName.has(run.taskName))
+                latestByName.set(run.taskName, run);
+        }
+        const failedTasks = [...latestByName.values()]
+            .filter((run) => run.status === 'failed')
+            .map((run) => ({ taskName: run.taskName, startedAt: run.startedAt }));
+        return {
+            status: reminderFailed ? 'failed' : reminderStale || failedTasks.length ? 'degraded' : 'normal',
+            reminder: {
+                enabled: reminderEnabled,
+                lastSuccessAt: reminderSuccessAt || null,
+                lastErrorAt: reminderErrorAt || null,
+                error: reminderFailed ? reminderError : '',
+            },
+            failedTasks,
+        };
+    }
+    function getHbrStatus() {
+        if (!runtime.hbrStatusFile)
+            return null;
+        try {
+            if (!runtime.existsSync(runtime.hbrStatusFile))
+                return { status: 'degraded', result: 'missing', checkedAt: null };
+            const payload = JSON.parse(runtime.readFileSync(runtime.hbrStatusFile, 'utf8'));
+            const checkedAt = typeof payload.checkedAt === 'string' ? payload.checkedAt : null;
+            const checkedMs = checkedAt ? Date.parse(checkedAt) : NaN;
+            const stale = !Number.isFinite(checkedMs) || Date.now() - checkedMs > 36 * 60 * 60 * 1000;
+            const failed = payload.result !== 'success';
+            return {
+                status: failed ? 'failed' : stale ? 'degraded' : 'normal',
+                action: String(payload.action || ''),
+                result: String(payload.result || ''),
+                checkedAt,
+                detail: failed ? runtime.redactSecretText(String(payload.detail || '')).slice(0, 240) : '',
+            };
+        }
+        catch (error) {
+            return { status: 'failed', result: 'invalid', checkedAt: null, detail: runtime.redactSecretText(error.message || String(error)) };
+        }
+    }
+    function getBuildMetadata() {
+        try {
+            const file = runtime.join(runtime.root, 'build-meta.json');
+            if (!runtime.existsSync(file))
+                return { version: process.env.APP_VERSION || 'unknown', commit: 'unknown', builtAt: null };
+            const payload = JSON.parse(runtime.readFileSync(file, 'utf8'));
+            return {
+                version: String(payload.version || process.env.APP_VERSION || 'unknown'),
+                commit: String(payload.commit || 'unknown').slice(0, 40),
+                branch: String(payload.branch || 'unknown').slice(0, 120),
+                builtAt: typeof payload.builtAt === 'string' ? payload.builtAt : null,
+                dirty: Boolean(payload.dirty),
+            };
+        }
+        catch (error) {
+            return { version: process.env.APP_VERSION || 'unknown', commit: 'unknown', builtAt: null, error: runtime.redactSecretText(error.message || String(error)) };
+        }
+    }
     function getHealthPayload() {
         const checks = [];
         let ok = true;
@@ -142,6 +214,18 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
         addCheck('tasks', runtime.activeTaskLocks.size ? 'warn' : 'ok', { active: Array.from(runtime.activeTaskLocks) });
         const worker = runtime.workerHeartbeatStatus();
         addCheck('background-worker', worker.healthy ? 'ok' : 'warn', { worker });
+        const backgroundJobs = getBackgroundJobStatus();
+        addCheck('background-jobs', backgroundJobs.status === 'failed' ? 'error' : backgroundJobs.status === 'degraded' ? 'warn' : 'ok', {
+            backgroundJobs,
+            action: backgroundJobs.status === 'normal' ? '' : '检查最近失败的后台任务及待办提醒扫描。',
+        });
+        const hbr = getHbrStatus();
+        if (hbr) {
+            addCheck('offsite-backup', hbr.status === 'failed' ? 'error' : hbr.status === 'degraded' ? 'warn' : 'ok', {
+                hbr,
+                action: hbr.status === 'normal' ? '' : '检查 HBR 备份窗口、资源压力与最近执行结果。',
+            });
+        }
         const externalApis = runtime.externalApiClient.status();
         addCheck('external-api', externalApis.openCircuits.length ? 'warn' : 'ok', {
             openCircuitCount: externalApis.openCircuits.length,
@@ -172,12 +256,14 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
             status: check.status === 'error' ? 'failed' : check.status === 'warn' ? 'degraded' : 'normal',
             action: check.status === 'ok' ? '' : check.action || `检查 ${check.name} 状态并处理异常。`,
         })));
+        const build = getBuildMetadata();
         return {
             ok,
             status: ok ? 'ok' : 'degraded',
             unified,
             generatedAt: runtime.nowISO(),
-            version: process.env.npm_package_version || '0.0.0',
+            version: build.version,
+            build,
             runtime: getRuntimeStatus(),
             externalApis,
             checks,
@@ -310,6 +396,9 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
         scheduleDailyMaintenance: () => scheduleDailyMaintenance,
         getDiskStatus: () => getDiskStatus,
         getRuntimeStatus: () => getRuntimeStatus,
+        getBackgroundJobStatus: () => getBackgroundJobStatus,
+        getHbrStatus: () => getHbrStatus,
+        getBuildMetadata: () => getBuildMetadata,
         getHealthPayload: () => getHealthPayload,
         getReadinessPayload: () => getReadinessPayload,
         getTaskCenterStatus: () => getTaskCenterStatus,

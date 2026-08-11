@@ -31,7 +31,7 @@ export function GoalsManager() {
           <label><span className="label">截止日期 *</span><input className="field" type="date" value={draft.deadline ?? ''} onChange={(e) => setDraft({ ...draft, deadline: e.target.value })} /></label>
           <label><span className="label">目标类型</span><select className="field" value={draft.type ?? '考研'} onChange={(e) => setDraft({ ...draft, type: e.target.value as Goal['type'] })}><option>考研</option><option>课程</option><option>项目</option></select></label>
           <label><span className="label">备注</span><textarea className="field min-h-20" value={draft.notes ?? ''} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></label>
-          <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={!!draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} /> 设为当前启用目标</label>
+          <label className="flex items-center gap-2 text-sm text-strong"><input type="checkbox" checked={!!draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} /> 设为当前启用目标</label>
           <div className="flex gap-2"><button className="btn btn-primary" onClick={save}><Save size={16} />保存</button><button className="btn btn-soft" onClick={() => setDraft(emptyGoal)}><Plus size={16} />新建</button></div>
         </div>
       </div>
@@ -41,10 +41,10 @@ export function GoalsManager() {
           <div key={goal.id} className="card p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="flex items-center gap-2"><h3 className="text-lg font-semibold">{goal.name}</h3>{goal.isActive ? <span className="rounded bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">启用中</span> : null}</div>
-                <p className="mt-1 text-sm text-slate-500">{goal.description}</p>
-                <p className="mt-2 text-sm text-slate-600">截止日期：{goal.deadline} · 类型：{goal.type}</p>
-                {goal.notes ? <p className="mt-2 text-sm text-slate-500">{goal.notes}</p> : null}
+                <div className="flex items-center gap-2"><h3 className="text-lg font-semibold">{goal.name}</h3>{goal.isActive ? <span className="rounded bg-accent-soft px-2 py-1 text-xs font-semibold text-accent">启用中</span> : null}</div>
+                <p className="mt-1 text-sm text-secondary">{goal.description}</p>
+                <p className="mt-2 text-sm text-secondary">截止日期：{goal.deadline} · 类型：{goal.type}</p>
+                {goal.notes ? <p className="mt-2 text-sm text-secondary">{goal.notes}</p> : null}
               </div>
               <div className="flex gap-2">
                 <button className="btn btn-soft" onClick={() => setDraft(goal)}>编辑</button>

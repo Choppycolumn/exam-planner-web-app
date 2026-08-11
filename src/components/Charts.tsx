@@ -14,7 +14,7 @@ const palette = [
 export function ChartBox({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="card p-5">
-      <h2 className="mb-4 text-base font-semibold text-slate-900">{title}</h2>
+      <h2 className="mb-4 text-base font-semibold text-primary">{title}</h2>
       <div className="h-72">{children}</div>
     </div>
   );

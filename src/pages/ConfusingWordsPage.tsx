@@ -223,7 +223,7 @@ function ConfusingWordsWorkspace({ userId, isOwner }: { userId: number; isOwner:
         <MetricCard label="今日新增" value={`${todayWords} 个`} />
       </div>
 
-      {syncStatus ? <p className="mt-3 text-sm text-slate-500">{syncStatus}</p> : null}
+      {syncStatus ? <p className="mt-3 text-sm text-secondary">{syncStatus}</p> : null}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[320px_1fr_260px]">
         <aside className="space-y-5">
@@ -240,7 +240,7 @@ function ConfusingWordsWorkspace({ userId, isOwner }: { userId: number; isOwner:
 
           <div className="card p-4">
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3 text-slate-400" size={16} />
+              <Search className="pointer-events-none absolute left-3 top-3 text-tertiary" size={16} />
               <input className="field pl-9" placeholder="搜索英文或中文" value={query} onChange={(event) => setQuery(event.target.value)} />
             </div>
           </div>
@@ -250,21 +250,21 @@ function ConfusingWordsWorkspace({ userId, isOwner }: { userId: number; isOwner:
           {filteredGroups.length ? filteredGroups.map((group) => (
             <article
               key={group.id}
-              className={`card p-5 transition ${selectedGroup?.id === group.id ? 'ring-2 ring-blue-200' : ''}`}
+              className={`card p-5 transition ${selectedGroup?.id === group.id ? 'ring-2 ring-accent' : ''}`}
               onClick={() => setSelectedId(group.id)}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex flex-wrap gap-2">
-                  {group.words.map((word) => <span key={word.id} className="rounded bg-slate-100 px-2.5 py-1 text-sm font-semibold text-slate-700">{word.word}</span>)}
+                  {group.words.map((word) => <span key={word.id} className="rounded bg-surface-inset px-2.5 py-1 text-sm font-semibold text-strong">{word.word}</span>)}
                 </div>
                 <div className="flex shrink-0 gap-2">
-                  <button className="rounded-lg border border-slate-200 bg-white p-2 text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" title="添加单词" onClick={(event) => { event.stopPropagation(); setExpandedAddGroupId(expandedAddGroupId === group.id ? '' : group.id); }}><Plus size={16} /></button>
+                  <button className="rounded-lg border border-line bg-surface-strong p-2 text-secondary transition hover:border-accent hover:bg-accent-soft hover:text-accent" title="添加单词" onClick={(event) => { event.stopPropagation(); setExpandedAddGroupId(expandedAddGroupId === group.id ? '' : group.id); }}><Plus size={16} /></button>
                   <button className="btn btn-danger" onClick={(event) => { event.stopPropagation(); deleteGroup(group.id); }}><Trash2 size={16} />删除卡片</button>
                 </div>
               </div>
 
               {expandedAddGroupId === group.id ? (
-                <div className="mt-4 flex flex-wrap gap-2 rounded-lg border border-blue-100 bg-blue-50/70 p-3" onClick={(event) => event.stopPropagation()}>
+                <div className="mt-4 flex flex-wrap gap-2 rounded-lg border border-accent bg-accent-soft p-3" onClick={(event) => event.stopPropagation()}>
                   <input
                     className="field min-w-0 flex-1"
                     placeholder="输入要加入这张卡的新单词，可用空格或逗号分隔"

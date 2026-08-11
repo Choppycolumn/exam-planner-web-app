@@ -84,7 +84,7 @@ export function ReviewsPage() {
         <div className="card p-5">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
             <label><span className="label">复盘日期</span><input className="field w-52" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-            <span className="rounded bg-slate-100 px-3 py-2 text-sm text-slate-600">{current ? '编辑已有复盘' : '新建当天复盘'}</span>
+            <span className="rounded bg-surface-inset px-3 py-2 text-sm text-secondary">{current ? '编辑已有复盘' : '新建当天复盘'}</span>
           </div>
           <div className="grid gap-4">
             <label><span className="label">今日总结 *</span><textarea className="field min-h-28" value={draft.summary} onChange={(e) => setDraft({ ...draft, summary: e.target.value })} /></label>
@@ -101,28 +101,28 @@ export function ReviewsPage() {
         <div className="space-y-5">
           <div className="card p-5">
             <h2 className="text-base font-semibold">今日复盘预填</h2>
-            <p className="mt-1 text-sm text-slate-500">根据今天的学习、短期目标、喝水和问题 Inbox 生成素材，点一下就能带入表单。</p>
+            <p className="mt-1 text-sm text-secondary">根据今天的学习、短期目标、喝水和问题 Inbox 生成素材，点一下就能带入表单。</p>
             <div className="mt-4 grid gap-2 text-sm">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">今日学习</p>
-                <p className="mt-1 font-semibold text-slate-800">{prefill ? minutesToHoursText(prefill.totalMinutes) : '--'}</p>
+              <div className="rounded-lg border border-line bg-surface-muted p-3">
+                <p className="text-xs font-semibold text-secondary">今日学习</p>
+                <p className="mt-1 font-semibold text-strong">{prefill ? minutesToHoursText(prefill.totalMinutes) : '--'}</p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">投入最多</p>
-                <p className="mt-1 font-semibold text-slate-800">{prefill?.topProject ? `${prefill.topProject.name} ${minutesToHoursText(prefill.topProject.minutes)}` : '暂无'}</p>
+              <div className="rounded-lg border border-line bg-surface-muted p-3">
+                <p className="text-xs font-semibold text-secondary">投入最多</p>
+                <p className="mt-1 font-semibold text-strong">{prefill?.topProject ? `${prefill.topProject.name} ${minutesToHoursText(prefill.topProject.minutes)}` : '暂无'}</p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold text-slate-500">喝水</p>
-                <p className="mt-1 font-semibold text-slate-800">{prefill ? `${prefill.water.cups}/${prefill.water.targetCups} 杯` : '--'}</p>
+              <div className="rounded-lg border border-line bg-surface-muted p-3">
+                <p className="text-xs font-semibold text-secondary">喝水</p>
+                <p className="mt-1 font-semibold text-strong">{prefill ? `${prefill.water.cups}/${prefill.water.targetCups} 杯` : '--'}</p>
               </div>
             </div>
             {prefill?.problemInboxItems.length ? (
-              <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-700">今天记录的问题</p>
-                <ul className="mt-2 space-y-1 text-sm text-amber-800">
+              <div className="mt-3 rounded-lg border border-warning bg-warning-soft p-3">
+                <p className="text-xs font-semibold text-warning">今天记录的问题</p>
+                <ul className="mt-2 space-y-1 text-sm text-warning">
                   {prefill.problemInboxItems.map((item) => <li key={item.id}>- {item.text}</li>)}
                 </ul>
-                {!current ? <p className="mt-2 text-xs font-semibold text-amber-700">已自动带入“今日问题”，保存复盘后会标记为已处理。</p> : null}
+                {!current ? <p className="mt-2 text-xs font-semibold text-warning">已自动带入“今日问题”，保存复盘后会标记为已处理。</p> : null}
               </div>
             ) : null}
             <div className="mt-4 flex flex-wrap gap-2">
@@ -139,54 +139,54 @@ export function ReviewsPage() {
                 <div className={`rounded-lg border p-4 ${yesterdayTone.className}`}>
                   <div className="flex items-center justify-between gap-3">
                     <p className="font-semibold">{yesterdayDate}</p>
-                    <span className="rounded bg-white/70 px-2 py-1 text-sm font-semibold">{yesterdayAverageScore} 分 · {yesterdayTone.label}</span>
+                    <span className="rounded bg-surface-strong px-2 py-1 text-sm font-semibold">{yesterdayAverageScore} 分 · {yesterdayTone.label}</span>
                   </div>
                 </div>
                 <div className="space-y-3">
-                  <div className="rounded-lg border border-slate-200 bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-700">昨日总结</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-slate-600">{yesterdayReview.summary || '未填写'}</p>
+                  <div className="rounded-lg border border-line bg-surface-strong p-3">
+                    <p className="text-sm font-semibold text-strong">昨日总结</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-secondary">{yesterdayReview.summary || '未填写'}</p>
                   </div>
-                  <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3">
-                    <p className="text-sm font-semibold text-emerald-700">昨日完成得好的地方</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-emerald-700/80">{yesterdayReview.wins || '未填写'}</p>
+                  <div className="rounded-lg border border-success bg-success-soft p-3">
+                    <p className="text-sm font-semibold text-success">昨日完成得好的地方</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-success">{yesterdayReview.wins || '未填写'}</p>
                   </div>
-                  <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
-                    <p className="text-sm font-semibold text-rose-700">昨日问题</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-rose-700/80">{yesterdayReview.problems || '未填写'}</p>
+                  <div className="rounded-lg border border-danger bg-danger-soft p-3">
+                    <p className="text-sm font-semibold text-danger">昨日问题</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-danger">{yesterdayReview.problems || '未填写'}</p>
                   </div>
-                  <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
-                    <p className="text-sm font-semibold text-blue-700">昨日写给今天的改进计划</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-blue-700/80">{yesterdayReview.tomorrowPlan || '未填写'}</p>
+                  <div className="rounded-lg border border-accent bg-accent-soft p-3">
+                    <p className="text-sm font-semibold text-accent">昨日写给今天的改进计划</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-accent">{yesterdayReview.tomorrowPlan || '未填写'}</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-center text-sm">
-                  <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-slate-500">昨日评分</p>
+                  <div className="rounded-lg bg-surface-muted p-3">
+                    <p className="text-secondary">昨日评分</p>
                     <p className="mt-1 text-lg font-semibold">{yesterdayAverageScore}</p>
                   </div>
-                  <div className={`rounded-lg p-3 ${scoreDiff > 0 ? 'bg-emerald-50 text-emerald-700' : scoreDiff < 0 ? 'bg-rose-50 text-rose-700' : 'bg-slate-50 text-slate-600'}`}>
+                  <div className={`rounded-lg p-3 ${scoreDiff > 0 ? 'bg-success-soft text-success' : scoreDiff < 0 ? 'bg-danger-soft text-danger' : 'bg-surface-muted text-secondary'}`}>
                     <p className="opacity-75">当前差值</p>
                     <p className="mt-1 text-lg font-semibold">{scoreDiff > 0 ? `+${scoreDiff}` : scoreDiff}</p>
                   </div>
-                  <div className="rounded-lg bg-slate-50 p-3">
-                    <p className="text-slate-500">今日评分</p>
+                  <div className="rounded-lg bg-surface-muted p-3">
+                    <p className="text-secondary">今日评分</p>
                     <p className="mt-1 text-lg font-semibold">{draft.score}</p>
                   </div>
                 </div>
               </div>
-            ) : <p className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">没有找到 {yesterdayDate} 的复盘，保存后明天这里就能自动对比。</p>}
+            ) : <p className="mt-4 rounded-lg border border-dashed border-line-strong bg-surface-muted p-4 text-sm text-secondary">没有找到 {yesterdayDate} 的复盘，保存后明天这里就能自动对比。</p>}
           </div>
 
           <div className="card p-5">
             <h2 className="text-base font-semibold">历史复盘</h2>
             <div className="mt-4 space-y-2">
               {reviews.length ? [...reviews].sort((a, b) => b.date.localeCompare(a.date)).map((review) => (
-                <button key={review.id} className="w-full rounded-lg border border-slate-200 p-3 text-left hover:bg-slate-50" onClick={() => setDate(review.date)}>
+                <button key={review.id} className="w-full rounded-lg border border-line p-3 text-left hover:bg-surface-hover" onClick={() => setDate(review.date)}>
                   <p className="font-medium">{review.date}</p>
-                  <p className="line-clamp-2 text-sm text-slate-500">{review.summary}</p>
+                  <p className="line-clamp-2 text-sm text-secondary">{review.summary}</p>
                 </button>
-              )) : <p className="text-sm text-slate-500">还没有复盘记录。</p>}
+              )) : <p className="text-sm text-secondary">还没有复盘记录。</p>}
             </div>
           </div>
         </div>

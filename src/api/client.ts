@@ -1,23 +1,56 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
 import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse, FocusTimerDashboard, FocusTimerAction, FocusTimerActionResponse, UserManagementResponse, ManagedUserAccount } from './contracts';
 import { invalidateServerQueries } from './queryClient';
-import { apiContractRequest } from './transport';
-import type { ApiContractName } from '../../shared/api-contracts.js';
+import { apiContractRequest as transportContractRequest } from './transport';
+import { apiContract, type ApiContractName } from '../../shared/api-contracts.js';
 export * from './contracts';
 export { apiRequest } from './transport';
 
-export const notifyDataChanged = () => {
-  invalidateServerQueries();
+type CacheEntry = { expiresAt: number; promise: Promise<unknown> };
+const apiResponseCache = new Map<string, CacheEntry>();
+
+export function clearApiResponseCache() {
+  apiResponseCache.clear();
+}
+
+function apiContractRequest<T>(
+  name: ApiContractName,
+  options: Parameters<typeof transportContractRequest<T>>[1] = {},
+): Promise<T> {
+  return transportContractRequest<T>(name, options).then((result) => {
+    if (apiContract(name).method !== 'GET') clearApiResponseCache();
+    return result;
+  });
+}
+
+export const notifyDataChanged = (keys?: readonly (readonly unknown[])[]) => {
+  clearApiResponseCache();
+  invalidateServerQueries(keys);
   window.dispatchEvent(new Event('server-data-changed'));
 };
+
+function cacheKey(name: ApiContractName, query?: Record<string, string | number | undefined>) {
+  const params = Object.entries(query || {})
+    .filter(([, value]) => value !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `${name}:${JSON.stringify(params)}`;
+}
 
 function cachedContractRequest<T>(
   name: ApiContractName,
   query?: Record<string, string | number | undefined>,
   ttlMs = 60_000,
 ): Promise<T> {
-  void ttlMs;
-  return apiContractRequest<T>(name, { query });
+  const key = cacheKey(name, query);
+  const existing = apiResponseCache.get(key);
+  if (existing && existing.expiresAt > Date.now()) return existing.promise as Promise<T>;
+  const promise = apiContractRequest<T>(name, { query });
+  const entry = { expiresAt: Date.now() + Math.max(0, ttlMs), promise };
+  apiResponseCache.set(key, entry);
+  void promise.catch(() => {
+    if (apiResponseCache.get(key) === entry) apiResponseCache.delete(key);
+  });
+  return promise;
 }
 
 function cachedState() {

@@ -27,15 +27,15 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
     if (!this.state.error) return this.props.children;
     return (
       <main className="app-shell min-h-screen p-6">
-        <section className="mx-auto mt-16 max-w-xl rounded-lg border border-rose-200 bg-white p-6 shadow-sm">
+        <section className="mx-auto mt-16 max-w-xl rounded-lg border border-danger bg-surface-strong p-6 shadow-sm">
           <div className="flex items-start gap-3">
-            <div className="rounded-lg bg-rose-50 p-2 text-rose-600">
+            <div className="rounded-lg bg-danger-soft p-2 text-danger">
               <AlertTriangle size={22} />
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-slate-950">页面渲染失败</h1>
-              <p className="mt-2 text-sm leading-6 text-slate-600">当前页面出现未捕获错误。可以刷新重试；如果重复出现，请到运维观察台查看日志。</p>
-              <pre className="mt-4 max-h-40 overflow-auto rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-600">{this.state.error.message}</pre>
+              <h1 className="text-lg font-semibold text-primary">页面渲染失败</h1>
+              <p className="mt-2 text-sm leading-6 text-secondary">当前页面出现未捕获错误。可以刷新重试；如果重复出现，请到运维观察台查看日志。</p>
+              <pre className="mt-4 max-h-40 overflow-auto rounded-lg bg-surface-muted p-3 text-xs leading-5 text-secondary">{this.state.error.message}</pre>
               <button className="btn btn-primary mt-4" onClick={() => window.location.reload()}>
                 <RefreshCw size={16} />刷新页面
               </button>

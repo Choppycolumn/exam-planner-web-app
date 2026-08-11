@@ -1,5 +1,7 @@
 import { apiErrorPayload } from '../../http/api-contract-validation.mjs';
 
+import { createGracefulShutdown } from '../../infrastructure/graceful-shutdown.mjs';
+
 export function installBootstrapDomain(runtime, exposeRuntime) {
     runtime.validateStartupConfig();
     try {
@@ -258,25 +260,17 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
         );
         runtime.logStructured('info', 'background_worker_started', { config: runtime.getAppConfigSnapshot() });
     }
-    function shutdown(signal) {
-        if (runtime.shuttingDown)
-            return;
-        runtime.shuttingDown = true;
-        runtime.logStructured('info', 'server_shutdown_started', { signal });
-        runtime.scheduler.stopAll();
-        const finish = () => {
-            runtime.logStructured('info', 'server_shutdown_completed', { signal });
-            process.exit(0);
-        };
-        if (httpServer)
-            httpServer.close(finish);
-        else
-            finish();
-        setTimeout(() => {
-            runtime.logStructured('error', 'server_shutdown_forced', { signal });
-            process.exit(1);
-        }, 10000).unref();
-    }
+    const shutdownController = createGracefulShutdown({
+        server: httpServer,
+        stopBackgroundWork: () => runtime.scheduler.stopAll(),
+        closeResources: () => {
+            runtime.sqliteRepository.close();
+            runtime.dictionaryDatabase.close();
+        },
+        onStart: () => { runtime.shuttingDown = true; },
+        log: runtime.logStructured,
+    });
+    const shutdown = (signal) => shutdownController.shutdown(signal);
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('uncaughtException', (error) => {

@@ -51,10 +51,10 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
         return `${value} 分钟`;
     }
     function taskCompletionHint(taskId) {
-        const tasks = listClawbotLabelTasks({ limit: 26 });
+        const tasks = runtime.listClawbotLabelTasks({ limit: 26 });
         const index = tasks.findIndex((task) => Number(task.id) === Number(taskId));
         if (index >= 0)
-            return { label: taskLetterLabel(index), command: `完成${taskLetterLabel(index)}` };
+            return { label: runtime.taskLetterLabel(index), command: `完成${runtime.taskLetterLabel(index)}` };
         return { label: `#${taskId}`, command: `完成#${taskId}` };
     }
     function buildTaskReminderText(task, offsetMinutes, dueAtMs) {
@@ -65,7 +65,7 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
             '【待办提醒】',
             `${hint.label}. ${task.title}`,
             `时间：${due}`,
-            `优先级：${clawbotUrgencyLabel(task.urgency)}`,
+            `优先级：${runtime.clawbotUrgencyLabel(task.urgency)}`,
             `提醒：提前 ${formatReminderLead(offsetMinutes)}，距离开始约 ${formatReminderLead(remaining)}`,
             '',
             `可回复：${hint.command} / 今日待办`,
@@ -76,7 +76,7 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
         return runtime.taskRepository.listOwnerTimedReminders(
             scanDate,
             runtime.addDaysISO(scanDate, maxForwardDays),
-        ).map(normalizeClawbotTask);
+        ).map(runtime.normalizeClawbotTask);
     }
     async function processTaskReminders() {
         runtime.ensureSqliteStore();
@@ -124,10 +124,29 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
             runtime.nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();
             runtime.setRuntimeMetadata('worker_next_task_reminder_at', runtime.nextTaskReminderScanAt);
             try {
-                await processTaskReminders();
+                const result = await processTaskReminders();
+                const recoveredFrom = runtime.appMetadataRepository.get('worker_task_reminder_last_error', '');
+                runtime.appMetadataRepository.setMany({
+                    worker_task_reminder_last_success_at: runtime.nowISO(),
+                    worker_task_reminder_last_error: '',
+                    worker_task_reminder_last_result: JSON.stringify(result || {}),
+                });
+                if (recoveredFrom) {
+                    runtime.logStructured('info', 'task_reminder_scan_recovered');
+                }
             }
             catch (error) {
-                runtime.logStructured('error', 'task_reminder_scan_failed', { error: runtime.redactSecretText(error.message || String(error)) });
+                const message = runtime.redactSecretText(error.message || String(error));
+                const previous = runtime.appMetadataRepository.get('worker_task_reminder_last_error', '');
+                const previousAt = runtime.appMetadataRepository.get('worker_task_reminder_last_error_at', '');
+                const previousMs = Date.parse(previousAt);
+                runtime.appMetadataRepository.setMany({
+                    worker_task_reminder_last_error: message,
+                    worker_task_reminder_last_error_at: runtime.nowISO(),
+                });
+                if (message !== previous || !Number.isFinite(previousMs) || Date.now() - previousMs >= 30 * 60 * 1000) {
+                    runtime.logStructured('error', 'task_reminder_scan_failed', { error: message });
+                }
             }
         };
         runtime.nextTaskReminderScanAt = new Date(Date.now() + 60 * 1000).toISOString();

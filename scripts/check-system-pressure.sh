@@ -5,9 +5,11 @@ MODE="${1:-normal}"
 case "$MODE" in
   hbr)
     MAX_LOAD_PER_CPU="${MAX_LOAD_PER_CPU:-1.5}"
-    MAX_IOWAIT_PERCENT="${MAX_IOWAIT_PERCENT:-20}"
+    # HBR is deliberately I/O throttled by systemd. A short period of high
+    # host iowait and one blocked HBR process are expected while it scans.
+    MAX_IOWAIT_PERCENT="${MAX_IOWAIT_PERCENT:-70}"
     MIN_AVAILABLE_MEMORY_KB="${MIN_AVAILABLE_MEMORY_KB:-196608}"
-    MAX_BLOCKED_PROCESSES="${MAX_BLOCKED_PROCESSES:-0}"
+    MAX_BLOCKED_PROCESSES="${MAX_BLOCKED_PROCESSES:-2}"
     ;;
   deploy)
     MAX_LOAD_PER_CPU="${MAX_LOAD_PER_CPU:-2.0}"

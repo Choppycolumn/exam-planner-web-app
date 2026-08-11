@@ -27,14 +27,14 @@ function formatDuration(ms?: number | null) {
 }
 
 function statusTone(ok: boolean) {
-  return ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700';
+  return ok ? 'border-success bg-success-soft text-success' : 'border-danger bg-danger-soft text-danger';
 }
 
 function taskStatusTone(status?: string | null) {
-  if (status === 'running' || status === 'queued') return 'border-blue-200 bg-blue-50 text-blue-700';
-  if (status === 'failed') return 'border-rose-200 bg-rose-50 text-rose-700';
-  if (status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  return 'border-slate-200 bg-slate-50 text-slate-600';
+  if (status === 'running' || status === 'queued') return 'border-accent bg-accent-soft text-accent';
+  if (status === 'failed') return 'border-danger bg-danger-soft text-danger';
+  if (status === 'completed') return 'border-success bg-success-soft text-success';
+  return 'border-line bg-surface-muted text-secondary';
 }
 
 export function OperationsPage() {
@@ -146,12 +146,12 @@ export function OperationsPage() {
             <Bell size={16} />测试微信
           </button>
         </div>
-        <span className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
+        <span className="rounded-lg border border-line bg-surface-strong px-3 py-2 text-sm font-semibold text-secondary">
           更新时间 {formatDateTime(status?.generatedAt ?? logs?.generatedAt)}
         </span>
       </div>
 
-      <section className={`mt-5 rounded-lg border p-5 ${unifiedHealth?.status === 'failed' ? 'border-rose-200 bg-rose-50 text-rose-800' : unifiedHealth?.status === 'degraded' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+      <section className={`mt-5 rounded-lg border p-5 ${unifiedHealth?.status === 'failed' ? 'border-danger bg-danger-soft text-danger' : unifiedHealth?.status === 'degraded' ? 'border-warning bg-warning-soft text-warning' : 'border-success bg-success-soft text-success'}`}>
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-xs font-semibold opacity-75">统一健康状态</p>
@@ -163,7 +163,7 @@ export function OperationsPage() {
         {unifiedHealth?.actions?.length ? (
           <div className="mt-4 space-y-2">
             {unifiedHealth.actions.map((item) => (
-              <div key={item.id} className="rounded-lg border border-current/20 bg-white/70 px-3 py-2 text-sm">
+              <div key={item.id} className="rounded-lg border border-current/20 bg-surface-strong px-3 py-2 text-sm">
                 <span className="font-semibold">{item.title}：</span>{item.action}
               </div>
             ))}
@@ -194,42 +194,42 @@ export function OperationsPage() {
         <section className="card p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">备份与恢复</h2>
-              <p className="mt-1 text-sm text-slate-500">保留恢复入口，但恢复前必须确认。</p>
+              <h2 className="text-base font-semibold text-primary">备份与恢复</h2>
+              <p className="mt-1 text-sm text-secondary">保留恢复入口，但恢复前必须确认。</p>
             </div>
             <button className="btn btn-primary" disabled={readOnly || busy === 'backup'} onClick={() => void runAction('backup', serverApi.runServerBackup, '服务器备份已创建')}>
               <Archive size={16} />立即备份
             </button>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-4">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">最近备份</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(status?.backup.lastBackup?.createdAt)}</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">最近备份</p>
+              <p className="mt-1 text-sm font-semibold text-primary">{formatDateTime(status?.backup.lastBackup?.createdAt)}</p>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">最近校验</p>
-              <p className={`mt-1 text-sm font-semibold ${status?.backup.latestVerification?.ok ? 'text-emerald-700' : 'text-amber-700'}`}>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">最近校验</p>
+              <p className={`mt-1 text-sm font-semibold ${status?.backup.latestVerification?.ok ? 'text-success' : 'text-warning'}`}>
                 {status?.backup.latestVerification?.ok ? '通过' : '待处理'}
               </p>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">下次日备份</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(status?.backup.nextDailyBackupAt)}</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">下次日备份</p>
+              <p className="mt-1 text-sm font-semibold text-primary">{formatDateTime(status?.backup.nextDailyBackupAt)}</p>
             </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold text-slate-500">下次周备份</p>
-              <p className="mt-1 text-sm font-semibold text-slate-900">{formatDateTime(status?.backup.nextWeeklyBackupAt)}</p>
+            <div className="rounded-lg border border-line bg-surface-muted p-3">
+              <p className="text-xs font-semibold text-secondary">下次周备份</p>
+              <p className="mt-1 text-sm font-semibold text-primary">{formatDateTime(status?.backup.nextWeeklyBackupAt)}</p>
             </div>
           </div>
-          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          <div className="mt-4 overflow-hidden rounded-lg border border-line">
             {(status?.backup.backups ?? []).slice(0, 8).map((backup) => (
-              <label key={backup.fileName} className="grid cursor-pointer grid-cols-[24px_1fr_90px] items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+              <label key={backup.fileName} className="grid cursor-pointer grid-cols-[24px_1fr_90px] items-center gap-3 border-b border-line px-3 py-2 text-sm last:border-b-0">
                 <input type="radio" name="backup-file" value={backup.fileName} checked={selectedBackup === backup.fileName} onChange={() => setSelectedBackup(backup.fileName)} />
                 <span className="min-w-0">
-                  <span className="block truncate font-semibold text-slate-800">{backup.fileName}</span>
-                  <span className="text-xs text-slate-500">{backup.kind} · {formatDateTime(backup.createdAt)}</span>
+                  <span className="block truncate font-semibold text-strong">{backup.fileName}</span>
+                  <span className="text-xs text-secondary">{backup.kind} · {formatDateTime(backup.createdAt)}</span>
                 </span>
-                <span className="text-right text-xs text-slate-500">{formatBytes(backup.sizeBytes)}</span>
+                <span className="text-right text-xs text-secondary">{formatBytes(backup.sizeBytes)}</span>
               </label>
             ))}
             {status?.backup.backups.length ? null : <div className="p-4"><EmptyState title="暂无备份文件" /></div>}
@@ -249,8 +249,8 @@ export function OperationsPage() {
       <section className="mt-5 card p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">后台任务</h2>
-            <p className="mt-1 text-sm text-slate-500">备份、报告、简报、预计算和维护任务都会在这里留下状态。</p>
+            <h2 className="text-base font-semibold text-primary">后台任务</h2>
+            <p className="mt-1 text-sm text-secondary">备份、报告、简报、预计算和维护任务都会在这里留下状态。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="btn btn-soft" disabled={readOnly || busy === 'precompute'} onClick={() => void runAction('precompute', serverApi.runPrecompute, '预计算已完成')}>
@@ -262,33 +262,33 @@ export function OperationsPage() {
           </div>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-semibold text-slate-500">总运行</p>
-            <p className="mt-1 text-lg font-semibold text-slate-950">{status?.tasks?.metrics?.total ?? 0}</p>
+          <div className="rounded-lg border border-line bg-surface-muted p-3">
+            <p className="text-xs font-semibold text-secondary">总运行</p>
+            <p className="mt-1 text-lg font-semibold text-primary">{status?.tasks?.metrics?.total ?? 0}</p>
           </div>
-          <div className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-emerald-700">
+          <div className="rounded-lg border border-success bg-success-soft p-3 text-success">
             <p className="text-xs font-semibold opacity-80">成功</p>
             <p className="mt-1 text-lg font-semibold">{status?.tasks?.metrics?.completed ?? 0}</p>
           </div>
-          <div className="rounded-lg border border-rose-100 bg-rose-50 p-3 text-rose-700">
+          <div className="rounded-lg border border-danger bg-danger-soft p-3 text-danger">
             <p className="text-xs font-semibold opacity-80">失败</p>
             <p className="mt-1 text-lg font-semibold">{status?.tasks?.metrics?.failed ?? 0}</p>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-semibold text-slate-500">平均耗时</p>
-            <p className="mt-1 text-lg font-semibold text-slate-950">{formatDuration(status?.tasks?.metrics?.averageDurationMs)}</p>
+          <div className="rounded-lg border border-line bg-surface-muted p-3">
+            <p className="text-xs font-semibold text-secondary">平均耗时</p>
+            <p className="mt-1 text-lg font-semibold text-primary">{formatDuration(status?.tasks?.metrics?.averageDurationMs)}</p>
           </div>
         </div>
-        <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+        <div className="mt-4 overflow-hidden rounded-lg border border-line">
           {(status?.tasks?.latestRuns ?? []).map((task) => (
-            <div key={task.id} className="grid gap-2 border-b border-slate-100 px-3 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_90px_150px_90px]">
+            <div key={task.id} className="grid gap-2 border-b border-line px-3 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_90px_150px_90px]">
               <div className="min-w-0">
-                <p className="truncate font-semibold text-slate-900">{task.taskName}</p>
-                {task.error ? <p className="mt-1 truncate text-xs text-rose-600">{task.error}</p> : null}
+                <p className="truncate font-semibold text-primary">{task.taskName}</p>
+                {task.error ? <p className="mt-1 truncate text-xs text-danger">{task.error}</p> : null}
               </div>
               <span className={`w-fit rounded-lg border px-2 py-1 text-xs font-semibold ${taskStatusTone(task.status)}`}>{task.status}</span>
-              <span className="text-xs text-slate-500">{formatDateTime(task.startedAt)}</span>
-              <span className="text-xs text-slate-500">{formatDuration(task.durationMs)}</span>
+              <span className="text-xs text-secondary">{formatDateTime(task.startedAt)}</span>
+              <span className="text-xs text-secondary">{formatDuration(task.durationMs)}</span>
             </div>
           ))}
           {status?.tasks?.latestRuns?.length ? null : <div className="p-4"><EmptyState title="暂无后台任务记录" /></div>}
@@ -297,33 +297,33 @@ export function OperationsPage() {
 
       <section className="mt-5 grid gap-5 xl:grid-cols-2">
         <div className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">慢接口 / 错误接口</h2>
-          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          <h2 className="text-base font-semibold text-primary">慢接口 / 错误接口</h2>
+          <div className="mt-4 overflow-hidden rounded-lg border border-line">
             {(logs?.slowApi ?? []).map((item) => (
-              <div key={`${item.createdAt}-${item.method}-${item.path}`} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+              <div key={`${item.createdAt}-${item.method}-${item.path}`} className="border-b border-line px-3 py-2 text-sm last:border-b-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-semibold text-slate-900">{item.method} {item.path}</span>
-                  <span className="text-xs text-slate-500">{item.durationMs}ms</span>
+                  <span className="truncate font-semibold text-primary">{item.method} {item.path}</span>
+                  <span className="text-xs text-secondary">{item.durationMs}ms</span>
                 </div>
-                <p className="mt-1 text-xs text-slate-500">{item.statusCode} · {formatDateTime(item.createdAt)}</p>
-                {item.error ? <p className="mt-1 truncate text-xs text-rose-600">{item.error}</p> : null}
+                <p className="mt-1 text-xs text-secondary">{item.statusCode} · {formatDateTime(item.createdAt)}</p>
+                {item.error ? <p className="mt-1 truncate text-xs text-danger">{item.error}</p> : null}
               </div>
             ))}
             {logs?.slowApi?.length ? null : <div className="p-4"><EmptyState title="暂无慢接口记录" /></div>}
           </div>
         </div>
         <div className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">前端页面错误</h2>
-          <p className="mt-1 text-sm text-slate-500">只显示脱敏摘要；如果 24 小时内不为 0，优先检查对应页面。</p>
-          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          <h2 className="text-base font-semibold text-primary">前端页面错误</h2>
+          <p className="mt-1 text-sm text-secondary">只显示脱敏摘要；如果 24 小时内不为 0，优先检查对应页面。</p>
+          <div className="mt-4 overflow-hidden rounded-lg border border-line">
             {(logs?.clientErrors?.latest ?? []).map((item) => (
-              <div key={`${item.createdAt}-${item.source}-${item.path}`} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+              <div key={`${item.createdAt}-${item.source}-${item.path}`} className="border-b border-line px-3 py-2 text-sm last:border-b-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-semibold text-slate-900">{item.path}</span>
-                  <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.source}</span>
+                  <span className="truncate font-semibold text-primary">{item.path}</span>
+                  <span className="rounded bg-surface-inset px-2 py-1 text-xs text-secondary">{item.source}</span>
                 </div>
-                <p className="mt-1 truncate text-xs text-rose-600">{item.message}</p>
-                <p className="mt-1 text-xs text-slate-500">{formatDateTime(item.createdAt)} · {item.role || 'unknown'}</p>
+                <p className="mt-1 truncate text-xs text-danger">{item.message}</p>
+                <p className="mt-1 text-xs text-secondary">{formatDateTime(item.createdAt)} · {item.role || 'unknown'}</p>
               </div>
             ))}
             {logs?.clientErrors?.latest?.length ? null : <div className="p-4"><EmptyState title="暂无前端页面错误" /></div>}
@@ -333,15 +333,15 @@ export function OperationsPage() {
 
       <section className="mt-5 grid gap-5 xl:grid-cols-2">
         <div className="card p-5">
-          <h2 className="text-base font-semibold text-slate-900">最近访问</h2>
-          <div className="mt-4 overflow-hidden rounded-lg border border-slate-200">
+          <h2 className="text-base font-semibold text-primary">最近访问</h2>
+          <div className="mt-4 overflow-hidden rounded-lg border border-line">
             {(visitsQuery.data?.latest ?? []).map((item) => (
-              <div key={`${item.createdAt}-${item.path}`} className="border-b border-slate-100 px-3 py-2 text-sm last:border-b-0">
+              <div key={`${item.createdAt}-${item.path}`} className="border-b border-line px-3 py-2 text-sm last:border-b-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate font-semibold text-slate-900">{item.path}</span>
-                  <span className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">{item.role}</span>
+                  <span className="truncate font-semibold text-primary">{item.path}</span>
+                  <span className="rounded bg-surface-inset px-2 py-1 text-xs text-secondary">{item.role}</span>
                 </div>
-                <p className="mt-1 truncate text-xs text-slate-500">{formatDateTime(item.createdAt)} · {item.userAgent}</p>
+                <p className="mt-1 truncate text-xs text-secondary">{formatDateTime(item.createdAt)} · {item.userAgent}</p>
               </div>
             ))}
             {visitsQuery.data?.latest.length ? null : <div className="p-4"><EmptyState title="暂无最近访问" /></div>}
@@ -350,18 +350,18 @@ export function OperationsPage() {
       </section>
 
       <section className="mt-5 card p-5">
-        <h2 className="flex items-center gap-2 text-base font-semibold text-slate-900"><FileWarning size={18} />服务日志摘要</h2>
+        <h2 className="flex items-center gap-2 text-base font-semibold text-primary"><FileWarning size={18} />服务日志摘要</h2>
         <div className="mt-4 grid gap-4 xl:grid-cols-3">
           {(logs?.sources ?? []).map((source) => (
-            <article key={source.name} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <article key={source.name} className="rounded-lg border border-line bg-surface-muted p-4">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-slate-900">{source.name}</h3>
-                <span className={`rounded-lg border px-2 py-1 text-xs font-semibold ${source.available ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                <h3 className="text-sm font-semibold text-primary">{source.name}</h3>
+                <span className={`rounded-lg border px-2 py-1 text-xs font-semibold ${source.available ? 'border-success bg-success-soft text-success' : 'border-warning bg-warning-soft text-warning'}`}>
                   {source.available ? '可用' : '不可用'}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-slate-500">错误 {source.errorCount} · 警告 {source.warningCount}</p>
-              {source.action ? <p className="mt-3 rounded bg-white p-3 text-xs font-medium text-slate-700">{source.action}</p> : <p className="mt-3 text-xs font-medium text-emerald-700">无需处理</p>}
+              <p className="mt-2 text-xs text-secondary">错误 {source.errorCount} · 警告 {source.warningCount}</p>
+              {source.action ? <p className="mt-3 rounded bg-surface-strong p-3 text-xs font-medium text-strong">{source.action}</p> : <p className="mt-3 text-xs font-medium text-success">无需处理</p>}
             </article>
           ))}
         </div>

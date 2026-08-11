@@ -27,7 +27,7 @@ const navItems = [
 function AdminGoalSummary() {
   const { activeGoal } = useDashboardData();
   return (
-    <p className="text-sm text-slate-700">
+    <p className="text-sm text-strong">
       {activeGoal ? `当前目标：${activeGoal.name}，剩余 ${calculateCountdownDays(activeGoal.deadline)} 天` : '还没有启用目标'}
     </p>
   );

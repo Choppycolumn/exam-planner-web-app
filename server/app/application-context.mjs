@@ -1,4 +1,4 @@
-export function createApplicationContext() {
+export function createApplicationContext({ domainDependencies = {} } = {}) {
   const runtime = Object.create(null);
   const domainCapabilities = new Map();
 
@@ -12,10 +12,11 @@ export function createApplicationContext() {
     Object.defineProperties(runtime, descriptors);
   }
 
-  function createDomainContext(domainName, installer) {
-    const source = Function.prototype.toString.call(installer);
-    const allowed = new Set(Array.from(source.matchAll(/\bruntime\.([A-Za-z_$][\w$]*)/g), (match) => match[1]));
-    for (const dependency of installer.dependencies || []) allowed.add(dependency);
+  function createDomainContext(domainName) {
+    if (!Object.hasOwn(domainDependencies, domainName)) {
+      throw new Error(`Missing explicit dependency manifest for domain: ${domainName}`);
+    }
+    const allowed = new Set(domainDependencies[domainName]);
     domainCapabilities.set(domainName, [...allowed].sort());
     return new Proxy(Object.create(null), {
       get(_target, property) {
@@ -41,7 +42,7 @@ export function createApplicationContext() {
   }
 
   function installDomain(domainName, installer) {
-    return installer(createDomainContext(domainName, installer), exposeRuntime);
+    return installer(createDomainContext(domainName), exposeRuntime);
   }
 
   exposeRuntime({ domainCapabilities: () => Object.fromEntries(domainCapabilities) });

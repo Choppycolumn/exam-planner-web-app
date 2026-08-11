@@ -7,6 +7,6 @@ ConditionPathExists=/usr/local/sbin/exam-planner-hbr-window-control
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/exam-planner-hbr-window-control open
-TimeoutStartSec=2min
+TimeoutStartSec=3min
 Nice=10
 IOSchedulingClass=idle

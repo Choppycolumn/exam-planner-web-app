@@ -12,6 +12,7 @@ node_modules
 __pycache__
 *.pyc
 dist
+public/build-meta.json
 desktop-break-guard/config.local.json
 desktop-break-guard/build/
 desktop-pet/.local-data

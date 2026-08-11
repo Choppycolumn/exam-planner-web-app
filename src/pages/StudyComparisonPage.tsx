@@ -15,9 +15,9 @@ const periods = [
 ] as const;
 
 const accountStyles = [
-  { icon: 'bg-blue-50 text-blue-700', bar: 'bg-blue-500' },
-  { icon: 'bg-emerald-50 text-emerald-700', bar: 'bg-emerald-500' },
-  { icon: 'bg-violet-50 text-violet-700', bar: 'bg-violet-500' },
+  { icon: 'bg-accent-soft text-accent', bar: 'bg-accent' },
+  { icon: 'bg-success-soft text-success', bar: 'bg-success' },
+  { icon: 'bg-violet-soft text-violet', bar: 'bg-violet' },
 ] as const;
 
 export function StudyComparisonPage() {
@@ -59,11 +59,11 @@ export function StudyComparisonPage() {
                       <Users size={19} />
                     </span>
                     <div>
-                      <h2 className="font-semibold text-slate-950">{account.displayName}</h2>
-                      <p className="text-xs text-slate-500">{account.userRole === 'owner' ? '主账户' : '学习用户'}</p>
+                      <h2 className="font-semibold text-primary">{account.displayName}</h2>
+                      <p className="text-xs text-secondary">{account.userRole === 'owner' ? '主账户' : '学习用户'}</p>
                     </div>
                   </div>
-                  <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">连续 {account.streakDays} 天</span>
+                  <span className="rounded-lg bg-surface-inset px-2.5 py-1 text-xs font-semibold text-secondary">连续 {account.streakDays} 天</span>
                 </div>
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <Metric icon={<Timer size={16} />} label="今天" value={minutesToHoursText(account.todayMinutes)} />
@@ -77,7 +77,7 @@ export function StudyComparisonPage() {
           </div>
 
           {data.accounts.length < data.maxUsers ? (
-            <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-800">
+            <div className="mt-5 rounded-xl border border-accent bg-accent-soft px-4 py-3 text-sm text-accent">
               新的学习用户创建并产生记录后，这里会自动加入对比；系统最多显示 {data.maxUsers} 位用户。
             </div>
           ) : null}
@@ -85,29 +85,29 @@ export function StudyComparisonPage() {
           <section className="mt-5 card p-5">
             <div className="flex flex-wrap items-end justify-between gap-2">
               <div>
-                <h2 className="font-semibold text-slate-950">最近 14 天</h2>
-                <p className="mt-1 text-sm text-slate-500">同一天的条形使用相同刻度，仅展示学习分钟数。</p>
+                <h2 className="font-semibold text-primary">最近 14 天</h2>
+                <p className="mt-1 text-sm text-secondary">同一天的条形使用相同刻度，仅展示学习分钟数。</p>
               </div>
-              <p className="text-xs text-slate-500">数据截至 {data.today}</p>
+              <p className="text-xs text-secondary">数据截至 {data.today}</p>
             </div>
             <div className="mt-5 space-y-4">
               {recentDays.map((day) => (
                 <div key={day.date} className="grid gap-2 sm:grid-cols-[72px_1fr] sm:items-center">
-                  <p className="text-xs font-semibold text-slate-500">{day.date.slice(5)}</p>
+                  <p className="text-xs font-semibold text-secondary">{day.date.slice(5)}</p>
                   <div className="space-y-1.5">
                     {data.accounts.map((account, index) => {
                       const minutes = Number(day.users[String(account.userId)] || 0);
                       const style = accountStyles[index % accountStyles.length];
                       return (
                         <div key={account.userId} className="grid grid-cols-[64px_1fr_56px] items-center gap-2">
-                          <span className="truncate text-xs text-slate-600">{account.displayName}</span>
-                          <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                          <span className="truncate text-xs text-secondary">{account.displayName}</span>
+                          <div className="h-2.5 overflow-hidden rounded-full bg-surface-inset">
                             <div
                               className={`h-full rounded-full ${style.bar}`}
                               style={{ width: `${minutes ? Math.max(3, (minutes / maxDailyMinutes) * 100) : 0}%` }}
                             />
                           </div>
-                          <span className="text-right text-xs tabular-nums text-slate-500">{minutes} 分</span>
+                          <span className="text-right text-xs tabular-nums text-secondary">{minutes} 分</span>
                         </div>
                       );
                     })}
@@ -124,9 +124,9 @@ export function StudyComparisonPage() {
 
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500">{icon}{label}</div>
-      <p className="mt-2 text-lg font-semibold tabular-nums text-slate-950">{value}</p>
+    <div className="rounded-xl border border-line bg-surface-muted p-3">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-secondary">{icon}{label}</div>
+      <p className="mt-2 text-lg font-semibold tabular-nums text-primary">{value}</p>
     </div>
   );
 }

@@ -40,9 +40,9 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
   return (
       <div className={visible ? 'mt-5 card p-5' : 'hidden'}>
         <h2 className="flex items-center gap-2 text-base font-semibold"><Bell size={18} />晨间简报与邮件</h2>
-        <p className="mt-2 text-sm leading-6 text-slate-600">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
+        <p className="mt-2 text-sm leading-6 text-secondary">每天按设定时间自动生成天气、指数涨跌和学习提醒。邮件推送需要填写自己的 SMTP 信息，默认关闭。</p>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+          <label className="flex items-center gap-2 rounded-lg border border-line bg-surface-muted px-3 py-2 text-sm font-medium text-strong">
             <input
               type="checkbox"
               checked={settings.enabled}
@@ -75,11 +75,11 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
           <label>
             <span className="label">指数/资产（名称|代码，每行一个）</span>
             <textarea className="field min-h-32" value={settings.marketSymbolsText} onChange={(event) => onChange({ ...settings, marketSymbolsText: event.target.value })} />
-            <p className="mt-1 text-xs leading-5 text-slate-500">直接在这里加一行即可，例如“纳斯达克|^IXIC”“BNB|BNB-USD”“苹果|AAPL”。支持常见美股、A 股、部分指数和主流加密资产。</p>
+            <p className="mt-1 text-xs leading-5 text-secondary">直接在这里加一行即可，例如“纳斯达克|^IXIC”“BNB|BNB-USD”“苹果|AAPL”。支持常见美股、A 股、部分指数和主流加密资产。</p>
           </label>
         </div>
-        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-800">
+        <div className="mt-5 rounded-lg border border-line bg-surface-muted p-4">
+          <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-strong">
             <input
               type="checkbox"
               checked={settings.wechat?.enabled ?? false}
@@ -87,8 +87,8 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
             />
             <Bell size={16} />启用微信每日推送
           </label>
-          <div className="mb-4 rounded-lg border border-blue-100 bg-white p-4">
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <div className="mb-4 rounded-lg border border-accent bg-surface-strong p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-strong">
               <input
                 type="checkbox"
                 checked={settings.taskReminders?.enabled ?? true}
@@ -125,12 +125,12 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
                   value={reminderOffsets}
                   onChange={(event) => onReminderOffsetsChange(event.target.value)}
                 />
-                <p className="mt-1 text-xs leading-5 text-slate-500">多个提醒用逗号分隔；例如 120, 60, 15 表示提前 2 小时、1 小时、15 分钟各提醒一次。</p>
+                <p className="mt-1 text-xs leading-5 text-secondary">多个提醒用逗号分隔；例如 120, 60, 15 表示提前 2 小时、1 小时、15 分钟各提醒一次。</p>
               </label>
             </div>
           </div>
-          <div className="mb-4 rounded-lg border border-emerald-100 bg-white p-4">
-            <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <div className="mb-4 rounded-lg border border-success bg-surface-strong p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-strong">
               <input
                 type="checkbox"
                 checked={settings.customWeeklyPush?.enabled ?? true}
@@ -141,7 +141,7 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
               />
               <Bell size={16} />启用每周自定义推送栏目
             </label>
-            <p className="mt-2 text-xs leading-5 text-slate-500">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
+            <p className="mt-2 text-xs leading-5 text-secondary">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {weeklyPushDays.map((day) => (
                 <label key={day.key}>
@@ -165,13 +165,13 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
               ))}
             </div>
           </div>
-          <div className="mb-4 rounded-lg border border-indigo-100 bg-white p-4">
+          <div className="mb-4 rounded-lg border border-violet bg-surface-strong p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">英语写作计划</h3>
-                <p className="mt-1 text-xs leading-5 text-slate-500">主页展示当前阶段和今日任务；每日简报会按当天星期自动带上对应写作安排。</p>
+                <h3 className="text-sm font-semibold text-primary">英语写作计划</h3>
+                <p className="mt-1 text-xs leading-5 text-secondary">主页展示当前阶段和今日任务；每日简报会按当天星期自动带上对应写作安排。</p>
               </div>
-              <div className="flex flex-wrap gap-3 text-sm font-semibold text-slate-700">
+              <div className="flex flex-wrap gap-3 text-sm font-semibold text-strong">
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={englishPlan.enabled} onChange={(event) => updateEnglishPlan({ enabled: event.target.checked })} />
                   启用
@@ -202,7 +202,7 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
             </div>
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               {englishPlan.stages.map((stage, index) => (
-                <div key={stage.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div key={stage.id} className="rounded-lg border border-line bg-surface-muted p-3">
                   <div className="grid gap-2 md:grid-cols-[1fr_120px]">
                     <label>
                       <span className="label">阶段名称</span>
@@ -233,7 +233,7 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
               ))}
             </div>
           </div>
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+          <label className="flex items-center gap-2 text-sm font-semibold text-strong">
             <input
               type="checkbox"
               checked={settings.email.enabled}

@@ -1,4 +1,4 @@
-import type { AppSetting, DailyReview, Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject } from '../types/models';
+import type { AppSetting, DailyReview, Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject } from '../../types/models';
 
 export const DB_NAME = 'exam_plan_manager';
 export const DB_SCHEMA_VERSION = 3;

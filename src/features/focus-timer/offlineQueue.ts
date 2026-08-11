@@ -10,6 +10,14 @@ const keyPrefix = 'examPlanner.focusTimer.v1';
 
 const queueKey = (userId: number) => `${keyPrefix}.outbox.user-${userId}`;
 const cacheKey = (userId: number) => `${keyPrefix}.cache.user-${userId}`;
+const conflictKey = (userId: number) => `${keyPrefix}.conflicts.user-${userId}`;
+
+export type FocusTimerSyncConflict = {
+  action: FocusTimerAction;
+  message: string;
+  status: number;
+  failedAt: string;
+};
 
 function safeParse<T>(raw: string | null, fallback: T): T {
   if (!raw) return fallback;
@@ -46,6 +54,36 @@ export function removeFocusTimerAction(userId: number, operationId: string) {
   const queue = loadFocusTimerQueue(userId).filter((item) => item.operationId !== operationId);
   saveFocusTimerQueue(userId, queue);
   return queue;
+}
+
+export function loadFocusTimerConflicts(userId: number) {
+  if (typeof localStorage === 'undefined') return [] as FocusTimerSyncConflict[];
+  return safeParse<FocusTimerSyncConflict[]>(localStorage.getItem(conflictKey(userId)), []);
+}
+
+export function addFocusTimerConflict(userId: number, action: FocusTimerAction, error: unknown) {
+  const status = typeof error === 'object' && error && 'status' in error
+    ? Number((error as { status?: number }).status || 0)
+    : 0;
+  const message = error instanceof Error ? error.message : '服务器拒绝了这条离线操作';
+  const conflicts = loadFocusTimerConflicts(userId).filter((item) => item.action.operationId !== action.operationId);
+  conflicts.push({ action, message, status, failedAt: new Date().toISOString() });
+  if (typeof localStorage !== 'undefined') localStorage.setItem(conflictKey(userId), JSON.stringify(conflicts));
+  return conflicts;
+}
+
+export function clearFocusTimerConflicts(userId: number) {
+  if (typeof localStorage !== 'undefined') localStorage.removeItem(conflictKey(userId));
+}
+
+export function retryFocusTimerConflicts(userId: number) {
+  const conflicts = loadFocusTimerConflicts(userId);
+  const pending = loadFocusTimerQueue(userId);
+  const pendingIds = new Set(pending.map((item) => item.operationId));
+  const restored = conflicts.map((item) => item.action).filter((item) => !pendingIds.has(item.operationId));
+  saveFocusTimerQueue(userId, [...restored, ...pending]);
+  clearFocusTimerConflicts(userId);
+  return restored.length;
 }
 
 export function loadFocusTimerCache(userId: number) {

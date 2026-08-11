@@ -1,7 +1,8 @@
 param(
   [string]$HostName = "8.130.68.9",
   [string]$UserName = "root",
-  [string]$Password = $env:EXAM_PLANNER_SSH_PASSWORD
+  [string]$Password = $env:EXAM_PLANNER_SSH_PASSWORD,
+  [switch]$SkipValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +19,24 @@ $hostKey = "SHA256:eSJBs+4ykcbdr6Mr36OB3ia486CDfyOGeY/ggSGp2v8"
 
 Push-Location $root
 try {
+  if (-not $SkipValidation) {
+    & npm.cmd run check:domain-deps
+    if ($LASTEXITCODE -ne 0) { throw "Domain dependency check failed." }
+    & npm.cmd run check:semantic-colors
+    if ($LASTEXITCODE -ne 0) { throw "Semantic color check failed." }
+    & npm.cmd run lint
+    if ($LASTEXITCODE -ne 0) { throw "Lint failed." }
+    & npm.cmd test
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    & python -m unittest discover -s desktop-break-guard/tests -v
+    if ($LASTEXITCODE -ne 0) { throw "Break Guard tests failed." }
+    & npm.cmd run build
+    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
+    & npm.cmd run check:bundle
+    if ($LASTEXITCODE -ne 0) { throw "Bundle budget failed." }
+    & npm.cmd audit --omit=dev --audit-level=high
+    if ($LASTEXITCODE -ne 0) { throw "Production dependency audit failed." }
+  }
   $runtimeDependency = "node_modules/undici"
   if (-not (Test-Path (Join-Path $root $runtimeDependency))) {
     throw "Missing runtime dependency: $runtimeDependency. Run npm install before deployment."
