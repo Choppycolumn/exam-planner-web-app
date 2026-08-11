@@ -34,7 +34,7 @@
 
 ## 验证基线
 
-- Vitest：139 项通过。
+- Vitest：141 项通过。
 - Break Guard unittest：40 项通过。
 - Chromium E2E：6 项通过，覆盖核心导航、深色模式、专注开始/结束和冲突可见性。
 - TypeScript/Vite 生产构建：通过。

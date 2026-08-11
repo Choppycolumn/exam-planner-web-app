@@ -187,8 +187,6 @@ export interface DashboardData {
   todayTotal: number;
   totalStudyMinutes: number;
   studyTargetMinutes: number;
-  distribution?: Array<{ name: string; value: number }>;
-  trend?: Array<{ date: string; minutes: number }>;
   latestExam: MockExamRecord | null;
   todayReview: DailyReview | null;
   yesterdayReview: DailyReview | null;

@@ -17,4 +17,26 @@ describe('API response validation', () => {
     expect(() => validateApiContractResponse('state', { goals: [] }))
       .toThrow(/学习数据缺少/);
   });
+
+  it('accepts the current dashboard contract without chart fields', () => {
+    expect(() => validateApiContractResponse('dashboard', {
+      today: '2026-08-11',
+      todayTotal: 104,
+      totalStudyMinutes: 16_677,
+      studyTargetMinutes: 20_000,
+      visibleTasks: [],
+    })).not.toThrow();
+  });
+
+  it('validates dashboard charts through their separate contract', () => {
+    expect(() => validateApiContractResponse('dashboardCharts', {
+      today: '2026-08-11',
+      distribution: [],
+      trend: [],
+    })).not.toThrow();
+    expect(() => validateApiContractResponse('dashboardCharts', {
+      today: '2026-08-11',
+      distribution: [],
+    })).toThrow(/首页图表数据结构不完整/);
+  });
 });

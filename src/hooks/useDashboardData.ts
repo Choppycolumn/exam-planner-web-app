@@ -9,8 +9,6 @@ const emptyDashboard: DashboardData = {
   todayTotal: 0,
   totalStudyMinutes: 0,
   studyTargetMinutes: 0,
-  distribution: [],
-  trend: [],
   latestExam: null,
   todayReview: null,
   yesterdayReview: null,
@@ -25,11 +23,12 @@ const emptyDashboard: DashboardData = {
 };
 
 export function useDashboardData() {
-  const { data } = useQuery({
+  const query = useQuery({
     queryKey: queryKeys.dashboard,
     queryFn: serverApi.getDashboard,
     placeholderData: emptyDashboard,
   });
 
-  return data ?? emptyDashboard;
+  if (query.error && query.isPlaceholderData) throw query.error;
+  return query.data ?? emptyDashboard;
 }

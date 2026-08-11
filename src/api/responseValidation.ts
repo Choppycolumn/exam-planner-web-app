@@ -26,8 +26,21 @@ export function validateApiContractResponse(name: ApiContractName, value: unknow
   }
   if (name === 'dashboard') {
     const payload = requireRecord(name, value);
-    if (typeof payload.today !== 'string' || !Array.isArray(payload.distribution) || !Array.isArray(payload.trend)) {
+    if (
+      typeof payload.today !== 'string'
+      || !Number.isFinite(payload.todayTotal)
+      || !Number.isFinite(payload.totalStudyMinutes)
+      || !Number.isFinite(payload.studyTargetMinutes)
+      || !Array.isArray(payload.visibleTasks)
+    ) {
       throw new Error('首页数据结构不完整，请稍后重试');
+    }
+    return;
+  }
+  if (name === 'dashboardCharts') {
+    const payload = requireRecord(name, value);
+    if (typeof payload.today !== 'string' || !Array.isArray(payload.distribution) || !Array.isArray(payload.trend)) {
+      throw new Error('首页图表数据结构不完整，请稍后重试');
     }
     return;
   }
