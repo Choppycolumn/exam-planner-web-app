@@ -139,8 +139,16 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
         if (!runtime.hbrStatusFile)
             return null;
         try {
-            if (!runtime.existsSync(runtime.hbrStatusFile))
-                return { status: 'degraded', result: 'missing', checkedAt: null };
+            if (!runtime.existsSync(runtime.hbrStatusFile)) {
+                const build = getBuildMetadata();
+                const builtMs = build.builtAt ? Date.parse(build.builtAt) : NaN;
+                const awaitingFirstWindow = Number.isFinite(builtMs) && Date.now() - builtMs <= 36 * 60 * 60 * 1000;
+                return {
+                    status: awaitingFirstWindow ? 'pending' : 'degraded',
+                    result: 'not-reported',
+                    checkedAt: null,
+                };
+            }
             const payload = JSON.parse(runtime.readFileSync(runtime.hbrStatusFile, 'utf8'));
             const checkedAt = typeof payload.checkedAt === 'string' ? payload.checkedAt : null;
             const checkedMs = checkedAt ? Date.parse(checkedAt) : NaN;
@@ -223,7 +231,9 @@ export function installOperationsHealthDomain(runtime, exposeRuntime) {
         if (hbr) {
             addCheck('offsite-backup', hbr.status === 'failed' ? 'error' : hbr.status === 'degraded' ? 'warn' : 'ok', {
                 hbr,
-                action: hbr.status === 'normal' ? '' : '检查 HBR 备份窗口、资源压力与最近执行结果。',
+                action: hbr.status === 'normal' || hbr.status === 'pending'
+                    ? ''
+                    : '检查 HBR 备份窗口、资源压力与最近执行结果。',
             });
         }
         const externalApis = runtime.externalApiClient.status();

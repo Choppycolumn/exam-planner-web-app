@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installOperationsHealthDomain } from './health.mjs';
 
 const temporaryDirectories = [];
@@ -22,6 +22,8 @@ function runtimeFixture(metadata = {}) {
     appMetadataRepository: { get: (key, fallback = '') => metadata[key] ?? fallback },
     taskRunsRepository: { listLatest: () => [] },
     hbrStatusFile: '',
+    root: tmpdir(),
+    join,
     existsSync: () => false,
     readFileSync: () => '',
     redactSecretText: (value) => String(value),
@@ -29,6 +31,7 @@ function runtimeFixture(metadata = {}) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   while (temporaryDirectories.length) rmSync(temporaryDirectories.pop(), { recursive: true, force: true });
 });
 
@@ -58,5 +61,27 @@ describe('operations deep health', () => {
     runtime.readFileSync = readFileSync;
     const api = install(runtime);
     expect(api.getHbrStatus()).toMatchObject({ status: 'normal', action: 'guard', result: 'success' });
+  });
+
+  it('treats a missing HBR report as pending during the first maintenance window', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-11T04:00:00.000Z'));
+    const runtime = runtimeFixture();
+    runtime.hbrStatusFile = join(tmpdir(), 'missing-hbr-status.json');
+    runtime.existsSync = (file) => String(file).endsWith('build-meta.json');
+    runtime.readFileSync = () => JSON.stringify({ version: '1.0.0', builtAt: '2026-08-11T03:00:00.000Z' });
+    const api = install(runtime);
+    expect(api.getHbrStatus()).toMatchObject({ status: 'pending', result: 'not-reported' });
+  });
+
+  it('reports a missing HBR result after the first-window grace period', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
+    const runtime = runtimeFixture();
+    runtime.hbrStatusFile = join(tmpdir(), 'missing-hbr-status.json');
+    runtime.existsSync = (file) => String(file).endsWith('build-meta.json');
+    runtime.readFileSync = () => JSON.stringify({ version: '1.0.0', builtAt: '2026-08-11T03:00:00.000Z' });
+    const api = install(runtime);
+    expect(api.getHbrStatus()).toMatchObject({ status: 'degraded', result: 'not-reported' });
   });
 });
