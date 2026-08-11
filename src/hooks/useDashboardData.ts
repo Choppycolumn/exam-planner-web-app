@@ -29,6 +29,7 @@ export function useDashboardData() {
     placeholderData: emptyDashboard,
   });
 
-  if (query.error && query.isPlaceholderData) throw query.error;
+  const queryError = query.error;
+  if (queryError && query.isPlaceholderData) throw queryError;
   return query.data ?? emptyDashboard;
 }
