@@ -21,6 +21,56 @@ from breakguard_sync import SyncWorker
 
 
 class BreakGuardCoreTests(unittest.TestCase):
+    def test_windows_launcher_waits_for_the_real_application_process(self):
+        root = Path(__file__).resolve().parents[1]
+        vbs = (root / "launch_break_guard.vbs").read_text(encoding="utf-8")
+        powershell = (root / "start_break_guard.ps1").read_text(encoding="utf-8")
+
+        self.assertIn(", 0, True)", vbs)
+        self.assertIn("WScript.Quit exitCode", vbs)
+        self.assertIn("-Wait -PassThru", powershell)
+
+    def test_tray_registration_recovers_after_a_transient_shell_failure(self):
+        from breakguard_tray import WindowsTrayIcon
+
+        tray = WindowsTrayIcon.__new__(WindowsTrayIcon)
+        tray.stop_event = SimpleNamespace(is_set=Mock(return_value=False))
+        tray.hwnd = 100
+        tray.hicon = 200
+        tray.available = False
+        tray.error = ""
+        tray.retry_seconds = 8.0
+        tray.failure_count = 0
+        tray.action_queue = queue.Queue()
+        tray.win32gui = SimpleNamespace(
+            NIF_ICON=1,
+            NIF_MESSAGE=2,
+            NIF_TIP=4,
+            NIM_ADD=0,
+            NIM_SETVERSION=4,
+            NOTIFYICON_VERSION_4=4,
+            Shell_NotifyIcon=Mock(side_effect=[OSError("Explorer not ready"), None, None]),
+        )
+
+        self.assertFalse(tray._register_icon())
+        self.assertFalse(tray.available)
+        self.assertTrue(tray._register_icon())
+        self.assertTrue(tray.available)
+        self.assertEqual(tray.retry_seconds, 1.0)
+        self.assertEqual(tray.action_queue.get_nowait(), "tray_ready")
+
+    def test_taskbar_recreation_reregisters_the_tray_icon(self):
+        from breakguard_tray import WindowsTrayIcon
+
+        tray = WindowsTrayIcon.__new__(WindowsTrayIcon)
+        tray.available = True
+        tray._register_icon = Mock(return_value=True)
+        tray._schedule_retry = Mock()
+
+        self.assertTrue(tray._on_taskbar_created(0, 0, 0, 0))
+        tray._register_icon.assert_called_once()
+        tray._schedule_retry.assert_not_called()
+
     def test_ui_modules_import_after_split(self):
         import breakguard_app
         import breakguard_records

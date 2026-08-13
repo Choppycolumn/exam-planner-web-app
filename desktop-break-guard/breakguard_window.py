@@ -235,7 +235,7 @@ class WindowMixin:
         if self.exiting:
             return
         if not self.tray.available:
-            self.set_status("托盘不可用，已阻止隐藏以免窗口丢失")
+            self.set_status("系统托盘正在恢复，已取消隐藏以免窗口丢失")
             self.root.lift()
             return
         self.hidden_to_tray = True

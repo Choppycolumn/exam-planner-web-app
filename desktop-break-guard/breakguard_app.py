@@ -101,7 +101,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         if self.tray.wait_until_ready() and os.environ.get("BREAK_GUARD_QA_MODE") != "1":
             self.hide_from_taskbar()
         elif not self.tray.available:
-            self.set_status("托盘不可用，窗口不会被隐藏")
+            self.set_status("系统托盘正在连接，恢复后可自动隐藏")
         self.refresh_view_state()
         self.poll_queues()
         self.tick()
@@ -556,7 +556,7 @@ class BreakGuardApp(WindowMixin, ViewMixin):
         if not self.exiting:
             self.root.after(1000, self.tick)
     def poll_queues(self) -> None:
-        actions = {"show": self.show_window, "hide": self.hide_to_tray, "toggle": self.toggle_window, "reset": self.reset_window_position, "quit": self.quit_app, "test_fullscreen": lambda: self.show_fullscreen(0)}
+        actions = {"show": self.show_window, "hide": self.hide_to_tray, "toggle": self.toggle_window, "reset": self.reset_window_position, "quit": self.quit_app, "test_fullscreen": lambda: self.show_fullscreen(0), "tray_ready": self.on_tray_ready}
         while True:
             try:
                 action = self.tray_actions.get_nowait()
@@ -577,6 +577,10 @@ class BreakGuardApp(WindowMixin, ViewMixin):
                 self.set_status(str(message))
         if not self.exiting:
             self.root.after(100, self.poll_queues)
+    def on_tray_ready(self) -> None:
+        if os.environ.get("BREAK_GUARD_QA_MODE") != "1":
+            self.hide_from_taskbar()
+        self.set_status("网站同步待命 · 托盘常驻 · 关闭即隐藏")
     def quit_app(self) -> None:
         if self.exiting:
             return

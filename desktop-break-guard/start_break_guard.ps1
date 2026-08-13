@@ -9,8 +9,8 @@ if (Test-Path $packagedApp) {
   $canRunPackagedApp = $false
 }
 if ($canRunPackagedApp) {
-  & $packagedApp
-  exit $LASTEXITCODE
+  $process = Start-Process -FilePath $packagedApp -WorkingDirectory $scriptDir -WindowStyle Hidden -Wait -PassThru
+  exit $process.ExitCode
 }
 $pythonwCommand = Get-Command pythonw.exe -ErrorAction SilentlyContinue
 $pythonw = if ($pythonwCommand) { $pythonwCommand.Source } else { $null }
@@ -29,12 +29,15 @@ if (-not $pythonw) {
 $leaf = Split-Path -Leaf $pythonw
 Push-Location $scriptDir
 try {
+  $arguments = @()
   if ($leaf -ieq "py.exe" -or $leaf -ieq "pyw.exe") {
-    & $pythonw -3 $app
+    $arguments += "-3"
+    $arguments += "`"$app`""
   } else {
-    & $pythonw $app
+    $arguments += "`"$app`""
   }
-  exit $LASTEXITCODE
+  $process = Start-Process -FilePath $pythonw -ArgumentList $arguments -WorkingDirectory $scriptDir -WindowStyle Hidden -Wait -PassThru
+  exit $process.ExitCode
 } finally {
   Pop-Location
 }
