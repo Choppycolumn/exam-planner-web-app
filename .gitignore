@@ -20,6 +20,8 @@ desktop-pet/config.json
 dist-ssr
 data-local
 data/analysis
+data/*.sqlite*
+data/backups/
 screenshots
 test-results
 playwright-report
