@@ -48,7 +48,8 @@ if ((${#units[@]})); then
 fi
 
 legacy_process_ids() {
-  ps -eo pid=,args= | awk '
+  ps -eo pid=,comm=,args= | awk '
+    tolower($2) !~ /^(awk|bash|sh|dash|ps|grep)$/ &&
     tolower($0) ~ /(\/root\/\.openclaw|\/opt\/openclaw|\/opt\/node22\/|openclaw-gateway|openclaw-weixin-send)/ {
       print $1
     }
