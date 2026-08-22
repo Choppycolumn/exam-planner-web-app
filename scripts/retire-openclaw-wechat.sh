@@ -47,9 +47,20 @@ if ((${#units[@]})); then
   systemctl disable --now "${units[@]}" >/dev/null 2>&1 || true
 fi
 
-pkill -TERM -f '[o]penclaw|[c]lawbot|[w]eixin|[w]echat|[w]ecom' 2>/dev/null || true
-sleep 2
-pkill -KILL -f '[o]penclaw|[c]lawbot|[w]eixin|[w]echat|[w]ecom' 2>/dev/null || true
+legacy_process_ids() {
+  ps -eo pid=,args= | awk '
+    tolower($0) ~ /(\/root\/\.openclaw|\/opt\/openclaw|\/opt\/node22\/|openclaw-gateway|openclaw-weixin-send)/ {
+      print $1
+    }
+  '
+}
+
+mapfile -t legacy_pids < <(legacy_process_ids)
+if ((${#legacy_pids[@]})); then
+  kill -TERM "${legacy_pids[@]}" 2>/dev/null || true
+  sleep 2
+  kill -KILL "${legacy_pids[@]}" 2>/dev/null || true
+fi
 
 for unit in "${units[@]}"; do
   fragment="$(systemctl show "$unit" -p FragmentPath --value 2>/dev/null || true)"
@@ -91,7 +102,7 @@ systemctl daemon-reload
 systemctl reset-failed >/dev/null 2>&1 || true
 
 remaining_units="$(systemctl list-unit-files --no-legend 2>/dev/null | awk 'tolower($1) ~ /(openclaw|clawbot|weixin|wechat|wecom)/ { print $1 }')"
-remaining_processes="$(pgrep -af '[o]penclaw|[c]lawbot|[w]eixin|[w]echat|[w]ecom' || true)"
+remaining_processes="$(legacy_process_ids || true)"
 
 printf 'backup=%s\n' "$BACKUP_ROOT"
 printf 'remaining_units=%s\n' "${remaining_units:-none}"
