@@ -1,59 +1,4 @@
 export function installNotificationBotsDomain(runtime, exposeRuntime) {
-    async function handleClawbotApi(req, res) {
-        const requestUrl = new URL(req.url || '/', 'http://localhost');
-        const body = req.method === 'GET' ? {} : await runtime.readJsonBody(req);
-        const access = runtime.validateClawbotAccess(req, requestUrl, body);
-        if (!access.ok) {
-            runtime.sendJson(res, { ok: false, error: access.error }, access.status);
-            return;
-        }
-        if (requestUrl.pathname === '/api/clawbot/status' && req.method === 'GET') {
-            const openClawStatus = runtime.resolveOpenClawWechatConfig();
-            runtime.sendJson(res, {
-                ok: true,
-                enabled: true,
-                webhookConfigured: Boolean(runtime.clawbotWebhookUrl),
-                openClawConfigured: openClawStatus.configured,
-                pushConfigured: Boolean(runtime.clawbotWebhookUrl || openClawStatus.configured),
-                openClaw: openClawStatus,
-                commands: ['待办', '完成', '删除待办', '今日待办', '本周待办', '每日简报', '帮助'],
-            });
-            return;
-        }
-        if (requestUrl.pathname === '/api/clawbot/help' && ['GET', 'POST'].includes(req.method || 'GET')) {
-            runtime.sendJson(res, { ok: true, reply: runtime.clawbotHelpText });
-            return;
-        }
-        if (requestUrl.pathname === '/api/clawbot/daily-digest' && ['GET', 'POST'].includes(req.method || 'GET')) {
-            const date = runtime.normalizeClawbotDate(requestUrl.searchParams.get('date') || (runtime.isObjectPayload(body) ? body.date : ''));
-            const digest = runtime.buildClawbotDailyDigest(date);
-            runtime.sendJson(res, { ok: true, reply: digest.text, digest });
-            return;
-        }
-        if (requestUrl.pathname === '/api/clawbot/push-daily' && req.method === 'POST') {
-            const date = runtime.normalizeClawbotDate(runtime.isObjectPayload(body) ? body.date : '');
-            const digest = runtime.buildClawbotDailyDigest(date);
-            const delivery = runtime.queueProactiveNotification({
-                eventKey: `brief-manual-push:${date}:${Date.now()}`,
-                source: 'brief',
-                title: `${date} 每日简报主动推送`,
-                content: '每日简报已进入微信主动推送队列。',
-                text: digest.text,
-                payload: { date, trigger: 'clawbot_api' },
-            });
-            runtime.writeAuditEvent({ action: 'clawbot_daily_push', req, actorRole: 'clawbot', detail: { date, ok: delivery.ok } });
-            runtime.sendJson(res, { ok: delivery.ok, reply: digest.text, digest, delivery }, delivery.ok ? 200 : 502);
-            return;
-        }
-        if (requestUrl.pathname === '/api/clawbot/message' && req.method === 'POST') {
-            const message = runtime.extractClawbotMessage(body, requestUrl);
-            const command = runtime.parseClawbotCommand(message, { today: runtime.todayISO() });
-            const result = await runtime.executeClawbotCommand(command, req);
-            runtime.sendJson(res, result, result.ok ? 200 : 400);
-            return;
-        }
-        runtime.sendJson(res, { ok: false, error: 'Not found' }, 404);
-    }
     function telegramHelpText() {
         return [
             'Telegram 助手命令：',
@@ -98,7 +43,7 @@ export function installNotificationBotsDomain(runtime, exposeRuntime) {
             return result.ok ? `SQLite 维护完成：${result.ranAt}` : `SQLite 维护失败：${result.error || '未知错误'}`;
         }
         if (action === 'resendbrief') {
-            const digest = runtime.buildClawbotDailyDigest(runtime.todayISO());
+            const digest = runtime.buildDailyNotificationDigest(runtime.todayISO());
             await runtime.sendTelegramMessage(digest.text);
             runtime.writeAuditEvent({ action: 'telegram_brief_resend', req, actorRole: 'telegram', detail: { date: digest.date } });
             return '最新简报已重发。';
@@ -118,13 +63,13 @@ export function installNotificationBotsDomain(runtime, exposeRuntime) {
             const delay = context.callbackData.match(/^task:delay:(\d+)$/);
             const confirm = context.callbackData.match(/^ops:confirm:(backup|maintenance|resendbrief):([A-Za-z0-9_-]+)$/);
             if (complete) {
-                const command = runtime.parseClawbotCommand(`完成 #${complete[1]}`, { today: runtime.todayISO() });
-                const result = await runtime.executeClawbotCommand(command, req);
+                const command = runtime.parseNotificationCommand(`完成 #${complete[1]}`, { today: runtime.todayISO() });
+                const result = await runtime.executeNotificationCommand(command, req);
                 await runtime.sendTelegramMessage(result.reply, { chatId: context.chatId });
                 return;
             }
             if (delay) {
-                const task = runtime.findClawbotTasks(`#${delay[1]}`)[0];
+                const task = runtime.findNotificationTasks(`#${delay[1]}`)[0];
                 if (!task)
                     return runtime.sendTelegramMessage('待办不存在或已完成。', { chatId: context.chatId });
                 const nextDate = runtime.addDaysISO(task.dueDate, 1);
@@ -162,8 +107,8 @@ export function installNotificationBotsDomain(runtime, exposeRuntime) {
         }
         if (/^\/(?:start|help)(?:@\w+)?$/i.test(raw))
             return runtime.sendTelegramMessage(telegramHelpText(), { chatId: context.chatId });
-        const command = runtime.parseClawbotCommand(telegramCommandText(raw), { today: runtime.todayISO() });
-        const result = await runtime.executeClawbotCommand(command, req);
+        const command = runtime.parseNotificationCommand(telegramCommandText(raw), { today: runtime.todayISO() });
+        const result = await runtime.executeNotificationCommand(command, req);
         const tasks = result.tasks || (result.task && !result.task.isCompleted ? [result.task] : []);
         await runtime.sendTelegramMessage(result.reply, { chatId: context.chatId, replyMarkup: tasks.length ? runtime.telegramTaskKeyboard(tasks) : undefined });
     }
@@ -213,7 +158,6 @@ export function installNotificationBotsDomain(runtime, exposeRuntime) {
     }
 
     exposeRuntime({
-        handleClawbotApi: () => handleClawbotApi,
         telegramHelpText: () => telegramHelpText,
         telegramCommandText: () => telegramCommandText,
         telegramHealthText: () => telegramHealthText,

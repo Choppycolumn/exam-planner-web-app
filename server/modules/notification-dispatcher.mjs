@@ -24,21 +24,6 @@ function telegramRequest(channel, event, env) {
   };
 }
 
-function wecomWebhookRequest(channel, event, env) {
-  const webhookEnv = channel.config?.webhookUrlEnv || 'WECOM_WEBHOOK_URL';
-  const webhookUrl = env[webhookEnv];
-  if (!webhookUrl) return null;
-  return {
-    channelKey: channel.channelKey,
-    type: 'wecom_webhook',
-    url: webhookUrl,
-    body: {
-      msgtype: 'markdown',
-      markdown: { content: eventText(event).slice(0, 4096) },
-    },
-  };
-}
-
 function genericWebhookRequest(channel, event, env) {
   const webhookEnv = channel.config?.webhookUrlEnv || 'NOTIFICATION_WEBHOOK_URL';
   const webhookUrl = channel.config?.webhookUrl || env[webhookEnv];
@@ -62,7 +47,6 @@ function genericWebhookRequest(channel, event, env) {
 export function buildNotificationDeliveryRequest(channel, event, env = process.env) {
   if (!channel?.enabled) return null;
   if (channel.type === 'telegram') return telegramRequest(channel, event, env);
-  if (channel.type === 'wecom_webhook') return wecomWebhookRequest(channel, event, env);
   if (channel.type === 'webhook') return genericWebhookRequest(channel, event, env);
   return null;
 }
@@ -73,19 +57,9 @@ export function notificationChannelReadiness(channel, env = process.env) {
     const chatIdEnv = channel.config?.chatIdEnv || 'TELEGRAM_CHAT_ID';
     return { ready: Boolean(env[tokenEnv] && env[chatIdEnv]), requiredEnv: [tokenEnv, chatIdEnv] };
   }
-  if (channel.type === 'wecom_webhook') {
-    const webhookEnv = channel.config?.webhookUrlEnv || 'WECOM_WEBHOOK_URL';
-    return { ready: Boolean(env[webhookEnv]), requiredEnv: [webhookEnv] };
-  }
   if (channel.type === 'webhook') {
     const webhookEnv = channel.config?.webhookUrlEnv || 'NOTIFICATION_WEBHOOK_URL';
     return { ready: Boolean(channel.config?.webhookUrl || env[webhookEnv]), requiredEnv: [webhookEnv] };
-  }
-  if (channel.type === 'clawbot_weixin') {
-    return {
-      ready: Boolean(channel.enabled),
-      requiredEnv: [],
-    };
   }
   if (channel.type === 'bark') {
     return {
@@ -97,16 +71,14 @@ export function notificationChannelReadiness(channel, env = process.env) {
 }
 
 export function resolveProactiveDispatch(delivery, channels = [], env = process.env) {
-  const channelKey = delivery?.channelKey || 'clawbot_weixin';
+  const channelKey = delivery?.channelKey || 'bark_default';
   const stored = channels.find((channel) => channel.channelKey === channelKey);
   const type = stored?.type || (
     channelKey === 'bark_default' ? 'bark'
       : channelKey === 'telegram_default' ? 'telegram'
-        : channelKey === 'clawbot_weixin' ? 'clawbot_weixin'
-          : channelKey
+        : channelKey
   );
   if (type === 'bark') return { kind: 'bark', channelKey };
   if (type === 'telegram') return { kind: 'telegram', channelKey, ready: Boolean(env.TELEGRAM_BOT_TOKEN || channelKey === 'telegram_default') };
-  if (type === 'clawbot_weixin') return { kind: 'clawbot_weixin', channelKey };
   return { kind: 'unsupported', channelKey, type };
 }

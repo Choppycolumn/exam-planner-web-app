@@ -75,7 +75,7 @@ export function defaultBriefSettings(): DailyBriefSettings {
     latitude: 39.9042,
     longitude: 116.4074,
     marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
-    wechat: {
+    notifications: {
       enabled: true,
     },
     taskReminders: {

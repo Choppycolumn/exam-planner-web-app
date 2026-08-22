@@ -79,7 +79,7 @@ export const API_CONTRACTS = Object.freeze({
   briefToday: get('/api/briefs/today', BRIEF),
   briefGenerate: post('/api/briefs/generate', BRIEF, {
     sendEmail: 'boolean?',
-    sendWechat: 'boolean?',
+    sendNotification: 'boolean?',
   }),
   briefSendLatest: post('/api/briefs/send-latest', BRIEF),
 
@@ -107,16 +107,10 @@ export const API_CONTRACTS = Object.freeze({
   notificationCenter: get('/api/notifications/center', NOTIFICATIONS),
   notificationAck: post('/api/notifications/ack', NOTIFICATIONS, { id: 'number' }),
   notificationRetry: post('/api/notifications/retry-delivery', NOTIFICATIONS, { id: 'number' }),
-  notificationWechatTest: post('/api/notifications/wechat/test', NOTIFICATIONS),
   notificationBarkTest: post('/api/notifications/bark/test', NOTIFICATIONS),
   notificationTelegramSettings: post('/api/notifications/telegram/settings', NOTIFICATIONS),
   notificationTelegramRegister: post('/api/notifications/telegram/register', NOTIFICATIONS),
   notificationTelegramTest: post('/api/notifications/telegram/test', NOTIFICATIONS),
-  notificationWechatSettings: post('/api/notifications/wechat/settings', NOTIFICATIONS, {
-    enabled: 'boolean',
-    generateTime: 'string?',
-  }),
-
   embeddingStatus: get('/api/error-themes/embedding/status'),
   errorThemeAnalysis: get('/api/error-themes/analysis'),
   errorThemeDetail: get('/api/error-themes/detail'),

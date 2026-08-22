@@ -32,7 +32,5 @@ export function createPrivilegedClient({ socketPath = process.env.PRIVILEGED_HEL
     proxyImport: (body) => call('/v1/proxy/import', { method: 'POST', body }),
     proxySelect: (body) => call('/v1/proxy/select', { method: 'POST', body }),
     proxyTest: () => call('/v1/proxy/test', { method: 'POST', body: {} }),
-    wechatStatus: () => call('/v1/wechat/status'),
-    wechatSend: (text) => call('/v1/wechat/send', { method: 'POST', body: { text: String(text || '').slice(0, 3500) } }),
   };
 }

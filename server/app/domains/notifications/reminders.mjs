@@ -1,34 +1,4 @@
 export function installNotificationReminderDomain(runtime, exposeRuntime) {
-    async function postClawbotWebhook(text) {
-        if (!runtime.clawbotWebhookUrl) {
-            return { ok: false, error: 'CLAWBOT_WEBHOOK_URL is not configured' };
-        }
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10000);
-        try {
-            const response = await fetch(runtime.clawbotWebhookUrl, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                    source: 'exam-planner-clawbot',
-                    text,
-                    content: text,
-                    message: text,
-                }),
-                signal: controller.signal,
-            });
-            const responseText = await response.text();
-            if (!response.ok)
-                throw new Error(`Webhook returned ${response.status}: ${responseText.slice(0, 300)}`);
-            return { ok: true, status: response.status, response: responseText.slice(0, 500) };
-        }
-        catch (error) {
-            return { ok: false, error: runtime.redactSecretText(error.message || String(error)) };
-        }
-        finally {
-            clearTimeout(timer);
-        }
-    }
     function chinaDateISO(date = new Date()) {
         return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
     }
@@ -51,7 +21,7 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
         return `${value} 分钟`;
     }
     function taskCompletionHint(taskId) {
-        const tasks = runtime.listClawbotLabelTasks({ limit: 26 });
+        const tasks = runtime.listNotificationLabelTasks({ limit: 26 });
         const index = tasks.findIndex((task) => Number(task.id) === Number(taskId));
         if (index >= 0)
             return { label: runtime.taskLetterLabel(index), command: `完成${runtime.taskLetterLabel(index)}` };
@@ -65,10 +35,10 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
             '【待办提醒】',
             `${hint.label}. ${task.title}`,
             `时间：${due}`,
-            `优先级：${runtime.clawbotUrgencyLabel(task.urgency)}`,
+            `优先级：${runtime.notificationUrgencyLabel(task.urgency)}`,
             `提醒：提前 ${formatReminderLead(offsetMinutes)}，距离开始约 ${formatReminderLead(remaining)}`,
             '',
-            `可回复：${hint.command} / 今日待办`,
+            `可在 Telegram 回复：${hint.command} / 今日待办`,
         ].join('\n');
     }
     function listTimedReminderTasks(scanDate) {
@@ -76,7 +46,7 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
         return runtime.taskRepository.listOwnerTimedReminders(
             scanDate,
             runtime.addDaysISO(scanDate, maxForwardDays),
-        ).map(runtime.normalizeClawbotTask);
+        ).map(runtime.normalizeNotificationTask);
     }
     async function processTaskReminders() {
         runtime.ensureSqliteStore();
@@ -106,7 +76,7 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
                 eventKey: `task-reminder:${task.id}:${offset}:${task.dueDate}`,
                 source: 'task',
                 title: `待办提醒：${task.title}`,
-                content: `待办提醒已进入微信主动推送队列，提前 ${offset} 分钟提醒。`,
+                content: `待办提醒已进入 Bark、Telegram 主动推送队列，提前 ${offset} 分钟提醒。`,
                 text: buildTaskReminderText(task, offset, dueAtMs),
                 payload: { taskId: task.id, offset, dueDate: task.dueDate, dueTime: task.dueTime },
             });
@@ -160,7 +130,6 @@ export function installNotificationReminderDomain(runtime, exposeRuntime) {
         runtime.taskReminderInitialTimer = runtime.taskReminderTimer;
     }
     exposeRuntime({
-        postClawbotWebhook: () => postClawbotWebhook,
         chinaDateISO: () => chinaDateISO,
         chinaWallClockUtcMs: () => chinaWallClockUtcMs,
         formatReminderLead: () => formatReminderLead,

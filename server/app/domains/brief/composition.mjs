@@ -63,7 +63,7 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
     function listDailyBriefs(limit = 30) {
         return runtime.dailyBriefRepository.list(limit);
     }
-    async function generateDailyBrief({ date = runtime.todayISO(), trigger = 'manual', sendEmail = false, sendWechat = false } = {}) {
+    async function generateDailyBrief({ date = runtime.todayISO(), trigger = 'manual', sendEmail = false, sendNotification = false } = {}) {
         const settings = runtime.getDailyBriefSettings({ includeSecret: true });
         const generatedAt = runtime.nowISO();
         const marketSymbols = runtime.parseMarketSymbols(settings.marketSymbolsText).slice(0, 12);
@@ -100,8 +100,7 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
                 }
             }
         }
-        let wechatDelivery = null;
-        let wechatError = '';
+        let notificationDelivery = null;
         runtime.dailyBriefRepository.upsert({
             date,
             title: payload.title,
@@ -114,23 +113,23 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
         });
         runtime.tableChanged();
         const brief = getDailyBriefByDate(date);
-        if (sendWechat || (trigger === 'auto' && settings.wechat.enabled)) {
-            const digest = runtime.buildClawbotDailyDigest(date);
-            wechatDelivery = runtime.queueProactiveNotification({
+        if (sendNotification || (trigger === 'auto' && settings.notifications.enabled)) {
+            const digest = runtime.buildDailyNotificationDigest(date);
+            notificationDelivery = runtime.queueProactiveNotification({
                 eventKey: `brief:${date}`,
                 source: 'brief',
                 title: payload.title,
-                content: '每日简报已进入微信主动推送队列。',
+                content: '每日简报已进入 Bark、Telegram 主动推送队列。',
                 text: digest.text,
                 payload: { date, trigger },
             });
-            runtime.logStructured('info', 'daily_brief_wechat_queued', {
+            runtime.logStructured('info', 'daily_brief_notification_queued', {
                 date,
                 trigger,
-                deliveryId: wechatDelivery.deliveryId,
+                deliveryId: notificationDelivery.deliveryId,
             });
         }
-        const warningText = [emailError ? `邮件推送失败：${emailError}` : '', wechatError ? `微信推送失败：${wechatError}` : ''].filter(Boolean).join('；');
+        const warningText = emailError ? `邮件推送失败：${emailError}` : '';
         runtime.notifyEvent({
             eventKey: `brief:${date}`,
             source: 'brief',
@@ -142,13 +141,11 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
                 trigger,
                 emailedAt,
                 emailError,
-                wechatPushed: Boolean(wechatDelivery?.ok),
-                wechatError,
-                wechatDelivery: wechatDelivery ? {
-                    method: wechatDelivery.method || '',
-                    channel: wechatDelivery.channel || '',
-                    messageId: wechatDelivery.messageId || null,
-                    response: wechatDelivery.response || null,
+                notificationQueued: Boolean(notificationDelivery?.ok),
+                notificationDelivery: notificationDelivery ? {
+                    deliveryId: notificationDelivery.deliveryId || null,
+                    deliveries: notificationDelivery.deliveries || [],
+                    mode: notificationDelivery.mode || '',
                 } : null,
             },
         });
@@ -174,7 +171,7 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
         runtime.dailyBriefTimer = runtime.scheduler.scheduleOnce('daily-brief', delay, async () => {
             try {
                 if (runtime.getDailyBriefSettings({ includeSecret: true }).enabled) {
-                    await runtime.runExclusiveTask('daily-brief', 'auto', () => generateDailyBrief({ date: runtime.todayISO(), trigger: 'auto', sendEmail: true, sendWechat: true }), { timeoutMs: 4 * 60 * 1000 });
+                    await runtime.runExclusiveTask('daily-brief', 'auto', () => generateDailyBrief({ date: runtime.todayISO(), trigger: 'auto', sendEmail: true, sendNotification: true }), { timeoutMs: 4 * 60 * 1000 });
                 }
             }
             catch (error) {

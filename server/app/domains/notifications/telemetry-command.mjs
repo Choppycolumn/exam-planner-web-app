@@ -73,52 +73,11 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
         redact: runtime.redactSecretText,
     });
     const { activeTaskLocks, lastTaskRuns, runExclusiveTask } = taskRunner;
-    function clawbotRequestSecret(req, requestUrl, body = {}) {
-        const auth = runtime.headerString(req, 'authorization');
-        const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';
-        return String(runtime.headerString(req, 'x-clawbot-secret') ||
-            bearer ||
-            requestUrl.searchParams.get('secret') ||
-            (runtime.isObjectPayload(body) ? body.secret || body.token : '') ||
-            '').trim();
-    }
-    function validateClawbotAccess(req, requestUrl, body = {}) {
-        if (!runtime.clawbotSecret) {
-            return { ok: false, status: 503, error: 'ClawBot adapter is disabled. Set CLAWBOT_SECRET first.' };
-        }
-        if (!runtime.safeSecretEqual(clawbotRequestSecret(req, requestUrl, body), runtime.clawbotSecret)) {
-            return { ok: false, status: 401, error: 'Unauthorized' };
-        }
-        return { ok: true };
-    }
-    function extractClawbotMessage(body, requestUrl) {
-        const queryMessage = requestUrl.searchParams.get('text') || requestUrl.searchParams.get('message') || '';
-        if (queryMessage)
-            return queryMessage;
-        if (typeof body === 'string')
-            return body;
-        if (!runtime.isObjectPayload(body))
-            return '';
-        for (const key of ['text', 'content', 'message', 'msg', 'rawMessage']) {
-            if (typeof body[key] === 'string' && body[key].trim())
-                return body[key];
-        }
-        for (const key of ['data', 'event', 'payload']) {
-            const nested = body[key];
-            if (!runtime.isObjectPayload(nested))
-                continue;
-            for (const nestedKey of ['text', 'content', 'message', 'msg', 'rawMessage']) {
-                if (typeof nested[nestedKey] === 'string' && nested[nestedKey].trim())
-                    return nested[nestedKey];
-            }
-        }
-        return '';
-    }
-    function normalizeClawbotDate(value) {
+    function normalizeCommandDate(value) {
         const text = String(value || '').trim();
         return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : runtime.todayISO();
     }
-    function clawbotMinutesText(minutes) {
+    function notificationMinutesText(minutes) {
         const value = Math.max(0, Number(minutes || 0));
         const hours = Math.floor(value / 60);
         const rest = value % 60;
@@ -128,7 +87,7 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
             return `${hours} 小时`;
         return `${rest} 分钟`;
     }
-    function normalizeClawbotTask(row) {
+    function normalizeNotificationTask(row) {
         const task = runtime.normalizeTaskRow(row);
         return {
             id: Number(row.id),
@@ -144,7 +103,7 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
             note: task.note || '',
         };
     }
-    function clawbotUrgencyLabel(urgency) {
+    function notificationUrgencyLabel(urgency) {
         if (urgency === 'high')
             return '高';
         if (urgency === 'low')
@@ -161,56 +120,56 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
             return null;
         return text.toUpperCase().charCodeAt(0) - 65;
     }
-    function formatClawbotTask(task, index = 0) {
+    function formatNotificationTask(task, index = 0) {
         const prefix = index >= 0 ? `${taskLetterLabel(index)}. ` : '';
         const status = task.isCompleted ? '已完成' : task.dueDate < runtime.todayISO() ? '逾期' : '未完成';
         const due = task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate;
-        return `${prefix}${task.title}｜${due}｜${clawbotUrgencyLabel(task.urgency)}｜${status}`;
+        return `${prefix}${task.title}｜${due}｜${notificationUrgencyLabel(task.urgency)}｜${status}`;
     }
     function taskSearchPattern(keyword) {
         const cleaned = String(keyword || '').replace(/[%_]/g, '').trim().slice(0, 80);
         return cleaned ? `%${cleaned}%` : '';
     }
-    function listClawbotTasks({ range = 'today', date = runtime.todayISO(), limit = 30 } = {}) {
+    function listNotificationTasks({ range = 'today', date = runtime.todayISO(), limit = 30 } = {}) {
         runtime.ensureSqliteStore();
         const endDate = range === 'week' ? runtime.endOfWeekISO(date) : date;
-        return runtime.taskRepository.listOwnerDueThrough(endDate, limit).map(normalizeClawbotTask);
+        return runtime.taskRepository.listOwnerDueThrough(endDate, limit).map(normalizeNotificationTask);
     }
-    function listClawbotLabelTasks({ limit = 26 } = {}) {
+    function listNotificationLabelTasks({ limit = 26 } = {}) {
         runtime.ensureSqliteStore();
-        return runtime.taskRepository.listOwnerOpen(limit).map(normalizeClawbotTask);
+        return runtime.taskRepository.listOwnerOpen(limit).map(normalizeNotificationTask);
     }
-    function findClawbotTasks(keyword, { includeCompleted = false, limit = 6 } = {}) {
+    function findNotificationTasks(keyword, { includeCompleted = false, limit = 6 } = {}) {
         runtime.ensureSqliteStore();
         const text = String(keyword || '').trim();
         if (!text)
             return [];
         const labelIndex = taskLabelIndex(text);
         if (labelIndex !== null) {
-            const labeled = listClawbotLabelTasks({ limit: 26 })[labelIndex];
+            const labeled = listNotificationLabelTasks({ limit: 26 })[labelIndex];
             return labeled ? [labeled] : [];
         }
         const id = text.match(/^#?(\d+)$/)?.[1];
         if (id) {
             const task = runtime.taskRepository.findOwnerById(Number(id), { includeCompleted });
-            return task ? [normalizeClawbotTask(task)] : [];
+            return task ? [normalizeNotificationTask(task)] : [];
         }
         const pattern = taskSearchPattern(text);
         if (!pattern)
             return [];
-        return runtime.taskRepository.findOwnerByTitle(pattern, { includeCompleted, limit }).map(normalizeClawbotTask);
+        return runtime.taskRepository.findOwnerByTitle(pattern, { includeCompleted, limit }).map(normalizeNotificationTask);
     }
-    function buildClawbotTaskListReply(range, tasks) {
+    function buildNotificationTaskListReply(range, tasks) {
         const title = range === 'week' ? '本周未完成待办' : '今日未完成待办';
         if (!tasks.length)
             return `${title}：暂无。`;
-        return `${title}：\n${tasks.map((task, index) => formatClawbotTask(task, index)).join('\n')}`;
+        return `${title}：\n${tasks.map((task, index) => formatNotificationTask(task, index)).join('\n')}`;
     }
-    function clawbotSection(title, lines = []) {
+    function notificationSection(title, lines = []) {
         const items = lines.filter(Boolean);
         return items.length ? [`【${title}】`, ...items] : [];
     }
-    function buildClawbotBriefReply(brief, notificationMetrics = { open: 0, warnings: 0, critical: 0 }) {
+    function buildNotificationBriefReply(brief, notificationMetrics = { open: 0, warnings: 0, critical: 0 }) {
         if (!brief?.payload)
             return '简报：暂未生成。';
         const payload = brief.payload;
@@ -225,13 +184,13 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
             ? `${weather.cityName || ''}：${weather.condition || ''}，${weather.temperature ?? '--'}℃，${weather.minTemperature ?? '--'}-${weather.maxTemperature ?? '--'}℃，降水概率 ${weather.precipitationProbability ?? 0}%`
             : `天气获取失败：${weather.error || '未知错误'}`;
         const learningLines = [
-            `昨日学习：${clawbotMinutesText(learning.yesterdayMinutes || 0)}`,
-            `近 7 天累计：${clawbotMinutesText(learning.last7Minutes || 0)}`,
+            `昨日学习：${notificationMinutesText(learning.yesterdayMinutes || 0)}`,
+            `近 7 天累计：${notificationMinutesText(learning.last7Minutes || 0)}`,
             learning.activeGoal ? `目标：${learning.activeGoal.name}，剩余 ${learning.activeGoal.daysLeft} 天` : '目标：暂无启用中的长期目标',
             learning.yesterdayReview?.problems ? `昨日问题：${runtime.compactText(learning.yesterdayReview.problems, 120)}` : '',
         ];
         const taskLines = tasks.length
-            ? tasks.map((task, index) => `${taskLetterLabel(index)}. ${task.title}｜${task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate}｜${clawbotUrgencyLabel(task.urgency)}`)
+            ? tasks.map((task, index) => `${taskLetterLabel(index)}. ${task.title}｜${task.dueTime ? `${task.dueDate} ${task.dueTime}` : task.dueDate}｜${notificationUrgencyLabel(task.urgency)}`)
             : ['今天没有到期待办。'];
         const marketLines = markets.length
             ? markets.map((item) => item.ok
@@ -258,32 +217,32 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
             `${payload.title}`,
             `生成时间：${new Date(payload.generatedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
             '',
-            ...clawbotSection('天气', [weatherLine]),
+            ...notificationSection('天气', [weatherLine]),
             '',
-            ...clawbotSection('学习', learningLines),
+            ...notificationSection('学习', learningLines),
             '',
-            ...clawbotSection('英语写作计划', englishPlanLines),
+            ...notificationSection('英语写作计划', englishPlanLines),
             englishPlanLines.length ? '' : '',
-            ...clawbotSection(customWeeklyPush.weekdayLabel ? `${customWeeklyPush.weekdayLabel}自定义推送` : '自定义推送', customWeeklyPush.hasContent ? String(customWeeklyPush.content || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []),
+            ...notificationSection(customWeeklyPush.weekdayLabel ? `${customWeeklyPush.weekdayLabel}自定义推送` : '自定义推送', customWeeklyPush.hasContent ? String(customWeeklyPush.content || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : []),
             customWeeklyPush.hasContent ? '' : '',
-            ...clawbotSection('今日待办', taskLines),
+            ...notificationSection('今日待办', taskLines),
             '',
-            ...clawbotSection('指数', marketLines),
+            ...notificationSection('指数', marketLines),
             '',
-            ...clawbotSection('美股指数定投评估', [
+            ...notificationSection('美股指数定投评估', [
                 ...assessmentLines,
                 indexPurchaseAssessment.disclaimer || '',
             ]),
             '',
-            ...clawbotSection('通知', notificationLines),
+            ...notificationSection('通知', notificationLines),
             '',
             '可回复：待办 明天 高 背单词 / 完成 背单词 / 今日待办 / 帮助',
         ];
         return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     }
-    function buildClawbotDailyDigest(date = runtime.todayISO()) {
+    function buildDailyNotificationDigest(date = runtime.todayISO()) {
         runtime.ensureSqliteStore();
-        const taskList = listClawbotTasks({ range: 'today', date, limit: 8 });
+        const taskList = listNotificationTasks({ range: 'today', date, limit: 8 });
         const latestBrief = runtime.getDailyBriefByDate(date) || runtime.getLatestDailyBriefSummary();
         const notificationMetrics = runtime.notificationRepository.metrics();
         let brief = latestBrief;
@@ -306,24 +265,24 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
                 },
             };
         }
-        const text = brief ? buildClawbotBriefReply(brief, notificationMetrics) : '简报：暂未生成。';
+        const text = brief ? buildNotificationBriefReply(brief, notificationMetrics) : '简报：暂未生成。';
         return { date, text, tasks: taskList, notificationMetrics, brief };
     }
-    function ambiguousClawbotReply(action, matches) {
-        return `找到多个可${action}的待办，请说得更具体，或使用 #ID：\n${matches.map((task, index) => `#${task.id} ${formatClawbotTask(task, index)}`).join('\n')}`;
+    function ambiguousNotificationReply(action, matches) {
+        return `找到多个可${action}的待办，请说得更具体，或使用 #ID：\n${matches.map((task, index) => `#${task.id} ${formatNotificationTask(task, index)}`).join('\n')}`;
     }
-    async function executeClawbotCommand(command, req) {
+    async function executeNotificationCommand(command, req) {
         if (command.type === 'help')
-            return { ok: true, reply: runtime.clawbotHelpText, command };
+            return { ok: true, reply: runtime.notificationCommandHelpText, command };
         if (command.type === 'unknown')
             return { ok: false, reply: `${command.help}\n\n未识别原因：${command.reason}`, command };
         if (command.type === 'daily_digest') {
-            const digest = buildClawbotDailyDigest(runtime.todayISO());
+            const digest = buildDailyNotificationDigest(runtime.todayISO());
             return { ok: true, reply: digest.text, digest, command };
         }
         if (command.type === 'list_tasks') {
-            const tasks = listClawbotTasks({ range: command.range, date: runtime.todayISO() });
-            return { ok: true, reply: buildClawbotTaskListReply(command.range, tasks), tasks, command };
+            const tasks = listNotificationTasks({ range: command.range, date: runtime.todayISO() });
+            return { ok: true, reply: buildNotificationTaskListReply(command.range, tasks), tasks, command };
         }
         if (command.type === 'create_task') {
             const owner = runtime.userAccountRepository.getOwnerAccount();
@@ -334,46 +293,46 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
                 title: command.title,
                 dueDate: command.dueDate,
                 urgency: command.urgency,
-                note: 'Created by ClawBot rule command',
+                note: 'Created by Telegram command',
                 isCompleted: false,
                 dueTime: command.dueTime,
                 reminderEnabled: Boolean(command.dueTime),
             });
-            writeAuditEvent({ action: 'clawbot_task_create', req, actorRole: 'clawbot', detail: { id, dueDate: command.dueDate, dueTime: command.dueTime, urgency: command.urgency } });
+            writeAuditEvent({ action: 'telegram_task_create', req, actorRole: 'telegram', detail: { id, dueDate: command.dueDate, dueTime: command.dueTime, urgency: command.urgency } });
             const due = command.dueTime ? `${command.dueDate} ${command.dueTime}` : command.dueDate;
             return {
                 ok: true,
-                reply: `已添加待办：#${id} ${command.title}｜${due}｜${clawbotUrgencyLabel(command.urgency)}`,
+                reply: `已添加待办：#${id} ${command.title}｜${due}｜${notificationUrgencyLabel(command.urgency)}`,
                 task: { id, title: command.title, dueDate: command.dueDate, dueTime: command.dueTime, urgency: command.urgency },
                 command,
             };
         }
         if (command.type === 'complete_task') {
-            const matches = findClawbotTasks(command.keyword);
+            const matches = findNotificationTasks(command.keyword);
             if (!matches.length)
                 return { ok: false, reply: `没有找到未完成待办：${command.keyword}`, command };
             if (matches.length > 1)
-                return { ok: false, reply: ambiguousClawbotReply('完成', matches), matches, command };
+                return { ok: false, reply: ambiguousNotificationReply('完成', matches), matches, command };
             const task = matches[0];
             const timestamp = runtime.nowISO();
             runtime.taskRepository.completeOwnerTask(task.id, timestamp);
             runtime.tableChanged();
-            writeAuditEvent({ action: 'clawbot_task_complete', req, actorRole: 'clawbot', detail: { id: task.id } });
+            writeAuditEvent({ action: 'telegram_task_complete', req, actorRole: 'telegram', detail: { id: task.id } });
             return { ok: true, reply: `已完成待办：#${task.id} ${task.title}`, task: { ...task, isCompleted: true, completedAt: timestamp }, command };
         }
         if (command.type === 'delete_task') {
-            const matches = findClawbotTasks(command.keyword, { includeCompleted: true });
+            const matches = findNotificationTasks(command.keyword, { includeCompleted: true });
             if (!matches.length)
                 return { ok: false, reply: `没有找到待办：${command.keyword}`, command };
             if (matches.length > 1)
-                return { ok: false, reply: ambiguousClawbotReply('删除', matches), matches, command };
+                return { ok: false, reply: ambiguousNotificationReply('删除', matches), matches, command };
             const task = matches[0];
             runtime.taskRepository.deleteOwnerTask(task.id);
             runtime.tableChanged();
-            writeAuditEvent({ action: 'clawbot_task_delete', req, actorRole: 'clawbot', detail: { id: task.id } });
+            writeAuditEvent({ action: 'telegram_task_delete', req, actorRole: 'telegram', detail: { id: task.id } });
             return { ok: true, reply: `已删除待办：#${task.id} ${task.title}`, task, command };
         }
-        return { ok: false, reply: runtime.clawbotHelpText, command };
+        return { ok: false, reply: runtime.notificationCommandHelpText, command };
     }
     exposeRuntime({
         activeTaskLocks: () => activeTaskLocks,
@@ -383,25 +342,22 @@ export function installNotificationTelemetryDomain(runtime, exposeRuntime) {
         writeAuditEvent: () => writeAuditEvent,
         writeApiRequestLog: () => writeApiRequestLog,
         writeClientErrorLog: () => writeClientErrorLog,
-        clawbotRequestSecret: () => clawbotRequestSecret,
-        validateClawbotAccess: () => validateClawbotAccess,
-        extractClawbotMessage: () => extractClawbotMessage,
-        normalizeClawbotDate: () => normalizeClawbotDate,
-        clawbotMinutesText: () => clawbotMinutesText,
-        normalizeClawbotTask: () => normalizeClawbotTask,
-        clawbotUrgencyLabel: () => clawbotUrgencyLabel,
+        normalizeCommandDate: () => normalizeCommandDate,
+        notificationMinutesText: () => notificationMinutesText,
+        normalizeNotificationTask: () => normalizeNotificationTask,
+        notificationUrgencyLabel: () => notificationUrgencyLabel,
         taskLetterLabel: () => taskLetterLabel,
         taskLabelIndex: () => taskLabelIndex,
-        formatClawbotTask: () => formatClawbotTask,
+        formatNotificationTask: () => formatNotificationTask,
         taskSearchPattern: () => taskSearchPattern,
-        listClawbotTasks: () => listClawbotTasks,
-        listClawbotLabelTasks: () => listClawbotLabelTasks,
-        findClawbotTasks: () => findClawbotTasks,
-        buildClawbotTaskListReply: () => buildClawbotTaskListReply,
-        clawbotSection: () => clawbotSection,
-        buildClawbotBriefReply: () => buildClawbotBriefReply,
-        buildClawbotDailyDigest: () => buildClawbotDailyDigest,
-        ambiguousClawbotReply: () => ambiguousClawbotReply,
-        executeClawbotCommand: () => executeClawbotCommand,
+        listNotificationTasks: () => listNotificationTasks,
+        listNotificationLabelTasks: () => listNotificationLabelTasks,
+        findNotificationTasks: () => findNotificationTasks,
+        buildNotificationTaskListReply: () => buildNotificationTaskListReply,
+        notificationSection: () => notificationSection,
+        buildNotificationBriefReply: () => buildNotificationBriefReply,
+        buildDailyNotificationDigest: () => buildDailyNotificationDigest,
+        ambiguousNotificationReply: () => ambiguousNotificationReply,
+        executeNotificationCommand: () => executeNotificationCommand,
     });
 }

@@ -103,7 +103,7 @@ export function SettingsPage() {
             setBriefSettings({
               ...defaults,
               ...briefResult.value.settings,
-              wechat: { ...defaults.wechat, ...(briefResult.value.settings.wechat ?? {}) },
+              notifications: { ...defaults.notifications, ...(briefResult.value.settings.notifications ?? {}) },
               taskReminders: { ...defaults.taskReminders, ...(briefResult.value.settings.taskReminders ?? {}) },
               customWeeklyPush: {
                 ...defaults.customWeeklyPush,

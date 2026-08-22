@@ -13,9 +13,9 @@ export type ApiContractName =
   | 'sqliteMaintenance' | 'precomputeMaintenance' | 'breakGuardConfigRead'
   | 'breakGuardConfigWrite' | 'mihomoSettings' | 'mihomoSubscription' | 'mihomoImport'
   | 'mihomoSelect' | 'mihomoTest' | 'notificationCenter' | 'notificationAck'
-  | 'notificationRetry' | 'notificationWechatTest' | 'notificationBarkTest'
+  | 'notificationRetry' | 'notificationBarkTest'
   | 'notificationTelegramSettings' | 'notificationTelegramRegister' | 'notificationTelegramTest'
-  | 'notificationWechatSettings' | 'embeddingStatus' | 'errorThemeAnalysis'
+  | 'embeddingStatus' | 'errorThemeAnalysis'
   | 'errorThemeDetail' | 'errorThemeOptions' | 'errorThemeBatchStatus' | 'errorThemeBatchRun'
   | 'errorThemeCorrectionSave' | 'users' | 'userInviteCreate' | 'userInviteRevoke'
   | 'userUpdate' | 'userResetPassword' | 'userRevokeSessions' | 'dataReset';

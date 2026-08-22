@@ -24,18 +24,17 @@ function fixtureRuntime() {
   return {
     task,
     runtime: {
-      clawbotWebhookUrl: '',
       redactSecretText: (value) => String(value),
       normalizeTaskDueTime: (value) => String(value || ''),
-      listClawbotLabelTasks: () => [task],
+      listNotificationLabelTasks: () => [task],
       taskLetterLabel: () => 'A',
-      clawbotUrgencyLabel: () => '高',
+      notificationUrgencyLabel: () => '高',
       taskRepository: {
         listOwnerTimedReminders: () => [task],
         markReminderSent: vi.fn(),
       },
       addDaysISO: () => '2026-09-15',
-      normalizeClawbotTask: (value) => value,
+      normalizeNotificationTask: (value) => value,
       ensureSqliteStore: vi.fn(),
       getDailyBriefSettings: () => ({ taskReminders: { enabled: true, offsetsMinutes: [30] } }),
       normalizeTaskReminderSettings: () => ({ offsetsMinutes: [30] }),
@@ -85,7 +84,7 @@ describe('notification reminder domain', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-11T03:45:00.000Z'));
     const { runtime, metadata } = fixtureRuntime();
-    runtime.normalizeClawbotTask = () => { throw new Error('fixture failure'); };
+    runtime.normalizeNotificationTask = () => { throw new Error('fixture failure'); };
     const api = install(runtime);
     api.scheduleTaskReminderScan();
 

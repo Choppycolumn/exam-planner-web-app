@@ -325,7 +325,7 @@ export interface DailyBriefSettings {
   longitude: number;
   marketSymbolsText: string;
   nextDailyBriefAt?: string | null;
-  wechat: {
+  notifications: {
     enabled: boolean;
   };
   taskReminders: {
@@ -687,7 +687,7 @@ export interface OpsLogSummaryResponse {
 export interface NotificationChannel {
   id: number;
   channelKey: string;
-  type: 'in_app' | 'email' | 'telegram' | 'wecom_webhook' | 'webhook' | string;
+  type: 'in_app' | 'email' | 'telegram' | 'bark' | 'webhook' | string;
   name: string;
   enabled: boolean;
   config: Record<string, unknown>;
@@ -729,19 +729,6 @@ export interface NotificationCenterResponse {
   generatedAt: string;
   channels: NotificationChannel[];
   channelReadiness?: Array<{ channelKey: string; type: string; ready: boolean; requiredEnv: string[] }>;
-  wechatClawbot?: {
-    enabled: boolean;
-    configured: boolean;
-    channel: string;
-    accountId: string;
-    accountDirExists: boolean;
-    accountFileExists: boolean;
-    targetConfigured: boolean;
-    hasContextToken: boolean;
-    cli: string;
-    nextPushAt: string | null;
-    scheduleTime: string;
-  };
   bark?: {
     enabled: boolean;
     configured: boolean;

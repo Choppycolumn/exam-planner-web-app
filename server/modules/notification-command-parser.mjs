@@ -30,8 +30,8 @@ const urgencyTokens = [
   { urgency: 'low', tokens: ['低优先级', '低优先', '不急', '低', 'p3', 'low'] },
 ];
 
-export const clawbotHelpText = [
-  'ClawBot 规则命令：',
+export const notificationCommandHelpText = [
+  '通知助手规则命令：',
   '1. 待办 明天 15:30 高 背单词 50 个',
   '2. 完成A / 完成 A / 完成 背单词',
   '3. 删除待办 A / 删除待办 背单词',
@@ -205,10 +205,10 @@ function stripCreatePrefix(text) {
 }
 
 function unknown(reason, raw) {
-  return { type: 'unknown', reason, raw, help: clawbotHelpText };
+  return { type: 'unknown', reason, raw, help: notificationCommandHelpText };
 }
 
-export function parseClawbotCommand(input, { today = formatISODate(new Date()) } = {}) {
+export function parseNotificationCommand(input, { today = formatISODate(new Date()) } = {}) {
   const raw = String(input || '').trim();
   const text = cleanText(raw);
   if (!text) return unknown('empty_message', raw);

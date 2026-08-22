@@ -119,8 +119,7 @@ describe('architecture boundaries', () => {
     expect(watchdogUnit).toContain('MemoryLow=32M');
     expect(watchdogUnit).toContain('IOWeight=1000');
     expect(watchdogTimer).toContain('OnUnitActiveSec=2min');
-    expect(read('infra/systemd/timer-overrides/openclaw-night-stop.conf')).toContain('OnCalendar=*-*-* 03:00:00');
-    expect(read('infra/systemd/timer-overrides/openclaw-morning-start.conf')).toContain('OnCalendar=*-*-* 07:00:00');
+    expect(read('scripts/remote-deploy.sh').toLowerCase()).not.toContain('openclaw');
     expect(read('infra/systemd/timer-overrides/logrotate.conf')).toContain('OnCalendar=*-*-* 03:10:00');
     expect(read('infra/systemd/timer-overrides/dpkg-db-backup.conf')).toContain('OnCalendar=*-*-* 03:20:00');
     expect(read('infra/systemd/timer-overrides/apt-daily.conf')).toContain('OnCalendar=*-*-* 03:50:00');

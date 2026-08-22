@@ -41,21 +41,9 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
     }
     function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         ensureSqliteStore();
-        const wechatClawbot = runtime.resolveOpenClawWechatConfig();
-        const storedChannels = runtime.notificationRepository.listChannels();
-        const channels = storedChannels.some((channel) => channel.channelKey === 'clawbot_weixin') ? storedChannels : [
-            ...storedChannels,
-            {
-                id: 0,
-                channelKey: 'clawbot_weixin',
-                type: 'clawbot_weixin',
-                name: '微信 ClawBot',
-                enabled: wechatClawbot.enabled && wechatClawbot.configured,
-                config: { scheduleTime: wechatClawbot.scheduleTime },
-                createdAt: runtime.nowISO(),
-                updatedAt: runtime.nowISO(),
-            },
-        ];
+        const channels = runtime.notificationRepository.listChannels()
+            .filter((channel) => !['clawbot_weixin', 'wecom_webhook'].includes(channel.type)
+                && !['clawbot_weixin', 'wecom_default'].includes(channel.channelKey));
         const channelHealth = runtime.notificationChannelHealth.snapshot(channels);
         return {
             generatedAt: runtime.nowISO(),
@@ -69,20 +57,14 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
             deliveries: runtime.notificationRepository.listDeliveries(80),
             metrics: runtime.notificationRepository.metrics(),
             channelHealth,
-            wechatClawbot,
             bark: runtime.resolveBarkConfig(),
             telegram: runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)),
             notificationSemantics: {
-                reply: '收到微信指令后在同一会话中即时回复，不进入主动通知队列。',
-                proactive: '日报、待办提醒和测试消息先进入持久化队列，失败后自动重试并站内兜底。',
+                reply: 'Telegram 指令在同一会话中即时回复，不进入主动通知队列。',
+                proactive: '日报、待办提醒和测试消息先进入 Bark、Telegram 持久化队列，失败后自动重试并站内兜底。',
             },
             readOnly: sessionRole === 'read',
             channelPlan: {
-                clawbotWeixin: {
-                    enabled: wechatClawbot.enabled && wechatClawbot.configured,
-                    requiredEnv: ['OPENCLAW_CLAWBOT_CHANNEL', 'OPENCLAW_CLAWBOT_ACCOUNT', 'OPENCLAW_CLAWBOT_TARGET'],
-                    method: 'openclaw message send via local OpenClaw gateway',
-                },
                 bark: {
                     enabled: Boolean(process.env.BARK_DEVICE_KEY),
                     requiredEnv: ['BARK_DEVICE_KEY'],
@@ -93,15 +75,10 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
                     requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALLOWED_USER_ID'],
                     method: 'POST https://api.telegram.org/bot<token>/sendMessage',
                 },
-                wecomWebhook: {
-                    enabled: Boolean(process.env.WECOM_WEBHOOK_URL),
-                    requiredEnv: ['WECOM_WEBHOOK_URL'],
-                    method: 'POST webhook URL with msgtype text/markdown',
-                },
                 genericWebhook: {
                     enabled: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
                     requiredEnv: ['NOTIFICATION_WEBHOOK_URL'],
-                    method: 'POST JSON payload for claw or other relay services',
+                    method: 'POST JSON payload for optional relay services',
                 },
             },
         };

@@ -21,7 +21,6 @@
   - `POST /api/break-guard/events`
   - `GET /api/dictionary/lookup`
   - `/api/confusing-words/backup*`
-  - `/api/clawbot/*`
   - `POST /api/telegram/webhook`
 
 - `server/routes/proxy-settings-routes.mjs`
@@ -44,10 +43,8 @@
   - `GET /api/notifications/center`
   - `POST /api/notifications/ack`
   - `POST /api/notifications/retry-delivery`
-  - `POST /api/notifications/wechat/test`
   - `POST /api/notifications/bark/test`
   - `/api/notifications/telegram/*`
-  - `POST /api/notifications/wechat/settings`
 
 - `server/routes/brief-routes.mjs`
   - `GET /api/briefs/settings`
@@ -67,18 +64,18 @@
 
 ## 仍在入口内的兼容逻辑
 
-以下逻辑仍在 `auth-static-server.mjs` 内，主要因为它们与历史 SQLite 表创建、旧数据迁移、报表/错因分析、ClawBot/Telegram 命令执行上下文耦合较深：
+以下逻辑仍在 `auth-static-server.mjs` 内，主要因为它们与历史 SQLite 表创建、旧数据迁移、报表/错因分析、Telegram 命令执行上下文耦合较深：
 
 - SQLite 历史表创建与旧 JSON 迁移兼容。
 - 学习领域的数据计算和 SQLite repository 实现；HTTP 路由已完成拆分。
 - 错因主题分析与 embedding worker 调度。
 - 每日简报的数据采集与 HTML 邮件生成内部实现。
-- ClawBot 与 Telegram 命令解释的业务执行函数。
+- Telegram 命令解释的业务执行函数。
 
 后续继续拆分时，优先顺序建议：
 
 1. 学习 CRUD repository：goals/projects/subjects/reviews/study-records/mock-exams/tasks。
 2. 错因分析 service：rule candidates、embedding candidates、batch job。
 3. Daily brief service：设置、行情采集、天气、市场指数评估、HTML/Markdown 生成。
-4. ClawBot/Telegram command service：命令解析后的执行层。
+4. Telegram command service：命令解析后的执行层。
 5. SQLite schema builder：逐步把历史内联建表 SQL 迁入版本化 migration；现有生产表暂不破坏性重建。

@@ -82,10 +82,10 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
           <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-strong">
             <input
               type="checkbox"
-              checked={settings.wechat?.enabled ?? false}
-              onChange={(event) => onChange({ ...settings, wechat: { ...settings.wechat, enabled: event.target.checked } })}
+              checked={settings.notifications?.enabled ?? true}
+              onChange={(event) => onChange({ ...settings, notifications: { enabled: event.target.checked } })}
             />
-            <Bell size={16} />启用微信每日推送
+            <Bell size={16} />启用每日 Bark / Telegram 推送
           </label>
           <div className="mb-4 rounded-lg border border-accent bg-surface-strong p-4">
             <label className="flex items-center gap-2 text-sm font-semibold text-strong">
@@ -97,7 +97,7 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
                   taskReminders: { ...(settings.taskReminders ?? defaultBriefSettings().taskReminders), enabled: event.target.checked },
                 })}
               />
-              <Bell size={16} />启用定时待办微信提醒
+              <Bell size={16} />启用定时待办提醒
             </label>
             <div className="mt-3 grid gap-3 md:grid-cols-[160px_1fr]">
               <label>
@@ -141,7 +141,7 @@ export function BriefSettingsSection({ visible, settings, onChange, reminderOffs
               />
               <Bell size={16} />启用每周自定义推送栏目
             </label>
-            <p className="mt-2 text-xs leading-5 text-secondary">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目，空白则不展示。</p>
+            <p className="mt-2 text-xs leading-5 text-secondary">在这里按周一到周日写当天想提醒自己的内容。每天生成简报时会自动取当天栏目并通过已启用的 Bark、Telegram 通道推送，空白则不展示。</p>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               {weeklyPushDays.map((day) => (
                 <label key={day.key}>

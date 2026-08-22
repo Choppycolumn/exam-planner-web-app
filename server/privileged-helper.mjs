@@ -1,11 +1,9 @@
 import { chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createPrivilegedProxyService } from './privileged/proxy-service.mjs';
-import { createPrivilegedWechatService } from './privileged/wechat-service.mjs';
 
 const socketPath = process.env.PRIVILEGED_HELPER_SOCKET || '/run/exam-planner/privileged.sock';
 const proxy = createPrivilegedProxyService();
-const wechat = createPrivilegedWechatService();
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -34,8 +32,6 @@ const server = createServer(async (req, res) => {
     if (req.url === '/v1/proxy/import' && req.method === 'POST') return json(res, 200, await proxy.importProvider(await readBody(req)));
     if (req.url === '/v1/proxy/select' && req.method === 'POST') return json(res, 200, await proxy.select(await readBody(req)));
     if (req.url === '/v1/proxy/test' && req.method === 'POST') return json(res, 200, await proxy.test());
-    if (req.url === '/v1/wechat/status' && req.method === 'GET') return json(res, 200, wechat.status());
-    if (req.url === '/v1/wechat/send' && req.method === 'POST') return json(res, 200, await wechat.send((await readBody(req)).text));
     return json(res, 404, { error: 'not found' });
   } catch (error) {
     return json(res, error.statusCode || 500, { error: error.message || 'privileged operation failed' });

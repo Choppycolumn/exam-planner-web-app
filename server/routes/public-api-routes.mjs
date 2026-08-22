@@ -27,7 +27,6 @@ export async function handlePublicApiRoutes(req, res, {
   saveConfusingWordsBackupPayload,
   readConfusingWordsBackupPayload,
   summarizeConfusingWordsPayload,
-  handleClawbotApi,
   handleTelegramWebhook,
 }) {
   if (req.url === '/api/import' && req.method === 'POST') {
@@ -212,11 +211,6 @@ export async function handlePublicApiRoutes(req, res, {
       return true;
     }
     sendJson(res, { error: 'Not found' }, 404);
-    return true;
-  }
-
-  if (req.url?.startsWith('/api/clawbot/')) {
-    await handleClawbotApi(req, res);
     return true;
   }
 

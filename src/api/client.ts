@@ -83,7 +83,7 @@ export const serverApi = {
   saveBriefSettings: (settings: DailyBriefSettings) => apiContractRequest<{ settings: DailyBriefSettings; readOnly?: boolean }>('briefSettingsWrite', { body: settings }),
   getBriefs: (limit = 30) => cachedContractRequest<{ briefs: DailyBrief[]; readOnly?: boolean }>('briefs', { limit }, 60_000),
   getTodayBrief: () => cachedContractRequest<{ brief: DailyBrief | null; latest: DailyBrief | null; readOnly?: boolean }>('briefToday', undefined, 60_000),
-  generateBrief: (sendEmail = false, sendWechat = false) => apiContractRequest<{ ok: true; brief: DailyBrief }>('briefGenerate', { body: { sendEmail, sendWechat } }),
+  generateBrief: (sendEmail = false, sendNotification = false) => apiContractRequest<{ ok: true; brief: DailyBrief }>('briefGenerate', { body: { sendEmail, sendNotification } }),
   sendLatestBrief: () => apiContractRequest<{ ok: true; brief: DailyBrief }>('briefSendLatest'),
   getReviews: (from?: string, to?: string, limit?: number, offset?: number) => {
     const params = new URLSearchParams();
@@ -153,7 +153,6 @@ export const serverApi = {
     apiContractRequest<{ ok: true; center: NotificationCenterResponse }>('notificationAck', { body: { id } }),
   retryNotificationDelivery: (id: number) =>
     apiContractRequest<{ ok: true; center: NotificationCenterResponse }>('notificationRetry', { body: { id } }),
-  testWechatNotification: () => apiContractRequest<{ ok: boolean; digest: { text: string }; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('notificationWechatTest', { body: {} }),
   testBarkNotification: () => apiContractRequest<{ ok: boolean; delivery: Record<string, unknown>; center: NotificationCenterResponse }>('notificationBarkTest', { body: {} }),
   saveTelegramSettings: (settings: { botToken?: string; chatId?: string; allowedUserId?: string; webhookUrl?: string }) =>
     apiContractRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('notificationTelegramSettings', { body: settings }),
@@ -161,8 +160,6 @@ export const serverApi = {
     apiContractRequest<{ ok: true; telegram: NotificationCenterResponse['telegram']; center: NotificationCenterResponse }>('notificationTelegramRegister', { body: {} }),
   testTelegramNotification: () =>
     apiContractRequest<{ ok: boolean; center: NotificationCenterResponse }>('notificationTelegramTest', { body: {} }),
-  saveWechatNotificationSettings: (enabled: boolean, generateTime = '08:00') =>
-    apiContractRequest<{ ok: true; settings: DailyBriefSettings; center: NotificationCenterResponse }>('notificationWechatSettings', { body: { enabled, generateTime } }),
   getCalendarEvents: (from: string, to: string) =>
     cachedContractRequest<CalendarResponse>('calendar', { from, to }, 30_000),
   runSqliteMaintenance: () => apiContractRequest<{ ok: boolean; ranAt: string; kind: string; error?: string }>('sqliteMaintenance'),

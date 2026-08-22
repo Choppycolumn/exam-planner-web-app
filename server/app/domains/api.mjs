@@ -37,7 +37,6 @@ export function installApiDomain(runtime, exposeRuntime) {
             saveConfusingWordsBackupPayload: runtime.saveConfusingWordsBackupPayload,
             readConfusingWordsBackupPayload: runtime.readConfusingWordsBackupPayload,
             summarizeConfusingWordsPayload: runtime.summarizeConfusingWordsPayload,
-            handleClawbotApi: runtime.handleClawbotApi,
             handleTelegramWebhook: runtime.handleTelegramWebhook,
         }))
             return;
@@ -137,7 +136,6 @@ export function installApiDomain(runtime, exposeRuntime) {
             sessionRole,
             sendJson: runtime.sendJson,
             readJsonBody: runtime.readJsonBody,
-            todayISO: runtime.todayISO,
             collectOperationalNotifications: runtime.collectOperationalNotifications,
             getNotificationCenterPayload: runtime.getNotificationCenterPayload,
             notificationRepository: runtime.notificationRepository,
@@ -145,15 +143,11 @@ export function installApiDomain(runtime, exposeRuntime) {
             logStructured: runtime.logStructured,
             redactSecretText: runtime.redactSecretText,
             writeAuditEvent: runtime.writeAuditEvent,
-            buildClawbotDailyDigest: runtime.buildClawbotDailyDigest,
             queueProactiveNotification: runtime.queueProactiveNotification,
-            notifyEvent: runtime.notifyEvent,
             resolveBarkConfig: runtime.resolveBarkConfig,
             saveTelegramSettings: runtime.saveTelegramSettings,
             registerTelegramWebhook: runtime.registerTelegramWebhook,
             sendTelegramNotification: runtime.sendTelegramNotification,
-            getDailyBriefSettings: runtime.getDailyBriefSettings,
-            saveDailyBriefSettings: runtime.saveDailyBriefSettings,
         }))
             return;
         if (req.url?.startsWith('/api/calendar') && req.method === 'GET') {

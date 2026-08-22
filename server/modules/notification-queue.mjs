@@ -13,7 +13,7 @@ export function createNotificationQueue({
 }) {
   let processing = false;
 
-  const enqueueProactive = ({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKey = 'clawbot_weixin' }) => {
+  const enqueueProactive = ({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKey = 'bark_default' }) => {
     const event = repository.upsertEvent({
       eventKey,
       source,
@@ -25,7 +25,7 @@ export function createNotificationQueue({
     const delivery = repository.enqueueDelivery({
       eventId: event.id,
       channelKey,
-      channelType: channelKey === 'clawbot_weixin' ? 'clawbot_weixin' : channelKey,
+      channelType: channelKey,
       mode: 'proactive',
       payload: { text, title, content, source, severity, ...payload },
       maxAttempts: retryDelaysMs.length + 1,

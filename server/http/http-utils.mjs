@@ -13,7 +13,7 @@ export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
       'access-control-allow-methods': 'GET,POST,OPTIONS',
-      'access-control-allow-headers': 'content-type,x-backup-token,x-clawbot-secret,x-exam-planner-client,authorization',
+      'access-control-allow-headers': 'content-type,x-backup-token,x-exam-planner-client,authorization',
     };
     if (corsOrigin) {
       headers['access-control-allow-origin'] = corsOrigin;

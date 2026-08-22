@@ -48,7 +48,7 @@ export async function handleBriefRoutes(req, res, {
       date: body.date || todayISO(),
       trigger: 'manual',
       sendEmail: Boolean(body.sendEmail),
-      sendWechat: Boolean(body.sendWechat),
+      sendNotification: Boolean(body.sendNotification),
     }), { timeoutMs: 4 * 60 * 1000 });
     sendJson(res, { ok: true, brief: task.result, task: { id: task.taskId, durationMs: task.durationMs } });
     return true;

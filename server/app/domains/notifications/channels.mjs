@@ -113,19 +113,11 @@ export function installNotificationChannelsDomain(runtime, exposeRuntime) {
             return sendBarkNotification(text, delivery);
         if (plan.kind === 'telegram')
             return sendTelegramNotification(text, delivery);
-        if (plan.kind === 'clawbot_weixin') {
-            if (runtime.isWechatQuietHours()) {
-                return { ok: false, deferred: true, nextAttemptAt: runtime.nextWechatActiveAt(), method: 'clawbot-weixin', channel: plan.channelKey, error: 'wechat quiet hours' };
-            }
-            return runtime.sendProactiveClawbotText(text);
-        }
         return { ok: false, method: plan.kind, channel: plan.channelKey, error: `Unsupported notification channel: ${plan.type || plan.channelKey}` };
     }
     function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
         const telegramReady = runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)).configured;
-        const wechatAvailableNow = !runtime.isWechatQuietHours();
         const channels = channelKeys || [
-            ...(wechatAvailableNow ? ['clawbot_weixin'] : []),
             ...(resolveBarkConfig().configured ? ['bark_default'] : []),
             ...(telegramReady ? ['telegram_default'] : []),
         ];
@@ -136,7 +128,7 @@ export function installNotificationChannelsDomain(runtime, exposeRuntime) {
                 severity,
                 title,
                 content,
-                payload: { ...payload, notificationMode: 'in_app_fallback', reason: 'wechat_quiet_hours' },
+                payload: { ...payload, notificationMode: 'in_app_fallback', reason: 'no_enabled_external_channels' },
             });
             return { ok: true, queued: false, mode: 'in_app', deliveryId: null, deliveries: [], status: 'suppressed' };
         }

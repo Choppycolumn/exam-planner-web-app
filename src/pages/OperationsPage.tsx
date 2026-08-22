@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertTriangle, Archive, Bell, Clock3, Database, FileWarning, HardDrive, RefreshCw, RotateCcw, ShieldCheck } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, Clock3, Database, FileWarning, HardDrive, RefreshCw, RotateCcw, ShieldCheck } from 'lucide-react';
 import { ChartBox, TrendLine } from '../components/Charts';
 import { EmptyState } from '../components/EmptyState';
 import { MetricCard } from '../components/MetricCard';
@@ -59,7 +59,6 @@ export function OperationsPage() {
   const logs = logsQuery.data;
   const notifications = notificationsQuery.data;
   const unifiedHealth = status?.unifiedHealth;
-  const wechatReady = Boolean(notifications?.wechatClawbot?.enabled && notifications.wechatClawbot.configured && notifications.wechatClawbot.targetConfigured && notifications.wechatClawbot.hasContextToken);
   const enabledNotificationChannels = notifications?.channelHealth?.filter((channel) => channel.enabled) ?? [];
   const degradedNotificationChannels = enabledNotificationChannels.filter((channel) => channel.status !== 'normal' || channel.circuitOpen);
   const diskAvailable = status?.runtime.disk?.availableBytes ?? 0;
@@ -110,7 +109,6 @@ export function OperationsPage() {
     { label: '网站服务', ok: Boolean(status), detail: status ? `运行 ${Math.floor((status.runtime.uptimeSeconds ?? 0) / 3600)} 小时` : '状态读取中' },
     { label: 'SQLite', ok: Boolean(status?.backup.sqliteSizeBytes), detail: `数据库 ${formatBytes(status?.backup.sqliteSizeBytes ?? 0)}` },
     { label: '磁盘空间', ok: diskOk, detail: status?.runtime.disk ? `剩余 ${formatBytes(diskAvailable)}，已用 ${status.runtime.disk.usedPercent}` : '未读取到磁盘信息' },
-    { label: '微信推送', ok: wechatReady, detail: wechatReady ? `下次简报 ${formatDateTime(notifications?.wechatClawbot?.nextPushAt)}` : 'ClawBot 微信链路需检查' },
     {
       label: '通知通道',
       ok: degradedNotificationChannels.length === 0,
@@ -141,9 +139,6 @@ export function OperationsPage() {
           </button>
           <button className="btn btn-soft" disabled={readOnly || busy === 'backup'} onClick={() => void runAction('backup', serverApi.runServerBackup, '服务器备份已创建')}>
             <Archive size={16} />立即备份
-          </button>
-          <button className="btn btn-soft" disabled={readOnly || busy === 'wechat'} onClick={() => void runAction('wechat', serverApi.testWechatNotification, '微信测试推送已发送')}>
-            <Bell size={16} />测试微信
           </button>
         </div>
         <span className="rounded-lg border border-line bg-surface-strong px-3 py-2 text-sm font-semibold text-secondary">

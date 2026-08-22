@@ -95,7 +95,7 @@ describe('notification queue', () => {
     });
     const queue = createNotificationQueue({
       repository,
-      sendProactive: vi.fn(async () => ({ ok: false, deferred: true, error: 'wechat quiet hours', nextAttemptAt: '2026-06-07T23:00:00.000Z' })),
+      sendProactive: vi.fn(async () => ({ ok: false, deferred: true, error: 'channel maintenance window', nextAttemptAt: '2026-06-07T23:00:00.000Z' })),
       notifyEvent: vi.fn(),
     });
 
@@ -103,7 +103,7 @@ describe('notification queue', () => {
 
     expect(repository.deferDelivery).toHaveBeenCalledWith(11, {
       nextAttemptAt: '2026-06-07T23:00:00.000Z',
-      reason: 'wechat quiet hours',
+      reason: 'channel maintenance window',
     });
     expect(repository.markDeliveryFailed).not.toHaveBeenCalled();
   });

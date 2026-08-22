@@ -44,7 +44,7 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
       latitude: 39.9042,
       longitude: 116.4074,
       marketSymbolsText: '上证指数|000001.SS\n深证成指|399001.SZ\n创业板指|399006.SZ\n纳斯达克|^IXIC\n标普500|^GSPC\nBTC|BTC-USD',
-      wechat: { enabled: true },
+      notifications: { enabled: true },
       taskReminders: { enabled: true, count: 1, offsetsMinutes: [60] },
       customWeeklyPush: {
         enabled: true,
@@ -183,8 +183,8 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
     const defaults = defaultDailyBriefSettings();
     const previousEmail = previous?.email || {};
     const emailInput = input.email || {};
-    const previousWechat = previous?.wechat || {};
-    const wechatInput = input.wechat || {};
+    const previousNotifications = previous?.notifications || {};
+    const notificationInput = input.notifications || {};
     const requestedPassword = typeof emailInput.password === 'string' ? emailInput.password : '';
     const preservedPassword = requestedPassword.trim() ? requestedPassword : previousEmail.password || '';
     const secureMode = ['ssl', 'starttls', 'none'].includes(emailInput.secureMode) ? emailInput.secureMode : defaults.email.secureMode;
@@ -195,7 +195,7 @@ export function createBriefSettingsService({ runtime, scheduleDailyBrief }) {
       latitude: Number.isFinite(Number(input.latitude)) ? Number(input.latitude) : defaults.latitude,
       longitude: Number.isFinite(Number(input.longitude)) ? Number(input.longitude) : defaults.longitude,
       marketSymbolsText: String(input.marketSymbolsText ?? defaults.marketSymbolsText),
-      wechat: { enabled: Boolean(wechatInput.enabled ?? previousWechat.enabled ?? defaults.wechat.enabled) },
+      notifications: { enabled: Boolean(notificationInput.enabled ?? previousNotifications.enabled ?? defaults.notifications.enabled) },
       taskReminders: normalizeTaskReminderSettings(input.taskReminders || {}, previous),
       customWeeklyPush: normalizeCustomWeeklyPushSettings(input.customWeeklyPush || {}, previous),
       englishWritingPlan: normalizeEnglishWritingPlanSettings(input.englishWritingPlan || {}, previous),
