@@ -102,6 +102,10 @@ journalctl -u exam-planner-hbr-guard -n 50 --no-pager
 - Bark 与 Telegram 分别熔断；任一通道失败不会阻塞另一通道，并保留站内通知兜底。
 - 任意一次发送成功会自动恢复该通道。
 
+## 退役 OpenClaw 与微信
+
+以 root 运行 `scripts/retire-openclaw-wechat.sh`。脚本会先在服务器本地创建仅 root 可读的备份，再移除 OpenClaw/微信服务、定时器、文件、cron 项和遗留环境变量；Bark 与 Telegram 配置不会被修改。
+
 ## 安全基线
 
 已经完成：
