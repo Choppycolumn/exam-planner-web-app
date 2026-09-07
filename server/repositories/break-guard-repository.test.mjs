@@ -28,7 +28,7 @@ describe('break guard repository study corrections', () => {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         user_id INTEGER NOT NULL,
-        UNIQUE(date,project_id,user_id)
+        UNIQUE(date,project_id)
       );
       CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT);
       CREATE TABLE break_guard_events(
@@ -70,5 +70,60 @@ describe('break guard repository study corrections', () => {
 
     expect(result).toMatchObject({ minutes: 30, deltaMinutes: 30, totalMinutes: 30 });
     expect(Number(database.scalar('SELECT minutes FROM study_time_records;'))).toBe(30);
+  });
+
+  it('does not append a late completion after a correction and applies the next correction to the corrected total', () => {
+    const sessionId = 'breakguard-session-order-1';
+    database.execute(`INSERT INTO break_guard_events(event_id,event_type,payload_json,created_at)
+      VALUES(?,?,?,?);`, [
+      'correction-first-1',
+      'study_session_corrected',
+      JSON.stringify({ sessionId }),
+      '2026-08-10T10:00:00.000Z',
+    ]);
+
+    const correctedFirst = repository.adjustStudyTime({
+      sessionDate: '2026-08-10', projectId: 20,
+      previousDurationSeconds: 30 * 60, durationSeconds: 45 * 60, sessionSequence: 1,
+    });
+    expect(correctedFirst).toMatchObject({ minutes: 45, totalMinutes: 45 });
+
+    const lateCompletion = repository.appendStudyTime({
+      sessionId, sessionDate: '2026-08-10', projectId: 20,
+      durationSeconds: 30 * 60, sessionSequence: 1,
+    });
+    expect(lateCompletion).toMatchObject({ skipped: true, reason: 'session_mutation_already_applied' });
+    expect(Number(database.scalar('SELECT minutes FROM study_time_records;'))).toBe(45);
+
+    const correctedAgain = repository.adjustStudyTime({
+      sessionDate: '2026-08-10', projectId: 20,
+      previousDurationSeconds: 45 * 60, durationSeconds: 20 * 60, sessionSequence: 1,
+    });
+    expect(correctedAgain).toMatchObject({ minutes: 20, deltaMinutes: -25, totalMinutes: 20 });
+    expect(Number(database.scalar('SELECT minutes FROM study_time_records;'))).toBe(20);
+  });
+
+  it('does not recreate a deleted session when its original completion arrives late', () => {
+    const sessionId = 'breakguard-session-order-delete';
+    database.execute(`INSERT INTO break_guard_events(event_id,event_type,payload_json,created_at)
+      VALUES(?,?,?,?);`, [
+      'deletion-first-1',
+      'study_session_deleted',
+      JSON.stringify({ sessionId }),
+      '2026-08-10T10:00:00.000Z',
+    ]);
+
+    const deletedFirst = repository.adjustStudyTime({
+      sessionDate: '2026-08-10', projectId: 20,
+      previousDurationSeconds: 30 * 60, durationSeconds: 0, sessionSequence: 1, deleted: true,
+    });
+    expect(deletedFirst).toMatchObject({ minutes: 0, totalMinutes: 0 });
+
+    const lateCompletion = repository.appendStudyTime({
+      sessionId, sessionDate: '2026-08-10', projectId: 20,
+      durationSeconds: 30 * 60, sessionSequence: 1,
+    });
+    expect(lateCompletion).toMatchObject({ skipped: true, reason: 'session_mutation_already_applied' });
+    expect(Number(database.scalar('SELECT COUNT(*) FROM study_time_records;'))).toBe(0);
   });
 });

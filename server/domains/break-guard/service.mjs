@@ -97,6 +97,7 @@ export function createBreakGuardService({
     if (event.eventType === 'schedule_config_updated') schedule = saveScheduleConfig(event.payload);
     if (event.eventType === 'class_completed') {
       studyRecord = repository.appendStudyTime({
+        sessionId: event.payload?.sessionId,
         sessionDate: event.payload?.sessionDate || event.payload?.lessonDate,
         projectId: Number(event.payload?.projectId || 0),
         durationSeconds: Number(event.payload?.durationSeconds || 0),

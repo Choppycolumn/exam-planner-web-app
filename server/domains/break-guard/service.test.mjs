@@ -133,13 +133,14 @@ describe('break guard service', () => {
     const body = {
       eventId: 'class_completed_20260712_1',
       eventType: 'class_completed',
-      payload: { sessionDate: '2026-07-12', projectId: 10, durationSeconds: 3000, sessionSequence: 1 },
+      payload: { sessionId: 'breakguard-normal-session', sessionDate: '2026-07-12', projectId: 10, durationSeconds: 3000, sessionSequence: 1 },
     };
     const first = service.recordEvent(body);
     const second = service.recordEvent(body);
     expect(first.studyRecord.minutes).toBe(50);
     expect(second.duplicate).toBe(true);
     expect(repository.appendStudyTime).toHaveBeenCalledOnce();
+    expect(repository.appendStudyTime).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'breakguard-normal-session' }));
     expect(refreshStudySummariesForDate).toHaveBeenCalledWith('2026-07-12');
   });
 

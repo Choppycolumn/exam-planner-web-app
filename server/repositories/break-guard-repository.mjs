@@ -1,6 +1,20 @@
 export function createBreakGuardRepository(database, { ownerUserId } = {}) {
   if (typeof ownerUserId !== 'function') throw new Error('ownerUserId resolver is required');
   const ownerId = () => Number(ownerUserId());
+  function findSessionMutation(sessionId) {
+    const normalizedSessionId = String(sessionId || '').trim();
+    if (!normalizedSessionId) return null;
+    const rows = database.json(`SELECT event_type AS eventType, payload_json AS payloadJson, created_at AS createdAt
+FROM break_guard_events
+WHERE event_type IN ('study_session_corrected', 'study_session_deleted')
+ORDER BY id ASC;`);
+    for (const row of rows) {
+      let payload = {};
+      try { payload = JSON.parse(row.payloadJson || '{}'); } catch { payload = {}; }
+      if (String(payload.sessionId || '').trim() === normalizedSessionId) return { ...row, payload };
+    }
+    return null;
+  }
   return {
     listActiveProjects() {
       return database.json(`SELECT id, name, color, sort_order AS sortOrder
@@ -54,10 +68,21 @@ GROUP BY event_type;`, [date]);
 overdue_seconds AS overdueSeconds, created_at AS createdAt
 FROM break_guard_events ORDER BY created_at DESC, id DESC LIMIT ?;`, [limit]);
     },
-    appendStudyTime({ sessionDate, projectId, durationSeconds, sessionSequence }) {
+    appendStudyTime({ sessionId, sessionDate, projectId, durationSeconds, sessionSequence }) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(sessionDate || ''))) return null;
       const project = database.json('SELECT id,name FROM study_projects WHERE id = ? AND user_id = ? AND is_active = 1 LIMIT 1;', [projectId, ownerId()])[0];
       if (!project) return null;
+      if (findSessionMutation(sessionId)) {
+        return {
+          sessionDate,
+          projectId: Number(project.id),
+          projectName: project.name,
+          minutes: 0,
+          sessionSequence: Number(sessionSequence || 1),
+          skipped: true,
+          reason: 'session_mutation_already_applied',
+        };
+      }
       const minutes = Math.max(1, Math.min(24 * 60, Math.round(Number(durationSeconds || 0) / 60)));
       const note = `Break Guard 学习记录 #${Math.max(1, Number(sessionSequence || 1))}`;
       database.execute(`INSERT INTO study_time_records
