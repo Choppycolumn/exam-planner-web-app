@@ -1,0 +1,50 @@
+# 复制为 config.yaml 再填写。不要把 config.yaml / session.json 提交到 Git。
+
+username: ""
+password: ""
+base_url: "https://libresource.hust.edu.cn/http/80/133/9/114/202/yitlink"
+
+# 可选：直接贴浏览器 Cookie（与 session.json 二选一即可）
+cookie: ""
+
+# ---------- 选座：先选「区域/楼层房间」，再写该房间内的座位号 ----------
+# area_id = 房间 ID（不是整栋楼）。HAR 示例：
+#   101 = 东区馆 · 4楼中厅（东区馆-东区馆4楼-4楼中厅）
+# 同一房间内的座位号是 001、002、003…（字符串，建议补零）
+# 预约接口是：先按 area_id 查 spaces_old，再对某个 space id 提交 book
+area_id: 101
+
+# 该 area 内的座位号优先级（从左到右尝试），不要把别的楼层座位号写进来
+seat_nos: ["002", "004", "001"]
+
+day_offset: 1                     # 0=今天 1=明天 2=后天
+date: ""                          # 非空覆盖 day_offset，例如 2026-8-23
+start_time: "08:30"
+end_time: "22:00"
+
+grab_at: "06:00:00"               # 空 = 立即跑
+timezone: "Asia/Shanghai"
+
+captcha_retries: 8
+book_retries: 12
+retry_interval: 0.2
+fallback_any_free: false
+dry_run: false
+
+# 心跳间隔（秒）。服务器保活用，建议 120–300
+keepalive_interval: 180
+
+# 会话失效时可选 webhook（企业微信/飞书/自定义），留空则只打日志
+notify_webhook: ""
+
+# 服务器端 session 路径（相对项目根或绝对路径）
+session_file: "session.json"
+
+# ---------- 本机自动登录助手（路线 B）----------
+# 双击 login_agent.bat 或: python main.py --auto-cas --upload
+server_host: ""
+server_user: "seatbot"
+server_path: "/opt/seatbot"
+server_ssh_password: ""          # 推荐使用 SSH 密钥；不要把真实密码提交到 Git
+server_ssh_port: 22
+agent_interval: 300              # --agent 模式下检测间隔（秒）

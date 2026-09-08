@@ -31,6 +31,17 @@ remote-audit
 battery-report.html
 *.zip
 *.local
+.env
+.env.*
+!.env.example
+*.har
+*.pcap
+*.pcapng
+*.saz
+*.cookies.json
+*.token
+*.sqlite*
+*.db
 
 # Editor directories and files
 .vscode/*

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "ExamPlanner 只读座位提醒配对",
+  "description": "在用户两次确认后，经 HTTPS 把目标域 Cookie 交给 ExamPlanner，只用于只读座位查询。",
+  "version": "0.1.0",
+  "permissions": ["cookies", "storage"],
+  "host_permissions": ["https://libresource.hust.edu.cn/*"],
+  "optional_host_permissions": ["https://8.130.68.9/*", "http://127.0.0.1/*"],
+  "action": { "default_popup": "popup.html" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  }
+}

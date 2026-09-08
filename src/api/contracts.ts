@@ -1029,3 +1029,69 @@ export interface ErrorThemeDetail {
   repeatedWeeks: Array<{ week: string; count: number; startDate: string; endDate: string }>;
   readOnly?: boolean;
 }
+
+export interface SeatAssistantProfile {
+  id: number;
+  enabled: boolean;
+  venue: 'main' | 'east' | 'medical';
+  dateMode: 'today' | 'tomorrow' | 'day_after_tomorrow';
+  startTime: string;
+  endTime: string;
+  areaPreference: string[];
+  seatPreference: string[];
+  pollIntervalSeconds: number;
+  jitterSeconds: number;
+  nearIntervalSeconds: number;
+}
+
+export interface SeatAssistantObservation {
+  id: number;
+  observedAt: string;
+  targetDate: string;
+  venue: string;
+  totalSeats: number;
+  freeSeats: number;
+  availableSeats: string[];
+  status: string;
+  errorCode: string;
+  providerName: string;
+}
+
+export interface SeatAssistantSessionStatus {
+  status: string;
+  providerName: string;
+  message: string;
+  lastCheckedAt: string | null;
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  nextCheckAt: string | null;
+  consecutiveFailures: number;
+  lastNotifiedStatus: string;
+  updatedAt: string | null;
+}
+
+export interface SeatAssistantCookieSession {
+  connected: boolean;
+  sessionId: number | null;
+  origin: string | null;
+  cookieDomain: string | null;
+  cookieCount: number;
+  cookieExpiresAt: string | null;
+  expiresAt: string | null;
+  lastUsedAt: string | null;
+}
+
+export interface SeatAssistantStatus {
+  featureEnabled: boolean;
+  provider: { name: string; enabled: boolean; canExecute: false; auditedPaths?: string[] };
+  profile: SeatAssistantProfile;
+  session: SeatAssistantSessionStatus;
+  latestObservation: SeatAssistantObservation | null;
+  scheduler: { running: boolean; minimumRequestIntervalSeconds: number };
+}
+
+export interface SeatAssistantHistory {
+  observations: SeatAssistantObservation[];
+  audit: Array<{ id: number; action: string; actorRole: string; detail: Record<string, unknown>; createdAt: string }>;
+  pairings: Array<{ id: number; status: string; expiresAt: string; lastSeenAt: string | null; createdAt: string; updatedAt: string }>;
+}

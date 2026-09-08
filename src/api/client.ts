@@ -1,5 +1,5 @@
 import type { Goal, MockExamRecord, ShortTermTask, StudyProject, StudyTimeRecord, Subject, DailyReview, WaterIntakeRecord } from '../types/models';
-import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse, FocusTimerDashboard, FocusTimerAction, FocusTimerActionResponse, UserManagementResponse, ManagedUserAccount } from './contracts';
+import type { ServerState, DashboardData, ReviewTrendResponse, ProblemInboxItem, ReviewPrefill, DashboardChartsData, DailyBriefSettings, DailyBrief, StatisticsSummary, ReferenceList, ReviewsResponse, MockExamListResponse, StudyTargetSetting, BackupStatus, MihomoSettingsResponse, MihomoTestResponse, LearningProgressResponse, ProjectProgressResponse, VisitStatsResponse, OpsLogSummaryResponse, NotificationCenterResponse, CalendarResponse, TaskCenterStatus, LearningReport, EmbeddingModelProfile, ErrorThemeBatchJob, ErrorThemeOption, EmbeddingStatus, ErrorThemeAnalysis, ErrorThemeDetail, BreakGuardScheduleConfig, BreakGuardScheduleResponse, AccountSession, StudyComparisonResponse, FocusTimerDashboard, FocusTimerAction, FocusTimerActionResponse, UserManagementResponse, ManagedUserAccount, SeatAssistantStatus, SeatAssistantProfile, SeatAssistantCookieSession, SeatAssistantObservation, SeatAssistantHistory } from './contracts';
 import { invalidateServerQueries } from './queryClient';
 import { apiContractRequest as transportContractRequest } from './transport';
 import { apiContract, type ApiContractName } from '../../shared/api-contracts.js';
@@ -71,6 +71,16 @@ export const serverApi = {
     apiContractRequest<{ ok: true; account: ManagedUserAccount }>('userUpdate', { body: { userId, ...input } }),
   resetUserPassword: (userId: number, password: string) => apiContractRequest<{ ok: true }>('userResetPassword', { body: { userId, password } }),
   revokeUserSessions: (userId: number) => apiContractRequest<{ ok: true }>('userRevokeSessions', { body: { userId } }),
+  getSeatAssistantStatus: () => apiContractRequest<SeatAssistantStatus>('seatAssistantStatus'),
+  getSeatAssistantProfile: () => apiContractRequest<{ profile: SeatAssistantProfile; provider: SeatAssistantStatus['provider'] }>('seatAssistantProfile'),
+  getSeatAssistantSession: () => apiContractRequest<SeatAssistantCookieSession>('seatAssistantSession'),
+  getSeatAssistantObservations: (limit = 20) => apiContractRequest<{ items: SeatAssistantObservation[] }>('seatAssistantObservations', { query: { limit } }),
+  getSeatAssistantHistory: (limit = 50) => apiContractRequest<SeatAssistantHistory>('seatAssistantHistory', { query: { limit } }),
+  saveSeatAssistantProfile: (profile: Partial<SeatAssistantProfile>) => apiContractRequest<{ profile: SeatAssistantProfile; provider: SeatAssistantStatus['provider'] }>('seatAssistantProfileWrite', { body: profile }),
+  refreshSeatAssistant: () => apiContractRequest<Record<string, unknown>>('seatAssistantRefresh', { body: {} }),
+  createSeatAssistantPairing: () => apiContractRequest<{ pairingId: number; code: string; expiresAt: string }>('seatAssistantPairingCreate', { body: {} }),
+  revokeSeatAssistantSession: () => apiContractRequest<{ ok: true; disconnected: boolean }>('seatAssistantSessionRevoke'),
+  deleteSeatAssistantHistory: () => apiContractRequest<{ ok: true }>('seatAssistantHistoryDelete'),
   getState: () => cachedState(),
   getDashboard: () => cachedDashboard(),
   getDashboardCharts: () => apiContractRequest<DashboardChartsData>('dashboardCharts'),

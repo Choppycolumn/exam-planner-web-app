@@ -167,6 +167,14 @@ scripts/start-exam-planner.bat
 - `/api/dictionary/lookup`
 - `/api/confusing-words/backup`
 
+## 座位预约
+
+`/seat-assistant` 是主站内的受限入口，页面嵌入独立的 `seatbot` 应用。独立应用源码位于 [`seatbot/`](./seatbot)，静态界面由 `/seat/` 提供，JSON API 由 `/seat-api/` 反向代理到仅监听 `127.0.0.1:8766` 的 Python worker。
+
+座位应用支持多账号切换、楼层/房间/座位选择、单日或连续日期预约任务、后台重试、预约列表、签到、临时离开、回来签到、签离、取消和 Bark 提醒。worker 使用 systemd 常驻，运行配置、账号、会话、任务队列和日志均是服务器运行态数据，不进入 Git。
+
+仓库中仍保留原来的 `server/modules/seat-assistant-*` GET-only 查询实现与浏览器扩展，供兼容和后续迁移使用；当前可见页面以独立 `seatbot` 为准。部署时必须同时保护 `/seat/` 与 `/seat-api/`，仓库提供的 Nginx 示例使用主站 `/api/seat-assistant/status` 做 `auth_request`，避免绕过 ExamPlanner 登录直接访问预约能力。
+
 ## 验证命令
 
 ```bash

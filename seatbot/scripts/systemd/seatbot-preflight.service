@@ -1,0 +1,8 @@
+[Unit]
+Description=Seatbot 23:50 heartbeat and CAS refresh
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/seatbot/scripts/preflight.sh
+Nice=10

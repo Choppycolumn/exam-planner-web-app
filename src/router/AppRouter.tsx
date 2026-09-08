@@ -21,6 +21,7 @@ const MockExamsPage = lazy(() => routeLoaders.mockExams().then((module) => ({ de
 const ConfusingWordsPage = lazy(() => routeLoaders.confusingWords().then((module) => ({ default: module.ConfusingWordsPage })));
 const SettingsPage = lazy(() => routeLoaders.settings().then((module) => ({ default: module.SettingsPage })));
 const MigrateLocalDataPage = lazy(() => routeLoaders.migrateLocalData().then((module) => ({ default: module.MigrateLocalDataPage })));
+const SeatAssistantPage = lazy(() => routeLoaders.seatAssistant().then((module) => ({ default: module.SeatAssistantPage })));
 
 function RouteFallback() {
   return (
@@ -72,6 +73,7 @@ export const router = createBrowserRouter([
       { path: 'library/:id/read', element: <Navigate to="/" replace /> },
       { path: 'settings', element: <CapabilityRoute capability="settings.manage">{lazyElement(<SettingsPage />)}</CapabilityRoute> },
       { path: 'migrate-local-data', element: <CapabilityRoute capability="data.import">{lazyElement(<MigrateLocalDataPage />)}</CapabilityRoute> },
+      { path: 'seat-assistant', element: <CapabilityRoute capability="seat_assistant.manage">{lazyElement(<SeatAssistantPage />)}</CapabilityRoute> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },

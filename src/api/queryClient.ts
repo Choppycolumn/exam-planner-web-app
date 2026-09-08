@@ -52,6 +52,11 @@ export const queryKeys = {
   reviews: (from?: string, to?: string, limit?: number, offset?: number) => ['server', 'reviews', from ?? '', to ?? '', limit ?? 0, offset ?? 0] as const,
   studyRecords: (date: string) => ['server', 'study-records', date] as const,
   mockExams: (subjectId: number | 'all', limit: number, offset: number) => ['server', 'mock-exams', subjectId, limit, offset] as const,
+  seatAssistantStatus: ['server', 'seat-assistant', 'status'] as const,
+  seatAssistantProfile: ['server', 'seat-assistant', 'profile'] as const,
+  seatAssistantSession: ['server', 'seat-assistant', 'session'] as const,
+  seatAssistantObservations: (limit = 20) => ['server', 'seat-assistant', 'observations', limit] as const,
+  seatAssistantHistory: (limit = 50) => ['server', 'seat-assistant', 'history', limit] as const,
 };
 
 export function invalidateServerQueries(keys: readonly (readonly unknown[])[] = [queryKeys.state, queryKeys.dashboard]) {

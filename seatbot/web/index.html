@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>拾座 · 座位预约</title>
+  <style>
+    :root {
+      --panel: rgba(252,254,255,.78); --panel-strong: rgba(255,255,255,.92);
+      --line: rgba(66,101,145,.18); --line-strong: rgba(66,101,145,.32);
+      --text: #111c2e; --secondary: #52647a; --tertiary: #728399;
+      --accent: #0a84ff; --ok: #34c759; --warn: #f5a524; --danger: #c93457;
+      --radius: 20px; --control: 12px;
+      --shadow: 0 2px 2px rgba(35,65,98,.04), 0 18px 50px rgba(35,65,98,.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      color: var(--text);
+      background: linear-gradient(125deg, rgba(10,132,255,.1), transparent 42%),
+        linear-gradient(315deg, rgba(22,136,95,.07), transparent 45%),
+        linear-gradient(145deg, #eaf2ff, #f7faff 50%, #edf8f5);
+    }
+    .shell { width: min(1080px, 100%); margin: 0 auto; }
+    .card {
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--panel); box-shadow: var(--shadow);
+      backdrop-filter: blur(28px); padding: 20px 22px; margin-bottom: 14px;
+    }
+    h1 { margin: 0; font-size: 22px; font-weight: 730; }
+    h2 { margin: 0 0 12px; font-size: 15px; font-weight: 700; }
+    .sub { margin: 8px 0 0; color: var(--secondary); font-size: 13px; line-height: 1.55; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    label { display: block; margin: 12px 0 6px; color: var(--secondary); font-size: 12px; font-weight: 680; }
+    input, select {
+      width: 100%; min-height: 42px; border: 1px solid var(--line-strong);
+      border-radius: var(--control); background: var(--panel-strong);
+      padding: 10px 12px; font: inherit; color: var(--text); outline: none;
+    }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      border: 1px solid var(--line); background: var(--panel-strong); color: var(--secondary);
+      border-radius: 999px; min-height: 36px; padding: 0 14px; font: inherit; font-weight: 720; cursor: pointer;
+    }
+    .chip.on { border-color: rgba(10,132,255,.45); background: rgba(10,132,255,.12); color: var(--accent); }
+    .chip.mid { border-color: rgba(10,132,255,.25); background: rgba(10,132,255,.06); color: var(--accent); }
+    .chip.openish { box-shadow: inset 0 -2px 0 #34c759; }
+    .chip .tiny { display:block; font-size:10px; font-weight:650; opacity:.75; }
+    .map-wrap {
+      position: relative; width: 100%; aspect-ratio: 16 / 10;
+      margin-top: 10px; border-radius: 16px; overflow: auto;
+      border: 1px solid var(--line); background:
+        linear-gradient(#eef4fb, #e8f0f8);
+    }
+    .map-wrap.grid { aspect-ratio: auto; min-height: 160px; display: flex; flex-wrap: wrap; gap: 6px; padding: 10px; }
+    .desk {
+      position: absolute; border: 1px solid rgba(66,101,145,.28);
+      border-radius: 6px; background: #fff; color: var(--secondary);
+      font-size: 10px; font-weight: 800; cursor: pointer; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    @media (max-width: 720px) {
+      .map-wrap { aspect-ratio: auto; overflow: visible; }
+      .desk { min-width: 44px; min-height: 36px; font-size: 12px; }
+    }
+    .desk.free { background: #ecf9f0; border-color: rgba(52,199,89,.45); color: #1a7f37; }
+    .desk.busy { background: #f3f5f8; color: #9aa8b6; cursor: default; }
+    .desk.preview { background: #eef2f6; color: #7b8896; cursor: pointer; opacity: 1; text-decoration: none; }
+    .desk.on { background: rgba(10,132,255,.18); border-color: var(--accent); color: var(--accent); }
+    .desk.gridish { position: static; min-width: 46px; height: 34px; font-size: 12px; }
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; color: var(--tertiary); font-size: 12px; }
+    .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 4px; vertical-align: -1px; }
+    button.primary, button.ghost, button.danger {
+      min-height: 38px; border-radius: var(--control); padding: 0 14px; font: inherit; font-weight: 720; cursor: pointer;
+    }
+    button.primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+    button.ghost { border: 1px solid var(--line); background: var(--panel-strong); color: var(--accent); }
+    button.danger { border: 1px solid rgba(201,52,87,.35); background: rgba(201,52,87,.08); color: var(--danger); }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    .status-pill { display: inline-flex; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+    .ok { background: rgba(52,199,89,.12); color: #1a7f37; }
+    .bad { background: rgba(201,52,87,.12); color: var(--danger); }
+    .warn { background: rgba(245,165,36,.15); color: #9a6700; }
+    .job, .book {
+      border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-top: 10px;
+      background: var(--panel-strong);
+    }
+    .book-date { font-size: 20px; font-weight: 780; letter-spacing: .02em; margin-bottom: 4px; }
+    .meta { color: var(--tertiary); font-size: 12px; margin-top: 4px; }
+    .ops { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      background: rgba(17,28,46,.92); color: #fff; padding: 10px 14px; border-radius: 12px;
+      font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; z-index: 20;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+        <div>
+          <h1>拾座 · 座位预约</h1>
+          <p class="sub">先选楼层，再选房间，再点座位图。未进入「今明后」窗口的任务会挂起，进入后自动抢。</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="accountSel" style="min-width:180px;min-height:36px"></select>
+          <button class="ghost" type="button" id="btnSwitch">切换</button>
+          <button class="ghost" type="button" id="btnAddAcc">添加账号</button>
+          <button class="ghost" type="button" id="btnPause">暂停登录 5分钟</button>
+          <button class="primary" type="button" id="btnResume">恢复</button>
+          <div id="gwStatus" class="status-pill warn">检测会话中…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>新建预约</h2>
+      <label>楼层</label>
+      <div class="chip-row" id="floorRow"></div>
+      <label>房间</label>
+      <div class="chip-row" id="roomRow"><span class="sub">请先选楼层</span></div>
+      <label>日期（点一天；再点后面一天即连约）</label>
+      <div class="chip-row" id="dayRow"></div>
+      <div class="sub" id="dayHint">未选日期</div>
+      <input type="hidden" id="targetDate" />
+      <input type="hidden" id="targetDateTo" />
+      <div class="sub" id="roomHint">未选择房间</div>
+      <div class="row">
+        <div><label>开始</label><input id="startTime" value="08:30" /></div>
+        <div><label>结束</label><input id="endTime" value="22:00" /></div>
+      </div>
+      <label>座位图（绿空闲 / 灰占用，可多选按顺序优先）</label>
+      <div class="legend">
+        <span><i class="dot" style="background:#ecf9f0;border:1px solid #34c759"></i>空闲</span>
+        <span><i class="dot" style="background:#f3f5f8;border:1px solid #c5ced6"></i>占用</span>
+        <span><i class="dot" style="background:#d9ebff;border:1px solid #0a84ff"></i>已选</span>
+      </div>
+      <div class="map-wrap" id="seatBoard"></div>
+      <div class="sub" id="pickHint">未选座位</div>
+      <div class="actions">
+        <button class="ghost" type="button" id="btnRefresh">刷新空闲（仅今明后有效）</button>
+        <button class="primary" type="button" id="btnAdd">添加预约任务</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>任务队列</h2>
+      <div id="jobList"><p class="sub">加载中…</p></div>
+    </div>
+
+    <div class="card">
+      <h2>我的图书馆预约</h2>
+      <p class="sub">可设置状态：签到、临时离开、回来签到、签离。与一体机同一套接口。</p>
+      <div id="bookList"><p class="sub">加载中…</p></div>
+      <div class="actions"><button class="ghost" type="button" id="btnBooks">刷新预约列表</button></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+  <script>
+    const apiBase = (location.port === "8766") ? "" : "/seat-api";
+    const EAST_ROOT = 1;
+    let areas = [];
+    let floorId = 5;
+    let areaId = 101;
+    let selected = [];
+    let spaces = [];
+
+    function toast(msg) {
+      const el = document.getElementById("toast");
+      el.textContent = msg; el.classList.add("show");
+      clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove("show"), 2400);
+    }
+    function ymd(d) {
+      const z = n => String(n).padStart(2,"0");
+      return d.getFullYear() + "-" + z(d.getMonth()+1) + "-" + z(d.getDate());
+    }
+    function localToday() {
+      const d = new Date();
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+    const WEEK = "日一二三四五六";
+    function renderDays() {
+      const box = document.getElementById("dayRow");
+      box.innerHTML = "";
+      const today = localToday();
+      const from = targetDate.value;
+      const to = targetDateTo.value || from;
+      for (let i = 0; i < 14; i++) {
+        const d = new Date(today); d.setDate(today.getDate() + i);
+        const key = ymd(d);
+        const b = document.createElement("button");
+        b.type = "button";
+        let cls = "chip";
+        if (key === from || key === to) cls += " on";
+        else if (from && to && key > from && key < to) cls += " mid";
+        if (i <= 2) cls += " openish";
+        b.className = cls;
+        const tag = i===0?"今天":i===1?"明天":i===2?"后天":"周"+WEEK[d.getDay()];
+        b.innerHTML = (d.getMonth()+1) + "/" + d.getDate() + '<span class="tiny">' + tag + "</span>";
+        b.onclick = () => {
+          if (!from || (from && to && from !== to) || key < from) {
+            targetDate.value = key;
+            targetDateTo.value = key;
+          } else {
+            targetDateTo.value = key;
+          }
+          renderDays();
+          document.getElementById("dayHint").textContent =
+            targetDate.value === targetDateTo.value
+              ? ("预约 " + targetDate.value + (i<=2?"（可立即抢）":"（进入窗口后再抢）"))
+              : ("连约 " + targetDate.value + " ～ " + targetDateTo.value);
+          refreshSpaces();
+        };
+        box.appendChild(b);
+      }
+      const openNote = targetDate.value === targetDateTo.value
+        ? (targetDate.value || "")
+        : (targetDate.value + " ～ " + targetDateTo.value);
+      document.getElementById("dayHint").textContent = openNote ? ("已选 " + openNote) : "点一天，或再点结束日连约";
+    }
+    (function initDates(){
+      const t = localToday(); t.setDate(t.getDate()+1);
+      targetDate.value = ymd(t);
+      targetDateTo.value = ymd(t);
+      renderDays();
+    })();
+
+    async function api(path, opts = {}) {
+      const r = await fetch(apiBase + path, {
+        headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+        ...opts,
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText || "请求失败");
+      return j;
+    }
+    function kids(pid) { return areas.filter(a => a.parent_id === pid); }
+    function byId(id) { return areas.find(a => a.id === id); }
+
+    function renderFloors() {
+      const floors = kids(EAST_ROOT).filter(a => a.type !== 1 && a.valid);
+      const box = document.getElementById("floorRow");
+      box.innerHTML = "";
+      floors.forEach(f => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "chip" + (f.id === floorId ? " on" : "");
+        b.textContent = f.name;
+        b.onclick = () => { floorId = f.id; areaId = 0; selected = []; spaces = []; renderFloors(); renderRooms(); renderMap(); };
+        box.appendChild(b);
+      });
+    }
+    function renderRooms() {
+      const rooms = kids(floorId).filter(a => a.type === 1 && a.valid);
+      const box = document.getElementById("roomRow");
+      box.innerHTML = "";
+      if (!rooms.length) { box.innerHTML = '<span class="sub">该楼层暂无开放房间</span>'; return; }
+      rooms.forEach(r => {
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "chip" + (r.id === areaId ? " on" : "");
+        b.textContent = r.name + (r.seats ? " · " + r.seats + "座" : "");
+        b.onclick = () => { areaId = r.id; selected = []; spaces = []; renderRooms(); renderMap(); refreshSpaces(); };
+        box.appendChild(b);
+      });
+      const cur = byId(areaId);
+      document.getElementById("roomHint").textContent = cur ? (byId(floorId)?.name || "") + " / " + cur.name : "未选择房间";
+    }
+    function renderMap() {
+      const board = document.getElementById("seatBoard");
+      const hint = document.getElementById("pickHint");
+      hint.textContent = selected.length ? ("已选 " + selected.join("、")) : "未选座位";
+      board.innerHTML = "";
+      if (!spaces.length) {
+        board.className = "map-wrap";
+        board.innerHTML = '<div class="sub" style="padding:16px">选择房间后点「刷新空闲」加载座位图</div>';
+        return;
+      }
+      const narrow = window.innerWidth < 720;
+      const hasXY = !narrow && spaces.some(s => s.x != null && s.y != null);
+      const list = spaces.slice().sort((a,b) => String(a.no).localeCompare(String(b.no), undefined, {numeric:true}));
+      board.className = "map-wrap" + (hasXY ? "" : " grid");
+      list.forEach(s => {
+        const no = String(s.no || "").padStart(3, "0");
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = no;
+        const on = selected.includes(no);
+        const preview = s.open === false || s.status_name === "未开放预约";
+        b.className = "desk" + (hasXY ? "" : " gridish") + (preview ? " preview" : (s.free ? " free" : " busy")) + (on ? " on" : "");
+        b.title = no + " " + (s.status_name || "");
+        if (hasXY) {
+          b.style.left = (s.x || 0) + "%";
+          b.style.top = (s.y || 0) + "%";
+          b.style.width = Math.max(s.w || 3.2, 3) + "%";
+          b.style.height = Math.max(s.h || 4.2, 4) + "%";
+        }
+        if (s.free || preview) {
+          b.onclick = () => {
+            if (selected.includes(no)) selected = selected.filter(x => x !== no);
+            else selected = [...selected, no];
+            renderMap();
+          };
+        }
+        board.appendChild(b);
+      });
+    }
+
+    async function loadAccounts() {
+      const j = await api("/api/accounts");
+      const sel = document.getElementById("accountSel");
+      sel.innerHTML = (j.accounts || []).map(a =>
+        `<option value="${a.username}" ${a.username===j.active?"selected":""}>${a.label || a.username}${a.has_session?"":" · 无会话"}</option>`
+      ).join("");
+    }
+    document.getElementById("btnSwitch").onclick = async () => {
+      const u = document.getElementById("accountSel").value;
+      if (!u) return;
+      try {
+        await api("/api/accounts/switch", { method: "POST", body: JSON.stringify({ username: u }) });
+        toast("已切换到 " + u);
+        await loadAccounts(); refreshStatus(); loadJobs(); loadBooks();
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    document.getElementById("btnPause").onclick = async () => {
+      try {
+        const r = await api("/api/pause", { method: "POST", body: "{}" });
+        toast("已暂停登录 " + Math.ceil((r.remaining||300)/60) + " 分钟");
+        refreshStatus();
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    document.getElementById("btnResume").onclick = async () => {
+      try {
+        await api("/api/resume", { method: "POST", body: "{}" });
+        toast("已恢复登录");
+        refreshStatus();
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    document.getElementById("btnAddAcc").onclick = async () => {
+      const username = prompt("学号");
+      if (!username) return;
+      const password = prompt("密码（只保存在服务器，不会显示在页面）");
+      if (!password) return;
+      const label = prompt("备注（可选，如室友）") || username;
+      try {
+        await api("/api/accounts", { method: "POST", body: JSON.stringify({ username, password, label }) });
+        toast("已添加 " + username + "，切换后需该账号会话/自动登录");
+        await loadAccounts();
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    async function refreshStatus() {
+      try {
+        const s = await api("/api/status");
+        const el = document.getElementById("gwStatus");
+        if (s.paused) { el.className = "status-pill warn"; el.textContent = "登录已暂停 " + Math.ceil((s.remaining||0)/60) + " 分" + Math.ceil((s.remaining||0)%60) + " 秒"; }
+        else if (s.gateway_alive) { el.className = "status-pill ok"; el.textContent = "网关会话有效"; }
+        else if (s.session) { el.className = "status-pill warn"; el.textContent = "有 session，心跳失败"; }
+        else { el.className = "status-pill bad"; el.textContent = "无 session"; }
+      } catch (e) {
+        const el = document.getElementById("gwStatus");
+        el.className = "status-pill warn"; el.textContent = "API 未连通";
+      }
+    }
+    async function loadAreas() {
+      const j = await api("/api/areas");
+      areas = j.areas || [];
+      if (!kids(floorId).some(a => a.id === areaId)) {
+        const first = kids(floorId).find(a => a.type === 1 && a.valid);
+        if (first) areaId = first.id;
+      }
+      renderFloors(); renderRooms();
+    }
+    async function refreshSpaces() {
+      if (!areaId) { toast("请先选择房间"); return; }
+      try {
+        const date = targetDate.value;
+        const today = new Date(); today.setHours(0,0,0,0);
+        const t = new Date(date + "T00:00:00");
+        const day_offset = Math.round((t - today) / 86400000);
+        toast("加载座位图…");
+        const j = await api(`/api/spaces?area_id=${areaId}&day_offset=${day_offset}`);
+        spaces = j.spaces || [];
+        renderMap();
+        if (j.preview) toast(`${j.day} 尚未开放预约，图上不表示占用`);
+        else toast(`${j.day} 空闲 ${spaces.filter(x=>x.free).length}/${spaces.length}`);
+      } catch (e) {
+        spaces = [];
+        renderMap();
+        toast(String(e.message || e));
+      }
+    }
+    function statusLabel(st) {
+      return ({ pending: "等待进入窗口", ready: "执行/重试中", success: "成功", failed: "失败已停", cancelled: "已取消" })[st] || st;
+    }
+    async function loadJobs() {
+      try {
+        const j = await api("/api/jobs");
+        const box = document.getElementById("jobList");
+        if (!j.jobs.length) { box.innerHTML = '<p class="sub">暂无任务。</p>'; return; }
+        const jobs = (j.jobs || []).slice().sort((a, b) => {
+          const da = (a.target_date || a.date || "") + " " + (a.start_time || "");
+          const db = (b.target_date || b.date || "") + " " + (b.start_time || "");
+          if (da !== db) return da < db ? 1 : -1;
+          return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+        });
+        box.innerHTML = jobs.map(job => `
+          <div class="job">
+            <div><strong>#${job.id}</strong> · 区域 ${job.area_id} · 座位 ${(job.seat_nos||[]).join(", ")}
+              <span class="status-pill ${job.status==='success'?'ok':job.status==='failed'?'bad':'warn'}">${statusLabel(job.status)}</span>
+            </div>
+            <div class="meta">
+              目标日 ${job.target_date || job.date || "-"} · ${job.start_time}-${job.end_time}
+              · 窗口内: ${job.in_window ? "是" : "否（挂起）"}
+              · 失败 ${job.fail_count||0}/${job.max_retries||10}
+              ${job.last_error ? " · " + job.last_error : ""}
+              ${job.result && job.result.order_no ? " · 单号 " + job.result.order_no : ""}
+            </div>
+            <div class="ops">
+              ${job.status !== "success" && job.status !== "cancelled" ? `<button class="ghost" data-cancel="${job.id}">取消任务</button>` : ""}
+              <button class="ghost" data-del="${job.id}">删除</button>
+            </div>
+          </div>`).join("");
+        box.querySelectorAll("[data-cancel]").forEach(btn => {
+          btn.onclick = async () => { await api(`/api/jobs/${btn.dataset.cancel}/cancel`, { method: "POST", body: "{}" }); toast("任务已取消"); loadJobs(); };
+        });
+        box.querySelectorAll("[data-del]").forEach(btn => {
+          btn.onclick = async () => { await api(`/api/jobs/${btn.dataset.del}`, { method: "DELETE" }); toast("已删除"); loadJobs(); };
+        });
+      } catch (e) {
+        document.getElementById("jobList").innerHTML = `<p class="sub">${e.message}</p>`;
+      }
+    }
+    async function loadBooks() {
+      try {
+        const j = await api("/api/books");
+        const box = document.getElementById("bookList");
+        if (!j.books.length) { box.innerHTML = '<p class="sub">暂无记录。</p>'; return; }
+        function prettyDate(s) {
+          const m = String(s || "").match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+          if (!m) return s || "";
+          return Number(m[2]) + "月" + Number(m[3]) + "日";
+        }
+        function prettyPlace(b) {
+          const raw = String(b.space_info || "");
+          const m = raw.match(/^(\d{3})[-:](\d{3})/);
+          if (m) return { room: m[1] + "室", seat: m[2] };
+          const seat = (raw.match(/:(\d{3})\s*$/) || [])[1] || "";
+          let room = raw.replace(/:\d{3}\s*$/, "").replace(/^\d{3}-/, "");
+          if (room.includes("中厅") || room.includes("东厅") || room.includes("厅")) {
+            const parts = room.split("-").filter(Boolean);
+            room = parts[parts.length-1] || room;
+          }
+          return { room: room || "座位", seat };
+        }
+        const books = (j.books || []).slice().sort((a, b) => {
+          const da = String(a.begin || a.segment || "");
+          const db = String(b.begin || b.segment || "");
+          if (da !== db) return da < db ? 1 : -1;
+          return String(b.no || "").localeCompare(String(a.no || ""));
+        });
+        box.innerHTML = books.map(b => {
+          const pl = prettyPlace(b);
+          const day = prettyDate(b.begin || b.segment);
+          const title = [pl.room, pl.seat].filter(Boolean).join(" · ");
+          return `
+          <div class="book">
+            <div class="book-date">${day}</div>
+            <div><strong>${title}</strong>
+              <span class="status-pill ${String(b.status_name||'').includes('取消')||b.status==4?'bad':(String(b.submsg||'').includes('临时')?'warn':'ok')}">${b.status_name||""}</span>
+            </div>
+            <div class="meta">${b.no || b.id}${b.space_info ? " · " + b.space_info : ""}</div>
+            <div class="meta">${b.segment || ((b.begin||"") + " ~ " + (b.end||""))}</div>
+            <div class="ops">
+              ${b.can_checkin ? `<button class="primary" data-act="checkin" data-id="${b.id}">${String(b.submsg||'').includes('临时')?'回来签到':'签到'}</button>` : ""}
+              ${b.can_leave ? `<button class="ghost" data-act="leave" data-id="${b.id}">临时离开</button>` : ""}
+              ${b.can_checkout ? `<button class="ghost" data-act="checkout" data-id="${b.id}">签离</button>` : ""}
+              ${b.cancellable ? `<button class="danger" data-book-cancel="${b.id}">取消预约</button>` : ""}
+            </div>
+          </div>`;
+        }).join("");
+        box.querySelectorAll("[data-act]").forEach(btn => {
+          btn.onclick = async () => {
+            const act = btn.dataset.act;
+            const label = ({checkin:"签到", leave:"临时离开", checkout:"签离"})[act] || act;
+            if (!confirm("确认" + label + "？")) return;
+            try {
+              const r = await api(`/api/books/${btn.dataset.id}/${act}`, { method: "POST", body: "{}" });
+              toast(String(r.msg || (label + "成功")).replace(/<br\s*\/?>/gi, " "));
+              loadBooks();
+            } catch (e) { toast(String(e.message || e)); }
+          };
+        });
+        box.querySelectorAll("[data-book-cancel]").forEach(btn => {
+          btn.onclick = async () => {
+            if (!confirm("确认取消该图书馆预约？")) return;
+            try {
+              await api(`/api/books/${btn.dataset.bookCancel}/cancel`, { method: "POST", body: "{}" });
+              toast("已提交取消");
+              loadBooks();
+            } catch (e) { toast(String(e.message || e)); }
+          };
+        });
+      } catch (e) {
+        document.getElementById("bookList").innerHTML = `<p class="sub">${e.message}</p>`;
+      }
+    }
+    btnAdd.onclick = async () => {
+      if (!areaId) { toast("请先选择房间"); return; }
+      if (!selected.length) { toast("请先在座位图上点选"); return; }
+      if (!targetDate.value) { toast("请选择日期"); return; }
+      try {
+        const payload = {
+            area_id: Number(areaId),
+            date: targetDate.value,
+            seat_nos: selected,
+            start_time: startTime.value,
+            end_time: endTime.value,
+            max_retries: 10,
+            retry_interval_sec: 60,
+        };
+        if (targetDateTo.value && targetDateTo.value !== targetDate.value) {
+          payload.date_from = targetDate.value;
+          payload.date_to = targetDateTo.value;
+        }
+        const job = await api("/api/jobs", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (job.count) toast("已添加 " + job.count + " 天的预约任务");
+        else toast("已添加 " + job.job.id);
+        loadJobs();
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    btnRefresh.onclick = () => refreshSpaces();
+    btnBooks.onclick = () => loadBooks();
+    loadAreas().then(() => refreshSpaces()).catch(e => toast(String(e.message || e)));
+    loadAccounts().catch(()=>{}); refreshStatus(); loadJobs(); loadBooks();
+    setInterval(() => { refreshStatus(); loadJobs(); }, 8000);
+  </script>
+</body>
+</html>

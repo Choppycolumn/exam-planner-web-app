@@ -1,0 +1,22 @@
+[Unit]
+Description=HUST Library Seat Booking Worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/seatbot
+ExecStart=/opt/seatbot/.venv/bin/python /opt/seatbot/main.py --worker
+Restart=always
+RestartSec=15
+Nice=10
+# 防止异常吃光小内存机
+MemoryMax=200M
+MemoryHigh=150M
+StandardOutput=append:/var/log/seatbot/service.log
+StandardError=append:/var/log/seatbot/service.log
+# 环境稳定
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

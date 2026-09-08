@@ -1,0 +1,13 @@
+config.yaml
+accounts.json
+jobs.json
+jobs-*.json
+session.json
+session-*.json
+login-pause.json
+bark.env
+logs/
+.venv/
+__pycache__/
+*.pyc
+captcha_*.png

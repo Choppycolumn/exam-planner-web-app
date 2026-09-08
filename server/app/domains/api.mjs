@@ -2,10 +2,34 @@ import { canAccessApi } from '../../auth/capabilities.mjs';
 import { createUserContext } from '../../auth/user-context.mjs';
 import { handleFocusTimerRoutes } from '../../routes/focus-timer-routes.mjs';
 import { handleAccountRoutes } from '../../routes/account-routes.mjs';
+import { handleSeatAssistantPairingCompletion, handleSeatAssistantRoutes } from '../../routes/seat-assistant-routes.mjs';
 import { validateContractRequest } from '../../http/api-contract-validation.mjs';
 
 export function installApiDomain(runtime, exposeRuntime) {
     async function handleApi(req, res) {
+        if (await handleSeatAssistantPairingCompletion(req, res, {
+            sendJson: runtime.sendJson,
+            readJsonBody: runtime.readJsonBody,
+            sessionStore: runtime.seatAssistantSessionStore,
+            allowedExtensionOrigin: runtime.seatAssistantExtensionOrigin,
+            onPaired: (result) => {
+                runtime.seatAssistantService.sessionPaired();
+                if (runtime.backgroundJobsEnabled && runtime.seatAssistantService.getProfile().enabled) runtime.seatAssistantScheduler.start();
+                runtime.writeAuditEvent({
+                    action: 'seat_assistant_pairing_completed',
+                    req,
+                    actorRole: 'pairing_extension',
+                    detail: {
+                        sessionId: result.sessionId,
+                        origin: result.origin,
+                        cookieDomain: result.cookieDomain,
+                        cookieCount: result.cookieCount,
+                        expiresAt: result.expiresAt,
+                    },
+                });
+            },
+        }))
+            return;
         if (req.method === 'OPTIONS') {
             runtime.sendJson(res, { ok: true });
             return;
@@ -78,6 +102,23 @@ export function installApiDomain(runtime, exposeRuntime) {
             runtime.sendJson(res, { error: 'Read only mode' }, 403);
             return;
         }
+        if (await handleSeatAssistantRoutes(req, res, {
+            session,
+            sendJson: runtime.sendJson,
+            readJsonBody: runtime.readJsonBody,
+            service: runtime.seatAssistantService,
+            sessionStore: runtime.seatAssistantSessionStore,
+            onSessionRevoked: () => {
+                runtime.seatAssistantService.sessionRevoked('owner');
+                runtime.seatAssistantScheduler.stop();
+            },
+            onProfileSaved: (profile) => {
+                if (runtime.backgroundJobsEnabled && profile.enabled) runtime.seatAssistantScheduler.start();
+                if (!profile.enabled) runtime.seatAssistantScheduler.stop();
+            },
+            writeAuditEvent: runtime.writeAuditEvent,
+        }))
+            return;
         if (await handleAccountRoutes(req, res, {
             session: { ...session, userContext },
             sendJson: runtime.sendJson,

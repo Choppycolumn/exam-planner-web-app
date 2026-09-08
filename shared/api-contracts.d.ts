@@ -18,7 +18,11 @@ export type ApiContractName =
   | 'embeddingStatus' | 'errorThemeAnalysis'
   | 'errorThemeDetail' | 'errorThemeOptions' | 'errorThemeBatchStatus' | 'errorThemeBatchRun'
   | 'errorThemeCorrectionSave' | 'users' | 'userInviteCreate' | 'userInviteRevoke'
-  | 'userUpdate' | 'userResetPassword' | 'userRevokeSessions' | 'dataReset';
+  | 'userUpdate' | 'userResetPassword' | 'userRevokeSessions' | 'dataReset'
+  | 'seatAssistantStatus' | 'seatAssistantProfile' | 'seatAssistantSession'
+  | 'seatAssistantObservations' | 'seatAssistantHistory' | 'seatAssistantProfileWrite'
+  | 'seatAssistantRefresh' | 'seatAssistantPairingCreate' | 'seatAssistantSessionRevoke'
+  | 'seatAssistantHistoryDelete';
 
 export type ApiFieldDescriptor =
   | 'string' | 'string?'
@@ -28,7 +32,7 @@ export type ApiFieldDescriptor =
   | 'object' | 'object?';
 
 export interface ApiContract {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'DELETE';
   path: string;
   capability: string | null;
   body?: Record<string, ApiFieldDescriptor>;

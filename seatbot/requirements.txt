@@ -1,0 +1,11 @@
+requests>=2.31.0
+PyYAML>=6.0.1
+ddddocr>=1.4.11
+onnxruntime>=1.17.0
+tzdata>=2024.1
+Pillow>=10.0.0
+numpy>=1.24.0
+pycryptodome>=3.20.0
+paramiko>=3.4.0
+# 可选：本机图形登录（手动点验证码兜底）
+# playwright>=1.40.0

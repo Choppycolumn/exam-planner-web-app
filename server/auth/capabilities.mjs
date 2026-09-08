@@ -11,6 +11,7 @@ export const CAPABILITIES = Object.freeze({
   BREAK_GUARD: 'break_guard.sync',
   USERS: 'users.manage',
   DATA_IMPORT: 'data.import',
+  SEAT_ASSISTANT: 'seat_assistant.manage',
 });
 
 export const MEMBER_CAPABILITIES = Object.freeze([
@@ -48,6 +49,7 @@ const PREFIX_POLICIES = [
   ['/api/break-guard/', CAPABILITIES.BREAK_GUARD],
   ['/api/users', CAPABILITIES.USERS],
   ['/api/focus-timer', CAPABILITIES.FOCUS_TIMER],
+  ['/api/seat-assistant', CAPABILITIES.SEAT_ASSISTANT],
   ['/api/study-comparison', CAPABILITIES.COMPARISON],
 ];
 

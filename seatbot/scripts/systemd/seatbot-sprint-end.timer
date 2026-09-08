@@ -1,0 +1,8 @@
+[Unit]
+Description=00:20 restore exam-planner if still down
+[Timer]
+OnCalendar=*-*-* 00:20:00
+Persistent=true
+AccuracySec=15s
+[Install]
+WantedBy=timers.target

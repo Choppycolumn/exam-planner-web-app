@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TimerReset, TrendingUp, Users, WifiOff } from 'lucide-react';
+import { Activity, BellRing, BookOpen, CalendarCheck, ClipboardList, Download, Flag, Home, Languages, LogOut, Moon, Settings, ShieldCheck, Sun, TimerReset, TrendingUp, Users, WifiOff } from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useDashboardData } from '../hooks/useDashboardData';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -22,6 +22,7 @@ const navItems = [
   { to: '/confusing-words', label: '易混单词', icon: Languages },
   { to: '/settings', label: '设置', icon: Settings, capability: 'settings.manage' },
   { to: '/operations', label: '运维与健康', icon: ShieldCheck, capability: 'operations.manage' },
+  { to: '/seat-assistant', label: '座位预约', icon: BellRing, capability: 'seat_assistant.manage' },
 ];
 
 function AdminGoalSummary() {

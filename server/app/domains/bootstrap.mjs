@@ -7,6 +7,9 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
     try {
         runtime.ensureSqliteStore();
         runtime.startupReady = true;
+        if (runtime.backgroundJobsEnabled && runtime.seatAssistantFeatureEnabled) {
+            runtime.seatAssistantScheduler.start();
+        }
     }
     catch (error) {
         runtime.startupError = runtime.redactSecretText(error.message || String(error));
@@ -262,7 +265,10 @@ export function installBootstrapDomain(runtime, exposeRuntime) {
     }
     const shutdownController = createGracefulShutdown({
         server: httpServer,
-        stopBackgroundWork: () => runtime.scheduler.stopAll(),
+        stopBackgroundWork: () => {
+            runtime.seatAssistantScheduler.stop();
+            runtime.scheduler.stopAll();
+        },
         closeResources: () => {
             runtime.sqliteRepository.close();
             runtime.dictionaryDatabase.close();

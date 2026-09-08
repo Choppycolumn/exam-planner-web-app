@@ -1,0 +1,18 @@
+[Unit]
+Description=HUST Seatbot on-server CAS login (oneshot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/seatbot
+ExecStart=/opt/seatbot/.venv/bin/python /opt/seatbot/main.py --auto-cas
+Nice=15
+MemoryMax=400M
+TimeoutStartSec=180
+Environment=PYTHONUNBUFFERED=1
+StandardOutput=append:/var/log/seatbot/login.log
+StandardError=append:/var/log/seatbot/login.log
+
+[Install]
+WantedBy=multi-user.target

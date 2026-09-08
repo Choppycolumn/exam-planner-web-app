@@ -1,0 +1,5 @@
+[Unit]
+Description=Seatbot free RAM before midnight grab
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/seatbot/scripts/sprint_begin.sh

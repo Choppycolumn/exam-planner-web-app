@@ -1,0 +1,10 @@
+[Unit]
+Description=Seatbot 23:50 preflight login before midnight grab
+
+[Timer]
+OnCalendar=*-*-* 23:50:00
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

@@ -8,6 +8,7 @@ const BRIEF = 'brief.manage';
 const BREAK_GUARD = 'break_guard.sync';
 const USERS = 'users.manage';
 const DATA_IMPORT = 'data.import';
+const SEAT_ASSISTANT = 'seat_assistant.manage';
 
 function get(path, capability = STUDY) {
   return Object.freeze({ method: 'GET', path, capability });
@@ -15,6 +16,10 @@ function get(path, capability = STUDY) {
 
 function post(path, capability = STUDY, body) {
   return Object.freeze({ method: 'POST', path, capability, ...(body ? { body } : {}) });
+}
+
+function del(path, capability = STUDY) {
+  return Object.freeze({ method: 'DELETE', path, capability });
 }
 
 export const API_CONTRACTS = Object.freeze({
@@ -49,6 +54,12 @@ export const API_CONTRACTS = Object.freeze({
   }),
   studyComparison: get('/api/study-comparison', COMPARISON),
 
+  seatAssistantStatus: get('/api/seat-assistant/status', SEAT_ASSISTANT),
+  seatAssistantProfile: get('/api/seat-assistant/profile', SEAT_ASSISTANT),
+  seatAssistantSession: get('/api/seat-assistant/session', SEAT_ASSISTANT),
+  seatAssistantObservations: get('/api/seat-assistant/observations', SEAT_ASSISTANT),
+  seatAssistantHistory: get('/api/seat-assistant/history', SEAT_ASSISTANT),
+
   goalSave: post('/api/goals/save'),
   goalActivate: post('/api/goals/activate', STUDY, { id: 'number' }),
   goalRemove: post('/api/goals/remove', STUDY, { id: 'number' }),
@@ -72,6 +83,12 @@ export const API_CONTRACTS = Object.freeze({
   problemInboxRemove: post('/api/problem-inbox/remove', STUDY, { id: 'number' }),
   problemInboxResolveDate: post('/api/problem-inbox/resolve-date', STUDY, { date: 'string' }),
   reportGenerate: post('/api/reports/generate', STUDY, { kind: 'string', period: 'string?' }),
+
+  seatAssistantProfileWrite: post('/api/seat-assistant/profile', SEAT_ASSISTANT),
+  seatAssistantRefresh: post('/api/seat-assistant/refresh', SEAT_ASSISTANT),
+  seatAssistantPairingCreate: post('/api/seat-assistant/pair', SEAT_ASSISTANT),
+  seatAssistantSessionRevoke: del('/api/seat-assistant/session', SEAT_ASSISTANT),
+  seatAssistantHistoryDelete: del('/api/seat-assistant/history', SEAT_ASSISTANT),
 
   briefSettingsRead: get('/api/briefs/settings', BRIEF),
   briefSettingsWrite: post('/api/briefs/settings', BRIEF),

@@ -1,0 +1,33 @@
+# The main ExamPlanner server must be reachable at 127.0.0.1:8080.
+# auth_request reuses its authenticated session and capability check.
+location = /_seatbot_auth {
+    internal;
+    proxy_pass http://127.0.0.1:8080/api/seat-assistant/status;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+
+location = /seat {
+    return 302 /seat/;
+}
+
+location ^~ /seat/ {
+    auth_request /_seatbot_auth;
+    alias /opt/seatbot/web/;
+    index index.html;
+    add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+}
+
+location = /seat-api {
+    return 302 /seat-api/;
+}
+
+location ^~ /seat-api/ {
+    auth_request /_seatbot_auth;
+    proxy_pass http://127.0.0.1:8766/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}

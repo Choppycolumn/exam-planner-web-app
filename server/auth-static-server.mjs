@@ -35,6 +35,7 @@ import { handleLearningWriteRoutes } from './routes/learning-write-routes.mjs';
 import { createBackupService } from './services/backup-service.mjs';
 import { createBreakGuardService } from './domains/break-guard/service.mjs';
 import { createFocusTimerService } from './domains/focus-timer/service.mjs';
+import { createSeatAssistantRuntime } from './modules/seat-assistant-runtime.mjs';
 import { createLearningRepository } from './repositories/learning-repository.mjs';
 import { createLearningQueryRepository } from './repositories/learning-query-repository.mjs';
 import { createAppMetadataRepository } from './repositories/app-metadata-repository.mjs';
@@ -140,6 +141,9 @@ const cookieSecret = process.env.COOKIE_SECRET || randomBytes(32).toString('hex'
 const settingsEncryptionSecret = process.env.SETTINGS_ENCRYPTION_KEY || (process.env.NODE_ENV === 'production' ? '' : cookieSecret);
 const cookieName = 'exam_planner_session';
 const corsOrigin = process.env.CORS_ORIGIN || '';
+const seatAssistantPairingOrigin = process.env.SEAT_ASSISTANT_PAIRING_ORIGIN
+    || (process.env.NODE_ENV === 'production' ? 'https://8.130.68.9' : `http://127.0.0.1:${port}`);
+const seatAssistantExtensionOrigin = process.env.SEAT_ASSISTANT_EXTENSION_ORIGIN || '';
 const secureCookie = process.env.COOKIE_SECURE === '1';
 const breakGuardToken = process.env.BREAK_GUARD_TOKEN || '';
 const dataImportToken = process.env.DATA_IMPORT_TOKEN || '';
@@ -147,6 +151,13 @@ const backupSyncToken = process.env.BACKUP_SYNC_TOKEN || '';
 const requestLogSlowMs = Number(process.env.REQUEST_LOG_SLOW_MS || 1500);
 const jsonBodyMaxBytes = Number(process.env.JSON_BODY_MAX_BYTES || 10 * 1024 * 1024);
 const minFreeDiskBytes = Number(process.env.MIN_FREE_DISK_BYTES || 512 * 1024 * 1024);
+const seatAssistantFeatureEnabled = process.env.SEAT_ASSISTANT_ENABLED === '1';
+const requestedSeatAssistantProviderMode = String(process.env.SEAT_ASSISTANT_PROVIDER || 'disabled').trim();
+const seatAssistantProviderMode = seatAssistantFeatureEnabled && requestedSeatAssistantProviderMode === 'hust_session_readonly'
+    ? requestedSeatAssistantProviderMode
+    : 'disabled';
+const seatAssistantAreaId = String(process.env.SEAT_ASSISTANT_AREA_ID || '101').trim();
+const seatAssistantMinimumRequestIntervalSeconds = Math.max(60, Math.round(Number(process.env.SEAT_ASSISTANT_MIN_REQUEST_INTERVAL_SECONDS) || 60));
 const privilegedHelperSocket = process.env.PRIVILEGED_HELPER_SOCKET || (process.platform === 'win32' ? '' : '/run/exam-planner/privileged.sock');
 const privilegedClient = privilegedHelperSocket ? createPrivilegedClient({ socketPath: privilegedHelperSocket }) : null;
 const entitySchemaVersion = 1;
@@ -226,6 +237,23 @@ const telegramOpsConfirmations = new Map();
 const calendarRepository = createCalendarRepository(sqliteRepository);
 const { runSqlite, sqliteExecute, sqliteScalar, sqliteJson, runSqliteTransaction, closeSqlite } = createSqliteCli({ repository: sqliteRepository });
 const { sendJson, sendHtml, readBody, readJsonBody } = createHttpUtils({ corsOrigin, jsonBodyMaxBytes });
+const {
+    seatAssistantRepository,
+    seatAssistantSessionStore,
+    seatAssistantProvider,
+    seatAssistantService,
+    seatAssistantScheduler,
+} = createSeatAssistantRuntime({
+    sqliteRepository,
+    cookieSecret,
+    configuredOrigin: seatAssistantPairingOrigin,
+    providerMode: seatAssistantProviderMode,
+    areaId: seatAssistantAreaId,
+    featureEnabled: seatAssistantFeatureEnabled,
+    minimumRequestIntervalSeconds: seatAssistantMinimumRequestIntervalSeconds,
+    queueProactiveNotification: (...args) => runtime.queueProactiveNotification?.(...args),
+    logger: (level, event, detail) => runtime.logStructured?.(level, event, detail),
+});
 const serveStatic = createStaticAssetServer({ root, mimeTypes: defaultMimeTypes });
 const sessionAuth = createSessionAuth({
     appPassword,
@@ -300,6 +328,14 @@ function validateStartupConfig() {
         problems.push('MIN_FREE_DISK_BYTES must be non-negative');
     if (corsOrigin === '*')
         problems.push('CORS_ORIGIN should not be wildcard in production');
+    if (seatAssistantFeatureEnabled && requestedSeatAssistantProviderMode !== 'hust_session_readonly' && requestedSeatAssistantProviderMode !== 'disabled')
+        fatalProblems.push('SEAT_ASSISTANT_PROVIDER must be disabled or hust_session_readonly (GET-only)');
+    if (seatAssistantAreaId !== '101')
+        fatalProblems.push('SEAT_ASSISTANT_AREA_ID must remain the audited area 101');
+    if (seatAssistantProviderMode === 'hust_session_readonly' && !['https://8.130.68.9', `http://127.0.0.1:${port}`].includes(seatAssistantPairingOrigin))
+        fatalProblems.push('SEAT_ASSISTANT_PAIRING_ORIGIN must be the exact ExamPlanner origin https://8.130.68.9 (or local 127.0.0.1 development origin)');
+    if (seatAssistantProviderMode === 'hust_session_readonly' && !/^chrome-extension:\/\/[a-p]{32}$/.test(seatAssistantExtensionOrigin))
+        fatalProblems.push('SEAT_ASSISTANT_EXTENSION_ORIGIN must be the exact installed Chrome extension origin');
     if (serviceRole === 'web' && !secureCookie && process.platform !== 'win32')
         problems.push('COOKIE_SECURE should be enabled for the HTTPS web service');
     if (problems.length) {
@@ -339,6 +375,20 @@ exposeRuntime({
     linuxResourceHealth: () => linuxResourceHealth,
     notificationChannelHealth: () => notificationChannelHealth,
     migrationStatus: () => migrationStatus,
+});
+
+exposeRuntime({
+    seatAssistantPairingOrigin: () => seatAssistantPairingOrigin,
+    seatAssistantExtensionOrigin: () => seatAssistantExtensionOrigin,
+    seatAssistantFeatureEnabled: () => seatAssistantFeatureEnabled,
+    seatAssistantProviderMode: () => seatAssistantProviderMode,
+    seatAssistantAreaId: () => seatAssistantAreaId,
+    seatAssistantMinimumRequestIntervalSeconds: () => seatAssistantMinimumRequestIntervalSeconds,
+    seatAssistantRepository: () => seatAssistantRepository,
+    seatAssistantSessionStore: () => seatAssistantSessionStore,
+    seatAssistantProvider: () => seatAssistantProvider,
+    seatAssistantService: () => seatAssistantService,
+    seatAssistantScheduler: () => seatAssistantScheduler,
 });
 
 let backupService = null;

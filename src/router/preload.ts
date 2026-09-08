@@ -13,6 +13,7 @@ export const routeLoaders = {
   confusingWords: () => import('../pages/ConfusingWordsPage'),
   settings: () => import('../pages/SettingsPage'),
   migrateLocalData: () => import('../pages/MigrateLocalDataPage'),
+  seatAssistant: () => import('../pages/SeatAssistantPage'),
   dashboardCharts: () => import('../components/DashboardCharts'),
 };
 
@@ -31,6 +32,7 @@ const pathLoaders: Record<string, () => Promise<unknown>> = {
   '/confusing-words': routeLoaders.confusingWords,
   '/settings': routeLoaders.settings,
   '/migrate-local-data': routeLoaders.migrateLocalData,
+  '/seat-assistant': routeLoaders.seatAssistant,
 };
 
 export function preloadRoute(path: string) {

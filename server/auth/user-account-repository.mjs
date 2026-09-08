@@ -183,7 +183,7 @@ VALUES(?,?,?,?);`).run(userId, passwordHash, 'scrypt', now);
       connection.prepare(`INSERT INTO user_capabilities(user_id,capability,enabled,updated_at)
 VALUES(?,?,1,?);`).run(userId, capability, now);
     }
-    for (const capability of ['settings.manage', 'operations.manage', 'notifications.manage', 'brief.manage', 'break_guard.sync', 'users.manage', 'data.import']) {
+    for (const capability of ['settings.manage', 'operations.manage', 'notifications.manage', 'brief.manage', 'break_guard.sync', 'users.manage', 'data.import', 'seat_assistant.manage']) {
       connection.prepare(`INSERT INTO user_capabilities(user_id,capability,enabled,updated_at)
 VALUES(?,?,0,?);`).run(userId, capability, now);
     }

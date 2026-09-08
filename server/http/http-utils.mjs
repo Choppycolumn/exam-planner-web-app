@@ -7,16 +7,17 @@ export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
   };
 
-  function sendJson(res, data, status = 200) {
+  function sendJson(res, data, status = 200, options = {}) {
     const headers = {
       ...securityHeaders,
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
-      'access-control-allow-methods': 'GET,POST,OPTIONS',
+      'access-control-allow-methods': 'GET,POST,DELETE,OPTIONS',
       'access-control-allow-headers': 'content-type,x-backup-token,x-exam-planner-client,authorization',
     };
-    if (corsOrigin) {
-      headers['access-control-allow-origin'] = corsOrigin;
+    const allowOrigin = options?.allowOrigin || corsOrigin;
+    if (allowOrigin) {
+      headers['access-control-allow-origin'] = allowOrigin;
       headers.vary = 'Origin';
     }
     res.writeHead(status, headers);
@@ -63,10 +64,10 @@ export function createHttpUtils({ corsOrigin = '', jsonBodyMaxBytes = 10 * 1024 
     });
   }
 
-  async function readJsonBody(req) {
+  async function readJsonBody(req, maxBytes = jsonBodyMaxBytes) {
     if (!parsedJsonBodies.has(req)) {
       parsedJsonBodies.set(req, (async () => {
-        const body = await readBody(req, jsonBodyMaxBytes);
+        const body = await readBody(req, Math.max(1, Number(maxBytes) || jsonBodyMaxBytes));
         if (!body) return {};
         let parsed;
         try {
