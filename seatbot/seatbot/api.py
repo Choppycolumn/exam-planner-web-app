@@ -4,10 +4,10 @@ import json
 import logging
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
-from .client import YitClient
+from .client import GatewayError, YitClient
 from .accounts import (
     apply_active_to_config,
     ensure_from_config,
@@ -49,6 +49,7 @@ class SeatbotAPI:
         root: Path,
         jobs_path: Path,
         runtime: WorkerRuntime | None = None,
+        recover_session: Callable[[], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self.root = root
@@ -56,6 +57,7 @@ class SeatbotAPI:
         self.web_root = root / "web"
         self.config_path = root / "config.yaml"
         self.runtime = runtime or WorkerRuntime()
+        self.recover_session = recover_session
         try:
             ensure_from_config(root, self.config_path)
         except Exception:
@@ -357,6 +359,20 @@ class SeatbotAPI:
                     }
                 )
             return _json_bytes({"ok": True, "books": books})
+        except GatewayError:
+            started = bool(self.recover_session and self.recover_session())
+            self.runtime.update(
+                worker_mode="recovering",
+                worker_reason="刷新预约列表时正在恢复统一认证",
+            )
+            return _json_bytes(
+                {
+                    "ok": False,
+                    "recovering": started,
+                    "error": "统一认证会话已失效，正在自动恢复并重试预约列表",
+                },
+                503,
+            )
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 500)
 
@@ -428,8 +444,15 @@ def serve_api(
     host: str = "127.0.0.1",
     port: int = 8766,
     runtime: WorkerRuntime | None = None,
+    recover_session: Callable[[], bool] | None = None,
 ) -> ThreadingHTTPServer:
-    api = SeatbotAPI(cfg, root, jobs_path, runtime=runtime)
+    api = SeatbotAPI(
+        cfg,
+        root,
+        jobs_path,
+        runtime=runtime,
+        recover_session=recover_session,
+    )
     server = ThreadingHTTPServer((host, port), make_handler(api))
     log.info("API 监听 http://%s:%s  (面板 / )", host, port)
     return server

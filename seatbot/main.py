@@ -40,7 +40,7 @@ from seatbot.seats import (
     resolve_target_date,
 )
 from seatbot.session import load_session, resolve_session_path, save_session
-from seatbot.worker import process_due_jobs, worker_loop
+from seatbot.worker import process_due_jobs, trigger_server_login, worker_loop
 from seatbot.runtime import WorkerRuntime
 
 
@@ -271,6 +271,7 @@ def cmd_worker(cfg, log) -> int:
             host="127.0.0.1",
             port=8766,
             runtime=runtime,
+            recover_session=lambda: trigger_server_login(ROOT),
         )
 
         def _serve() -> None:

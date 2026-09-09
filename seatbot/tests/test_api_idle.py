@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 try:
     from seatbot.api import SeatbotAPI
+    from seatbot.client import GatewayError
     from seatbot.config import Config
     from seatbot.runtime import WorkerRuntime
 
@@ -58,6 +59,16 @@ class IdleApiTests(unittest.TestCase):
         code, _, _ = self.api.handle("POST", "/api/jobs", body)
         self.assertEqual(code, 201)
         self.assertGreater(self.runtime.revision(), before)
+
+    def test_refresh_books_recovers_expired_gateway_session(self):
+        recovered = []
+        self.api.recover_session = lambda: recovered.append(True) or True
+        with patch("seatbot.api.login_with_captcha", side_effect=GatewayError("expired")):
+            code, body, _ = self.api._books({})
+        payload = json.loads(body)
+        self.assertEqual(code, 503)
+        self.assertTrue(payload["recovering"])
+        self.assertEqual(recovered, [True])
 
 
 if __name__ == "__main__":

@@ -235,7 +235,12 @@
         ...opts,
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok === false) throw new Error(j.error || r.statusText || "请求失败");
+      if (!r.ok || j.ok === false) {
+        const error = new Error(j.error || r.statusText || "请求失败");
+        error.status = r.status;
+        error.payload = j;
+        throw error;
+      }
       return j;
     }
     function kids(pid) { return areas.filter(a => a.parent_id === pid); }
@@ -433,7 +438,7 @@
         document.getElementById("jobList").innerHTML = `<p class="sub">${e.message}</p>`;
       }
     }
-    async function loadBooks() {
+    async function loadBooks(recoveryAttempt = 0) {
       try {
         const j = await api("/api/books");
         const box = document.getElementById("bookList");
@@ -504,6 +509,13 @@
           };
         });
       } catch (e) {
+        if (e.payload && e.payload.recovering && recoveryAttempt < 2) {
+          const delay = recoveryAttempt === 0 ? 5000 : 10000;
+          document.getElementById("bookList").innerHTML = '<p class="sub">统一认证正在恢复，稍后自动重试…</p>';
+          toast("正在恢复统一认证，预约列表将自动重试");
+          setTimeout(() => loadBooks(recoveryAttempt + 1), delay);
+          return;
+        }
         document.getElementById("bookList").innerHTML = `<p class="sub">${e.message}</p>`;
       }
     }

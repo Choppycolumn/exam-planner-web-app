@@ -258,7 +258,7 @@ def process_due_jobs(
         interval = max(15, int(job.get("retry_interval_sec") or 60))
         log.warning("[%s] 预约失败 %s/%s: %s", job_id, fail_count, max_retries, msg)
         if connection_failed:
-            _trigger_server_login(root)
+            trigger_server_login(root)
 
         if fail_count >= max_retries:
             update_job(
@@ -309,7 +309,7 @@ def _run_preflight(
         log.info("预约窗口预检通过，等待到点执行")
     else:
         log.warning("预约窗口预检未通过，拉起一次登录恢复")
-        _trigger_server_login(root)
+        trigger_server_login(root)
 
     checked_at = _iso_now()
     for job in due:
@@ -326,16 +326,16 @@ def _run_preflight(
     )
 
 
-def _trigger_server_login(root: Path) -> None:
+def trigger_server_login(root: Path) -> bool:
     """Start one bounded login recovery process, at most once every three minutes."""
     if is_paused(root):
-        return
+        return False
     stamp = root / "logs" / "last_server_login"
     stamp.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
     try:
         if stamp.exists() and now - stamp.stat().st_mtime < 180:
-            return
+            return True
         stamp.write_text(str(int(now)), encoding="utf-8")
     except OSError:
         pass
@@ -350,10 +350,11 @@ def _trigger_server_login(root: Path) -> None:
         )
         if result.returncode == 0:
             log.info("已请求一次预约登录恢复")
-            return
+            return True
         log.warning("预约登录服务启动失败: %s", (result.stderr or result.stdout or "")[:200])
     except Exception as exc:
         log.warning("无法启动预约登录服务: %s", exc)
+    return False
 
 
 def _active_context(cfg: Config, root: Path, jobs_path: Path) -> tuple[Config, Path]:
