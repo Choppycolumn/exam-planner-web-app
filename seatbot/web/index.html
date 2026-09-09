@@ -78,6 +78,7 @@
     button.primary { border: 1px solid var(--accent); background: var(--accent); color: #fff; }
     button.ghost { border: 1px solid var(--line); background: var(--panel-strong); color: var(--accent); }
     button.danger { border: 1px solid rgba(201,52,87,.35); background: rgba(201,52,87,.08); color: var(--danger); }
+    button:disabled { opacity: .55; cursor: wait; transform: none; }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
     .status-pill { display: inline-flex; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
     .ok { background: rgba(52,199,89,.12); color: #1a7f37; }
@@ -112,6 +113,7 @@
           <button class="ghost" type="button" id="btnAddAcc">添加账号</button>
           <button class="ghost" type="button" id="btnPause">暂停登录 5分钟</button>
           <button class="primary" type="button" id="btnResume">恢复</button>
+          <button class="ghost" type="button" id="btnFullLogin">完整登录</button>
           <div id="gwStatus" class="status-pill warn">检测会话中…</div>
         </div>
       </div>
@@ -342,6 +344,23 @@
         toast("已恢复登录");
         refreshStatus();
       } catch (e) { toast(String(e.message || e)); }
+    };
+    document.getElementById("btnFullLogin").onclick = async () => {
+      const button = document.getElementById("btnFullLogin");
+      button.disabled = true;
+      button.textContent = "登录启动中…";
+      try {
+        await api("/api/login/full", { method: "POST", body: "{}" });
+        toast("完整登录已启动，将依次刷新统一认证和图书馆登录");
+        setTimeout(() => { refreshStatus(); loadBooks(); }, 8000);
+      } catch (e) {
+        toast(String(e.message || e));
+      } finally {
+        setTimeout(() => {
+          button.disabled = false;
+          button.textContent = "完整登录";
+        }, 8000);
+      }
     };
     document.getElementById("btnAddAcc").onclick = async () => {
       const username = prompt("学号");

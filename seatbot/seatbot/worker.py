@@ -326,7 +326,7 @@ def _run_preflight(
     )
 
 
-def trigger_server_login(root: Path) -> bool:
+def trigger_server_login(root: Path, *, force: bool = False) -> bool:
     """Start one bounded login recovery process, at most once every three minutes."""
     if is_paused(root):
         return False
@@ -334,7 +334,7 @@ def trigger_server_login(root: Path) -> bool:
     stamp.parent.mkdir(parents=True, exist_ok=True)
     now = time.time()
     try:
-        if stamp.exists() and now - stamp.stat().st_mtime < 180:
+        if not force and stamp.exists() and now - stamp.stat().st_mtime < 180:
             return True
         stamp.write_text(str(int(now)), encoding="utf-8")
     except OSError:

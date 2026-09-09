@@ -50,6 +50,7 @@ class SeatbotAPI:
         jobs_path: Path,
         runtime: WorkerRuntime | None = None,
         recover_session: Callable[[], bool] | None = None,
+        start_full_login: Callable[[], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self.root = root
@@ -58,6 +59,7 @@ class SeatbotAPI:
         self.config_path = root / "config.yaml"
         self.runtime = runtime or WorkerRuntime()
         self.recover_session = recover_session
+        self.start_full_login = start_full_login
         try:
             ensure_from_config(root, self.config_path)
         except Exception:
@@ -101,6 +103,16 @@ class SeatbotAPI:
             st = clear_pause(self.root)
             self.runtime.wake("预约服务已恢复")
             return _json_bytes({"ok": True, **st})
+        if method == "POST" and route == "/api/login/full":
+            clear_pause(self.root)
+            started = bool(self.start_full_login and self.start_full_login())
+            if not started:
+                return _json_bytes({"ok": False, "error": "完整登录服务未能启动"}, 503)
+            self.runtime.update(
+                worker_mode="recovering",
+                worker_reason="正在执行完整登录",
+            )
+            return _json_bytes({"ok": True, "started": True}, 202)
         if method == "GET" and route == "/api/jobs":
             jobs = list_jobs(self.jobs_path)
             for j in jobs:
@@ -445,6 +457,7 @@ def serve_api(
     port: int = 8766,
     runtime: WorkerRuntime | None = None,
     recover_session: Callable[[], bool] | None = None,
+    start_full_login: Callable[[], bool] | None = None,
 ) -> ThreadingHTTPServer:
     api = SeatbotAPI(
         cfg,
@@ -452,6 +465,7 @@ def serve_api(
         jobs_path,
         runtime=runtime,
         recover_session=recover_session,
+        start_full_login=start_full_login,
     )
     server = ThreadingHTTPServer((host, port), make_handler(api))
     log.info("API 监听 http://%s:%s  (面板 / )", host, port)

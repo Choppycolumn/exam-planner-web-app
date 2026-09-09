@@ -221,6 +221,24 @@ def cmd_auto_cas(cfg, log, *, upload: bool) -> int:
     return 0 if ok else 3
 
 
+def cmd_full_login(cfg, log) -> int:
+    """Refresh the gateway session, then complete the library captcha login."""
+    client = YitClient(cfg)
+    store = resolve_session_path(ROOT, cfg.session_file)
+    try:
+        auto_cas_login_and_save(client, store)
+        login_with_captcha(client, dump_dir=ROOT / "logs")
+        save_session(client, store)
+        log.info("完整登录成功")
+        return 0
+    except (CasLoginError, LoginError, GatewayError) as exc:
+        log.error("完整登录失败: %s", exc)
+        return 2
+    except Exception as exc:
+        log.exception("完整登录异常: %s", exc)
+        return 2
+
+
 def cmd_agent(cfg, log) -> int:
     """本机常驻：周期性检查网关，失效则自动 CAS 并上传。"""
     store = resolve_session_path(ROOT, cfg.session_file)
@@ -272,6 +290,7 @@ def cmd_worker(cfg, log) -> int:
             port=8766,
             runtime=runtime,
             recover_session=lambda: trigger_server_login(ROOT),
+            start_full_login=lambda: trigger_server_login(ROOT, force=True),
         )
 
         def _serve() -> None:
@@ -301,6 +320,11 @@ def main(argv: list[str] | None = None) -> int:
         help="本机自动 CAS 登录（OCR 验证码，无需手动点浏览器）",
     )
     parser.add_argument(
+        "--full-login",
+        action="store_true",
+        help="依次完成统一认证与图书馆验证码登录",
+    )
+    parser.add_argument(
         "--upload",
         action="store_true",
         help="登录成功后上传 session.json 到 server_host",
@@ -325,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     log = setup_logger(ROOT / "logs")
 
     try:
-        need_account = args.auto_cas or args.agent or not args.login
+        need_account = args.auto_cas or args.full_login or args.agent or not args.login
         cfg = load_config(args.config, require_account=need_account)
     except Exception as exc:
         print(f"配置错误: {exc}", file=sys.stderr)
@@ -339,6 +363,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.auto_cas:
         return cmd_auto_cas(cfg, log, upload=args.upload)
+
+    if args.full_login:
+        return cmd_full_login(cfg, log)
 
     if args.login:
         return cmd_login(cfg, log)

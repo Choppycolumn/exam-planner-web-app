@@ -70,6 +70,15 @@ class IdleApiTests(unittest.TestCase):
         self.assertTrue(payload["recovering"])
         self.assertEqual(recovered, [True])
 
+    def test_manual_full_login_endpoint_starts_callback(self):
+        started = []
+        self.api.start_full_login = lambda: started.append(True) or True
+        code, body, _ = self.api.handle("POST", "/api/login/full", b"{}")
+        payload = json.loads(body)
+        self.assertEqual(code, 202)
+        self.assertTrue(payload["started"])
+        self.assertEqual(started, [True])
+
 
 if __name__ == "__main__":
     unittest.main()
