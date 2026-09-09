@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,8 +29,8 @@ from .jobs import (
     list_jobs,
     resolve_job_date,
 )
-from .keepalive import ping
 from .login import login_with_captcha
+from .runtime import WorkerRuntime
 from .seats import book_action, cancel_book, fetch_segment, fetch_spaces, list_books
 from .session import load_session, resolve_session_path
 
@@ -44,12 +43,19 @@ def _json_bytes(obj: Any, code: int = 200) -> tuple[int, bytes, str]:
 
 
 class SeatbotAPI:
-    def __init__(self, cfg: Config, root: Path, jobs_path: Path) -> None:
+    def __init__(
+        self,
+        cfg: Config,
+        root: Path,
+        jobs_path: Path,
+        runtime: WorkerRuntime | None = None,
+    ) -> None:
         self.cfg = cfg
         self.root = root
         self.jobs_path = jobs_path
         self.web_root = root / "web"
         self.config_path = root / "config.yaml"
+        self.runtime = runtime or WorkerRuntime()
         try:
             ensure_from_config(root, self.config_path)
         except Exception:
@@ -91,6 +97,7 @@ class SeatbotAPI:
             return _json_bytes({"ok": True, **st})
         if method == "POST" and route == "/api/resume":
             st = clear_pause(self.root)
+            self.runtime.wake("预约服务已恢复")
             return _json_bytes({"ok": True, **st})
         if method == "GET" and route == "/api/jobs":
             jobs = list_jobs(self.jobs_path)
@@ -107,18 +114,22 @@ class SeatbotAPI:
                 data = json.loads(body.decode("utf-8") or "{}")
                 if data.get("date_to") or data.get("date_from"):
                     jobs = add_jobs_range(self.jobs_path, data)
+                    self.runtime.wake("新增预约任务")
                     return _json_bytes({"ok": True, "jobs": jobs, "count": len(jobs)}, 201)
                 job = add_job(self.jobs_path, data)
+                self.runtime.wake("新增预约任务")
                 return _json_bytes({"ok": True, "job": job}, 201)
             except Exception as exc:
                 return _json_bytes({"ok": False, "error": str(exc)}, 400)
         if method == "POST" and route.startswith("/api/jobs/") and route.endswith("/cancel"):
             job_id = route.split("/")[3]
             ok = cancel_job(self.jobs_path, job_id)
+            self.runtime.wake("预约任务已取消")
             return _json_bytes({"ok": ok})
         if method == "DELETE" and route.startswith("/api/jobs/"):
             job_id = route.split("/")[3]
             ok = delete_job(self.jobs_path, job_id)
+            self.runtime.wake("预约任务已删除")
             return _json_bytes({"ok": ok})
         if method == "GET" and route == "/api/areas":
             return self._areas()
@@ -176,6 +187,7 @@ class SeatbotAPI:
                 password=str(data.get("password") or ""),
                 label=str(data.get("label") or ""),
             )
+            self.runtime.wake("预约账号已更新")
             return _json_bytes({"ok": True})
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 400)
@@ -186,6 +198,7 @@ class SeatbotAPI:
             username = str(data.get("username") or "").strip()
             acc = apply_active_to_config(self.root, self.config_path, username)
             self._reload()
+            self.runtime.wake("预约账号已切换")
             return _json_bytes({"ok": True, "username": acc["username"], "label": acc.get("label")})
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 400)
@@ -195,25 +208,19 @@ class SeatbotAPI:
             store = remove_account(self.root, username)
             apply_active_to_config(self.root, self.config_path, store["active"])
             self._reload()
+            self.runtime.wake("预约账号已删除")
             return _json_bytes({"ok": True, "active": store["active"]})
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 400)
 
     def _status(self) -> tuple[int, bytes, str]:
-        client = YitClient(self.cfg)
         store = resolve_session_path(self.root, self.cfg.session_file)
-        has_session = load_session(client, store)
-        alive = False
-        if has_session:
-            try:
-                alive = ping(client)
-            except Exception:
-                alive = False
+        has_session = store.exists()
         return _json_bytes(
             {
                 "ok": True,
                 "session": has_session,
-                "gateway_alive": alive,
+                **self.runtime.snapshot(),
                 "area_id": self.cfg.area_id,
                 "jobs_count": len(list_jobs(self.jobs_path)),
                 "username": self.cfg.username,
@@ -414,8 +421,15 @@ def make_handler(api: SeatbotAPI):
     return Handler
 
 
-def serve_api(cfg: Config, root: Path, jobs_path: Path, host: str = "127.0.0.1", port: int = 8766) -> ThreadingHTTPServer:
-    api = SeatbotAPI(cfg, root, jobs_path)
+def serve_api(
+    cfg: Config,
+    root: Path,
+    jobs_path: Path,
+    host: str = "127.0.0.1",
+    port: int = 8766,
+    runtime: WorkerRuntime | None = None,
+) -> ThreadingHTTPServer:
+    api = SeatbotAPI(cfg, root, jobs_path, runtime=runtime)
     server = ThreadingHTTPServer((host, port), make_handler(api))
     log.info("API 监听 http://%s:%s  (面板 / )", host, port)
     return server

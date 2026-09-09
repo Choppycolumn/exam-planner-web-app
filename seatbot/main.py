@@ -41,6 +41,7 @@ from seatbot.seats import (
 )
 from seatbot.session import load_session, resolve_session_path, save_session
 from seatbot.worker import process_due_jobs, worker_loop
+from seatbot.runtime import WorkerRuntime
 
 
 def run_once(cfg, log, client: YitClient | None = None) -> int:
@@ -254,15 +255,23 @@ def cmd_agent(cfg, log) -> int:
 
 
 def cmd_worker(cfg, log) -> int:
-    """保活 + 多任务队列：失败每分钟重试，最多 10 次；仅执行今明后。"""
+    """事件驱动任务队列：无任务时不访问馆方接口。"""
     jobs_path = default_jobs_path(ROOT)
     log.info("worker 模式 jobs=%s", jobs_path)
+    runtime = WorkerRuntime()
 
     # 可选：同进程起 API（127.0.0.1:8766），nginx 反代 /seat-api/
     try:
         from seatbot.api import serve_api
 
-        server = serve_api(cfg, ROOT, jobs_path, host="127.0.0.1", port=8766)
+        server = serve_api(
+            cfg,
+            ROOT,
+            jobs_path,
+            host="127.0.0.1",
+            port=8766,
+            runtime=runtime,
+        )
 
         def _serve() -> None:
             server.serve_forever()
@@ -272,7 +281,7 @@ def cmd_worker(cfg, log) -> int:
         log.warning("API 未启动: %s", exc)
 
     try:
-        worker_loop(cfg, ROOT, jobs_path, poll_sec=15.0)
+        worker_loop(cfg, ROOT, jobs_path, runtime=runtime)
     except KeyboardInterrupt:
         log.info("worker 停止")
         return 0
@@ -308,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--worker",
         action="store_true",
-        help="多任务 worker：保活 + 队列（失败 60s 重试，最多 10 次，仅今明后）",
+        help="事件驱动多任务 worker（无任务时不访问馆方接口）",
     )
     args = parser.parse_args(argv)
 

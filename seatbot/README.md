@@ -1,4 +1,4 @@
-# 拾座 · 华科图书馆座位预约（本机登录 + 服务器保活）
+# 拾座 · 华科图书馆座位预约（事件驱动）
 
 接口来自 `libresource.hust.edu.cn` 真实 HAR，不靠猜测。
 
@@ -12,14 +12,19 @@
 本机（你操作）                         服务器（自动跑）
 ─────────────────                     ─────────────────
 python main.py --login                收到 session.json
-  └ 浏览器过统一认证                     定时心跳保活
-  └ 写出 session.json                   到点 OCR 图书馆验证码并预约
+  └ 浏览器过统一认证                     API 常驻、任务调度休眠
+  └ 写出 session.json                   有任务时登录、查询并预约
 scp / upload_session.sh  ──────────►  失效则通知，等你再传会话
 ```
 
 生产环境还会以 `python main.py --worker` 启动一个仅监听
 `127.0.0.1:8766` 的管理 API。ExamPlanner 的 `/seat-assistant` 页面通过
 iframe 打开 `/seat/`，Nginx 将 `/seat-api/` 转发给该 API。
+
+Worker 使用事件驱动调度：没有待执行任务时不访问馆方接口；远期任务会在
+进入“今明后”窗口前 10 分钟做一次会话预检，到达窗口后执行；当天新建任务
+会立即唤醒。失败预约按任务配置有限重试，自动签到仅在预约开始后的 30 分钟
+内最多尝试 3 次。旧的固定心跳、全量预约扫描和午夜 sprint 定时器不应启用。
 
 管理界面支持：
 
@@ -34,9 +39,8 @@ iframe 打开 `/seat/`，Nginx 将 `/seat-api/` 转发给该 API。
 [`scripts/nginx-seatbot.conf.example`](./scripts/nginx-seatbot.conf.example)；
 不要把没有鉴权的 8766 端口暴露到公网。
 
-`scripts/systemd/` 保存的是从现网收回的运行单元。`seatbot-sprint-begin.timer`
-会在午夜预约窗口前临时停止主站服务，只适合资源极小且允许短时停站的机器，
-默认不要启用；优先通过降低 OCR/worker 内存峰值保证主站持续可用。
+`scripts/systemd/` 中的 preflight 与 sprint 单元仅用于历史恢复，不应启用。
+当前 worker 自己计算预检时间，而且不会为了预约临时停止主站。
 
 统一认证动态验证码**不能跳过**，由你在本机完成；图书馆 4 位静态码由服务器本地 `ddddocr` 识别。
 
@@ -118,7 +122,7 @@ python main.py --keepalive-only
 | `seat_nos` | 座位优先级列表 |
 | `day_offset` | 0 今天 / 1 明天 |
 
-## systemd 常驻保活（可选）
+## systemd 常驻 API 与事件调度器（推荐）
 
 ```bash
 sudo cp scripts/seatbot.service /etc/systemd/system/
@@ -126,11 +130,8 @@ sudo cp scripts/seatbot.service /etc/systemd/system/
 sudo systemctl enable --now seatbot
 ```
 
-开抢可用 cron：
-
-```cron
-55 5 * * * cd /opt/seatbot && .venv/bin/python main.py --now >> logs/cron.log 2>&1
-```
+无需另配 cron、固定心跳或午夜预检 timer。服务常驻只用于本地 API 和等待任务，
+空闲时不会登录、识别验证码或请求馆方接口。
 
 ## 安全
 

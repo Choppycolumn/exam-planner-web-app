@@ -89,7 +89,7 @@ def login_with_captcha(
         msg = str(payload.get("msg") or "")
         if status == 1:
             auth = _extract_auth(payload)
-            log.info("图书馆登录成功 name=%s userid=%s expire=%s", auth.name, auth.userid, auth.expire)
+            log.info("图书馆登录成功 expire=%s", auth.expire)
             return auth
 
         last_msg = msg or str(payload)

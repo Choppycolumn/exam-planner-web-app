@@ -4,7 +4,7 @@ import logging
 import time
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 
@@ -16,6 +16,25 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
 )
+
+_SENSITIVE_QUERY_KEYS = {
+    "access_token",
+    "token",
+    "password",
+    "cookie",
+    "authorization",
+}
+
+
+def _safe_url_for_log(url: str) -> str:
+    parts = urlsplit(url)
+    query = urlencode(
+        [
+            (key, "[redacted]" if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+            for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+    )
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 class GatewayError(RuntimeError):
@@ -89,7 +108,7 @@ class YitClient:
             headers["Referer"] = referer
         timeout = kwargs.pop("timeout", 15)
         url = self.url(path)
-        log.debug("%s %s", method.upper(), url)
+        log.debug("%s %s", method.upper(), _safe_url_for_log(url))
         kwargs.setdefault("allow_redirects", True)
         try:
             resp = self.session.request(

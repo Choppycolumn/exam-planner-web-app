@@ -1,6 +1,6 @@
 # 拾座 · 部署说明
 
-> 当前生产形态以 `python main.py --worker` 为准，同时提供本地管理 API。
+> 当前生产形态以事件驱动的 `python main.py --worker` 为准，同时提供本地管理 API。
 > systemd 单元见 `scripts/systemd/`，Nginx 接入见
 > `scripts/nginx-seatbot.conf.example`。旧的 `--keepalive-only + cron` 内容仅用于
 > 理解早期部署方式，不应覆盖当前 worker 服务。
@@ -10,7 +10,7 @@
 核心原则：
 
 - **本机**：负责过统一认证（动态验证码），生成 `session.json`
-- **服务器**：负责心跳保活 + 到点 OCR 图书馆验证码并预约
+- **服务器**：API 常驻；有任务时才登录、OCR 并预约
 - 不要把 `config.yaml`、`session.json` 提交到 Git 或发到公开网盘
 
 ```
@@ -19,7 +19,7 @@
 1. 安装依赖、填 config.yaml
 2. python main.py --login         3. 安装依赖、填同一份 config.yaml
    └ 写出 session.json            4. 收到 session.json
-5. scp / upload_session.sh ────►  5. 保活 + 到点抢座
+5. scp / upload_session.sh ────►  5. 休眠等待 + 到点预约
 ```
 
 ---
@@ -128,7 +128,7 @@ scp session.json user@你的服务器IP:/opt/seatbot/
 
 ---
 
-## 三、服务器部署（保活 + 抢座）
+## 三、服务器部署（事件驱动预约）
 
 以下以部署目录 `/opt/seatbot`、系统用户 `seatbot` 为例，可按需修改。
 
@@ -200,7 +200,12 @@ python main.py --dry-run --now
 # python main.py --now
 ```
 
-### 6. 正式运行方式（三选一）
+### 6. 正式运行方式
+
+生产环境只需启用 `seatbot.service`。管理 API 会保持在线，worker 在无任务时
+无限期休眠；新建当天任务会立即唤醒，远期任务会在进入今明后窗口前 10 分钟
+预检。不要启用 `seatbot-preflight.timer`、`seatbot-sprint-begin.timer` 或
+`seatbot-sprint-end.timer`，也不再需要 cron。
 
 #### 方式 A：前台 / screen（最简单）
 
@@ -220,7 +225,7 @@ python main.py
 # Ctrl+A D 脱离
 ```
 
-#### 方式 B：systemd 常驻保活 + cron 开抢
+#### 方式 B：systemd 常驻 API + 事件调度（生产推荐）
 
 1）编辑 service 路径后安装：
 
@@ -233,7 +238,7 @@ sudo nano /etc/systemd/system/seatbot.service
 
 ```ini
 WorkingDirectory=/opt/seatbot
-ExecStart=/opt/seatbot/.venv/bin/python /opt/seatbot/main.py --keepalive-only
+ExecStart=/opt/seatbot/.venv/bin/python /opt/seatbot/main.py --worker
 User=seatbot
 ```
 
@@ -243,16 +248,11 @@ sudo systemctl enable --now seatbot
 sudo systemctl status seatbot
 ```
 
-2）开抢前几分钟用 cron 触发一次预约（示例：每天 05:55）：
+2）确保旧定时器已关闭：
 
 ```bash
-sudo crontab -u seatbot -e
-```
-
-写入：
-
-```cron
-55 5 * * * cd /opt/seatbot && /opt/seatbot/.venv/bin/python main.py --now >> /opt/seatbot/logs/cron.log 2>&1
+sudo systemctl disable --now seatbot-preflight.timer \
+  seatbot-sprint-begin.timer seatbot-sprint-end.timer
 ```
 
 时区请确认服务器为 `Asia/Shanghai`，或在 cron 前设置：
@@ -289,18 +289,16 @@ timedatectl   # 查看
 
 ---
 
-## 五、关于「能保活多久」
+## 五、关于会话与流量
 
 根据 HAR 实测：
 
 - **图书馆 `access_token`**：约 **10 分钟**（抢座前脚本会重新 OCR 登录换票）
 - **网关 Cookie（session.json）**：HAR 无法给出准确上限；有心跳时通常可撑数小时，长时间空闲更容易失效
 
-因此推荐：
-
-- 服务器 `keepalive_interval: 180`（3 分钟）左右
-- 开抢前数小时内完成本机登录并上传
-- 不要把心跳设得过密（如几秒一次），容易触发风控
+事件驱动 worker 不再用固定心跳维持会话。它会在任务进入窗口前 10 分钟仅预检
+一次；若会话失效，再拉起一次有冷却时间的登录恢复。这样不会用几秒级轮询制造
+验证码、登录和公网流量。
 
 ---
 

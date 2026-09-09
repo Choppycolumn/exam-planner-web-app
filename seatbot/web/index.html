@@ -355,8 +355,9 @@
         const s = await api("/api/status");
         const el = document.getElementById("gwStatus");
         if (s.paused) { el.className = "status-pill warn"; el.textContent = "登录已暂停 " + Math.ceil((s.remaining||0)/60) + " 分" + Math.ceil((s.remaining||0)%60) + " 秒"; }
-        else if (s.gateway_alive) { el.className = "status-pill ok"; el.textContent = "网关会话有效"; }
-        else if (s.session) { el.className = "status-pill warn"; el.textContent = "有 session，心跳失败"; }
+        else if (s.gateway_alive === true) { el.className = "status-pill ok"; el.textContent = "最近任务连接正常"; }
+        else if (s.gateway_alive === false) { el.className = "status-pill warn"; el.textContent = "最近任务连接失败，等待重试"; }
+        else if (s.session) { el.className = "status-pill ok"; el.textContent = "预约服务待命"; }
         else { el.className = "status-pill bad"; el.textContent = "无 session"; }
       } catch (e) {
         const el = document.getElementById("gwStatus");
@@ -535,9 +536,9 @@
     };
     btnRefresh.onclick = () => refreshSpaces();
     btnBooks.onclick = () => loadBooks();
-    loadAreas().then(() => refreshSpaces()).catch(e => toast(String(e.message || e)));
-    loadAccounts().catch(()=>{}); refreshStatus(); loadJobs(); loadBooks();
-    setInterval(() => { refreshStatus(); loadJobs(); }, 8000);
+    loadAreas().catch(e => toast(String(e.message || e)));
+    loadAccounts().catch(()=>{}); refreshStatus(); loadJobs();
+    setInterval(() => { refreshStatus(); loadJobs(); }, 30000);
   </script>
 </body>
 </html>
