@@ -239,41 +239,20 @@ def list_books(client: YitClient, auth: Auth, page: int = 1) -> list[dict[str, A
 
 
 def cancel_book(client: YitClient, auth: Auth, book_id: int | str) -> dict[str, Any]:
-    """取消已成功的预约。优先 POST cancel，失败再试 DELETE。"""
+    """Cancel a reservation through the same action endpoint used by kiosks."""
     bid = str(book_id)
-    data = {"access_token": auth.access_token, "userid": auth.userid, "id": bid}
-    # 常见 yitlink 取消路径
-    for path in (
-        f"/api.php/profile/books/{bid}/cancel",
-        f"/api.php/spaces/book/{bid}/cancel",
-        "/api.php/profile/booksCancel",
-    ):
-        try:
-            payload = client.post_form(path, data)
-            msg = str(payload.get("msg") or "")
-            # 成功时常见 msg 含 取消 / status=1 且不是「用户基本信息」
-            if int(payload.get("status") or 0) == 1 and (
-                "取消" in msg or "成功" in msg or "cancel" in msg.lower()
-            ):
-                return payload
-            if int(payload.get("status") or 0) == 1 and "基本信息" not in msg and "获取用户预约" not in msg:
-                return payload
-        except Exception as exc:
-            log.debug("cancel try %s: %s", path, exc)
-    try:
-        resp = client.request(
-            "DELETE",
-            f"/api.php/profile/books/{bid}",
-            data=data,
-        )
-        payload = resp.json()
-        if int(payload.get("status") or 0) == 1 or "成功" in str(payload.get("msg") or ""):
-            return payload
-        raise BookError(str(payload.get("msg") or payload))
-    except BookError:
-        raise
-    except Exception as exc:
-        raise BookError(f"取消失败: {exc}") from exc
+    payload = client.post_form(
+        f"/api.php/profile/books/{bid}",
+        {
+            "_method": "delete",
+            "id": bid,
+            "userid": auth.userid,
+            "access_token": auth.access_token,
+        },
+    )
+    if int(payload.get("status") or 0) == 1:
+        return payload
+    raise BookError(str(payload.get("msg") or payload))
 
 
 def book_action(client: YitClient, auth: Auth, book_id: int | str, method: str) -> dict[str, Any]:
