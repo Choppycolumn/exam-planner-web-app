@@ -433,6 +433,7 @@
         box.innerHTML = jobs.map(job => `
           <div class="job">
             <div><strong>#${job.id}</strong> · 区域 ${job.area_id} · 座位 ${(job.seat_nos||[]).join(", ")}
+              ${job.kind === "replacement" ? '<span class="status-pill warn">同座重约</span>' : ""}
               <span class="status-pill ${job.status==='success'?'ok':job.status==='failed'?'bad':'warn'}">${statusLabel(job.status)}</span>
             </div>
             <div class="meta">
@@ -501,6 +502,7 @@
               ${b.can_checkin ? `<button class="primary" data-act="checkin" data-id="${b.id}">${String(b.submsg||'').includes('临时')?'回来签到':'签到'}</button>` : ""}
               ${b.can_leave ? `<button class="ghost" data-act="leave" data-id="${b.id}">临时离开</button>` : ""}
               ${b.can_checkout ? `<button class="ghost" data-act="checkout" data-id="${b.id}">签离</button>` : ""}
+              ${b.replaceable ? `<button class="ghost" data-book-replace="${b.id}">取消并重约</button>` : ""}
               ${b.cancellable ? `<button class="danger" data-book-cancel="${b.id}">取消预约</button>` : ""}
             </div>
           </div>`;
@@ -525,6 +527,29 @@
               toast("已提交取消");
               loadBooks();
             } catch (e) { toast(String(e.message || e)); }
+          };
+        });
+        box.querySelectorAll("[data-book-replace]").forEach(btn => {
+          btn.onclick = async () => {
+            const warning = "将先取消当前预约，再立即抢回同一房间、同一座位和同一时段。取消后座位可能被他人占用，无法保证重约成功；已经过去的开始时间会由图书馆按当前规则处理。确认继续？";
+            if (!confirm(warning)) return;
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = "正在取消并重约…";
+            try {
+              const r = await api(`/api/books/${btn.dataset.bookReplace}/replace`, { method: "POST", body: "{}" });
+              toast(r.message || "原预约已取消，正在重约");
+              await Promise.all([loadBooks(), loadJobs()]);
+            } catch (e) {
+              if (e.payload && e.payload.cancelled) {
+                alert(e.message + "。请立即在任务队列中手动新建同座位预约。");
+              } else {
+                toast(String(e.message || e));
+              }
+            } finally {
+              btn.disabled = false;
+              btn.textContent = original;
+            }
           };
         });
       } catch (e) {

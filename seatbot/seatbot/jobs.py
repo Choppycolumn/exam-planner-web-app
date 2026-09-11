@@ -96,6 +96,9 @@ def add_job(path: Path, body: dict[str, Any]) -> dict[str, Any]:
 
     job = {
         "id": str(uuid.uuid4())[:8],
+        "kind": str(body.get("kind") or "reservation"),
+        "source_book_id": str(body.get("source_book_id") or ""),
+        "source_order_no": str(body.get("source_order_no") or ""),
         "area_id": area_id,
         "seat_nos": seats,
         "day_offset": day_offset,

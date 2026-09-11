@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -31,7 +33,7 @@ from .jobs import (
 )
 from .login import login_with_captcha
 from .runtime import WorkerRuntime
-from .seats import book_action, cancel_book, fetch_segment, fetch_spaces, list_books
+from .seats import BookError, book_action, cancel_book, fetch_segment, fetch_spaces, list_books
 from .session import load_session, resolve_session_path
 
 log = logging.getLogger("seatbot")
@@ -40,6 +42,50 @@ log = logging.getLogger("seatbot")
 def _json_bytes(obj: Any, code: int = 200) -> tuple[int, bytes, str]:
     body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
     return code, body, "application/json; charset=utf-8"
+
+
+def _date_text(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("date") or ""
+    return str(value or "").strip()
+
+
+def replacement_job_body(book: dict[str, Any]) -> dict[str, Any]:
+    """Extract a same-seat, same-session replacement job from a provider book."""
+    detail = book.get("spaceDetailInfo") or {}
+    if not isinstance(detail, dict):
+        detail = {}
+    area_info = detail.get("areaInfo") or {}
+    if not isinstance(area_info, dict):
+        area_info = {}
+
+    area_id = int(detail.get("area") or area_info.get("id") or 0)
+    seat_no = str(detail.get("no") or detail.get("name") or "").strip()
+    begin = _date_text(book.get("beginTime"))
+    end = _date_text(book.get("endTime"))
+    try:
+        begin_at = datetime.fromisoformat(begin)
+        end_at = datetime.fromisoformat(end)
+    except ValueError as exc:
+        raise BookError("当前预约缺少可识别的起止时间") from exc
+    if not area_id or not seat_no:
+        raise BookError("当前预约缺少房间或座位信息，无法安全重约")
+    if begin_at.date() != end_at.date():
+        raise BookError("当前预约跨越多个日期，无法自动重约")
+
+    return {
+        "kind": "replacement",
+        "source_book_id": str(book.get("id") or ""),
+        "source_order_no": str(book.get("no") or ""),
+        "area_id": area_id,
+        "seat_nos": [seat_no],
+        "date": begin_at.date().isoformat(),
+        "start_time": begin_at.strftime("%H:%M"),
+        "end_time": end_at.strftime("%H:%M"),
+        "fallback_any_free": False,
+        "max_retries": 10,
+        "retry_interval_sec": 15,
+    }
 
 
 class SeatbotAPI:
@@ -60,6 +106,7 @@ class SeatbotAPI:
         self.runtime = runtime or WorkerRuntime()
         self.recover_session = recover_session
         self.start_full_login = start_full_login
+        self._replace_lock = threading.Lock()
         try:
             ensure_from_config(root, self.config_path)
         except Exception:
@@ -154,6 +201,9 @@ class SeatbotAPI:
         if method == "POST" and route.startswith("/api/books/") and route.endswith("/cancel"):
             book_id = route.split("/")[3]
             return self._cancel_book(book_id)
+        if method == "POST" and route.startswith("/api/books/") and route.endswith("/replace"):
+            book_id = route.split("/")[3]
+            return self._replace_book(book_id)
         if method == "POST" and route.startswith("/api/books/") and route.split("/")[-1] in ("checkin", "leave", "checkout"):
             book_id = route.split("/")[3]
             action = route.split("/")[-1]
@@ -350,6 +400,12 @@ class SeatbotAPI:
                 name = str(it.get("statusName") or submsg or "")
                 in_use = st == 3
                 away = in_use and (sub == 2 or "临时" in submsg or "临时" in name)
+                cancellable = st in (1, 2, 3)
+                try:
+                    replacement_job_body(it)
+                    replaceable = cancellable
+                except Exception:
+                    replaceable = False
                 books.append(
                     {
                         "id": it.get("id"),
@@ -367,7 +423,8 @@ class SeatbotAPI:
                         "can_checkin": away or (st in (1, 2) and not it.get("signIn")),
                         "can_leave": in_use and not away,
                         "can_checkout": in_use,
-                        "cancellable": "取消" not in name and st not in (4, 6),
+                        "cancellable": cancellable,
+                        "replaceable": replaceable,
                     }
                 )
             return _json_bytes({"ok": True, "books": books})
@@ -410,6 +467,90 @@ class SeatbotAPI:
             return _json_bytes({"ok": True, "result": result})
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 500)
+
+    def _replace_book(self, book_id: str) -> tuple[int, bytes, str]:
+        if not self._replace_lock.acquire(blocking=False):
+            return _json_bytes({"ok": False, "error": "已有取消并重约操作正在执行"}, 409)
+        try:
+            for existing in list_jobs(self.jobs_path):
+                if (
+                    str(existing.get("source_book_id") or "") == str(book_id)
+                    and existing.get("status") in ("pending", "ready")
+                ):
+                    return _json_bytes(
+                        {
+                            "ok": False,
+                            "error": f"该预约已有重约任务 #{existing.get('id')}，请勿重复操作",
+                        },
+                        409,
+                    )
+
+            client = YitClient(self.cfg)
+            store = resolve_session_path(self.root, self.cfg.session_file)
+            load_session(client, store)
+            auth = login_with_captcha(client, dump_dir=self.root / "logs")
+            source = next(
+                (item for item in list_books(client, auth, page=1) if str(item.get("id")) == str(book_id)),
+                None,
+            )
+            if not source:
+                return _json_bytes({"ok": False, "error": "未找到当前预约，请刷新后重试"}, 404)
+            if int(source.get("status") or 0) not in (1, 2, 3):
+                return _json_bytes({"ok": False, "error": "该预约已结束或不可取消，无法重约"}, 409)
+
+            job_body = replacement_job_body(source)
+            target = datetime.fromisoformat(job_body["date"]).date()
+            segment = fetch_segment(
+                client,
+                job_body["area_id"],
+                target,
+                job_body["start_time"],
+                job_body["end_time"],
+            )
+            seat_no = job_body["seat_nos"][0]
+            if not any(str(space.no).zfill(3) == str(seat_no).zfill(3) for space in fetch_spaces(client, segment)):
+                return _json_bytes({"ok": False, "error": "预约区域中已找不到原座位，未执行取消"}, 409)
+
+            cancel_book(client, auth, book_id)
+            try:
+                job = add_job(self.jobs_path, job_body)
+            except Exception as exc:
+                log.exception("预约 %s 已取消，但创建重约任务失败", book_id)
+                return _json_bytes(
+                    {
+                        "ok": False,
+                        "cancelled": True,
+                        "error": f"原预约已取消，但重约任务创建失败：{exc}",
+                    },
+                    500,
+                )
+            self.runtime.wake("原预约已取消，正在重约同一座位")
+            return _json_bytes(
+                {
+                    "ok": True,
+                    "cancelled": True,
+                    "queued": True,
+                    "job": job,
+                    "message": f"原预约已取消，重约任务 #{job['id']} 已启动",
+                },
+                202,
+            )
+        except GatewayError:
+            started = bool(self.recover_session and self.recover_session())
+            return _json_bytes(
+                {
+                    "ok": False,
+                    "recovering": started,
+                    "error": "统一认证会话已失效，正在恢复；本次未执行取消",
+                },
+                503,
+            )
+        except BookError as exc:
+            return _json_bytes({"ok": False, "error": str(exc)}, 409)
+        except Exception as exc:
+            return _json_bytes({"ok": False, "error": str(exc)}, 500)
+        finally:
+            self._replace_lock.release()
 
 
 def make_handler(api: SeatbotAPI):
