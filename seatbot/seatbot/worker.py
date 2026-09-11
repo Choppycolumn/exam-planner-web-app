@@ -84,9 +84,6 @@ def run_job_once(
     info = ((result.get("data") or {}).get("list")) or {}
     space_info = info.get("spaceInfo") or {}
     area_info = space_info.get("areaInfo") or {}
-    local_now = datetime.now(ZoneInfo(cfg.timezone))
-    start_at = checkin_start(job, local_now)
-    deadline_at = checkin_deadline(job, local_now)
     detail = {
         "order_no": info.get("no"),
         "book_id": info.get("id"),
@@ -94,11 +91,11 @@ def run_job_once(
         "area": area_info.get("nameMerge"),
         "start": info.get("starttime"),
         "end": info.get("endingtime"),
-        "checkin": "scheduled",
-        "checkin_msg": "将在预约开始时间后自动尝试签到",
+        "checkin": "manual",
+        "checkin_msg": "预约成功；入馆刷门禁后请在预约列表手动签到",
         "checkin_attempts": 0,
-        "checkin_next_at": start_at.astimezone(timezone.utc).isoformat(),
-        "checkin_deadline_at": deadline_at.astimezone(timezone.utc).isoformat(),
+        "checkin_next_at": None,
+        "checkin_deadline_at": None,
     }
     msg = (
         f"预约成功 单号={detail['order_no']} 座位={detail['seat_no']} "

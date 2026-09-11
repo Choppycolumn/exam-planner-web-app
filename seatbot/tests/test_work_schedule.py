@@ -98,6 +98,16 @@ class WorkScheduleTests(unittest.TestCase):
         self.assertEqual(plan.reason, "checkin")
         self.assertEqual(plan.at, now)
 
+    def test_manual_checkin_does_not_schedule_background_requests(self):
+        now = datetime(2026, 9, 9, 8, 40, tzinfo=TZ)
+        plan = next_wake_plan(
+            [job_for("2026-09-09", status="success", result={"checkin": "manual"})],
+            "Asia/Shanghai",
+            now,
+        )
+        self.assertIsNone(plan.at)
+        self.assertEqual(plan.reason, "idle")
+
 
 class WorkerRuntimeTests(unittest.TestCase):
     def test_wake_interrupts_an_indefinite_idle_wait(self):

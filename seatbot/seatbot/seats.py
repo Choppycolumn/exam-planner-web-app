@@ -241,6 +241,11 @@ def list_books(client: YitClient, auth: Auth, page: int = 1) -> list[dict[str, A
 def cancel_book(client: YitClient, auth: Auth, book_id: int | str) -> dict[str, Any]:
     """Cancel a reservation through the same action endpoint used by kiosks."""
     bid = str(book_id)
+    profile = client.request(
+        "GET",
+        "/user/index/index/from/index",
+        referer=client.url("/home/web/f_second"),
+    )
     payload = client.post_form(
         f"/api.php/profile/books/{bid}",
         {
@@ -249,6 +254,7 @@ def cancel_book(client: YitClient, auth: Auth, book_id: int | str) -> dict[str, 
             "userid": auth.userid,
             "access_token": auth.access_token,
         },
+        referer=profile.url,
     )
     if int(payload.get("status") or 0) == 1:
         return payload

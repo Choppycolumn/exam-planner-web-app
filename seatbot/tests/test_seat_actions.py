@@ -22,8 +22,15 @@ class FakeClient:
         self.payload = payload
         self.calls = []
 
-    def post_form(self, path, data):
-        self.calls.append((path, data))
+    def url(self, path):
+        return "https://example.test" + path
+
+    def request(self, method, path, **kwargs):
+        self.calls.append((method, path, kwargs))
+        return SimpleNamespace(url="https://example.test/user/index/book")
+
+    def post_form(self, path, data, **kwargs):
+        self.calls.append(("POST", path, data, kwargs))
         return self.payload
 
 
@@ -36,11 +43,17 @@ class SeatActionTests(unittest.TestCase):
         result = cancel_book(client, auth, "4316146")
 
         self.assertEqual(result["status"], 1)
-        self.assertEqual(len(client.calls), 1)
-        path, data = client.calls[0]
+        self.assertEqual(len(client.calls), 2)
+        method, prepare_path, prepare_options = client.calls[0]
+        self.assertEqual(method, "GET")
+        self.assertEqual(prepare_path, "/user/index/index/from/index")
+        self.assertIn("referer", prepare_options)
+        method, path, data, options = client.calls[1]
+        self.assertEqual(method, "POST")
         self.assertEqual(path, "/api.php/profile/books/4316146")
         self.assertEqual(data["_method"], "delete")
         self.assertEqual(data["id"], "4316146")
+        self.assertEqual(options["referer"], "https://example.test/user/index/book")
 
     def test_cancel_surfaces_provider_error(self):
         client = FakeClient({"status": 0, "msg": "预约状态不允许取消"})
