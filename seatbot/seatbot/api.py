@@ -400,10 +400,10 @@ class SeatbotAPI:
                 name = str(it.get("statusName") or submsg or "")
                 in_use = st == 3
                 away = in_use and (sub == 2 or "临时" in submsg or "临时" in name)
-                cancellable = st in (1, 2, 3)
+                cancellable = st in (1, 2)
                 try:
                     replacement_job_body(it)
-                    replaceable = cancellable
+                    replaceable = st in (1, 2, 3)
                 except Exception:
                     replaceable = False
                 books.append(
@@ -511,27 +511,46 @@ class SeatbotAPI:
             if not any(str(space.no).zfill(3) == str(seat_no).zfill(3) for space in fetch_spaces(client, segment)):
                 return _json_bytes({"ok": False, "error": "预约区域中已找不到原座位，未执行取消"}, 409)
 
-            cancel_book(client, auth, book_id)
+            status = int(source.get("status") or 0)
+            if status == 3:
+                book_action(client, auth, book_id, "checkout")
+                release_action = "checkout"
+                release_label = "签离"
+            else:
+                cancel_book(client, auth, book_id)
+                release_action = "cancel"
+                release_label = "取消"
+            job_body["source_release_action"] = release_action
             try:
                 job = add_job(self.jobs_path, job_body)
             except Exception as exc:
-                log.exception("预约 %s 已取消，但创建重约任务失败", book_id)
+                log.exception("预约 %s 已%s，但创建重约任务失败", book_id, release_label)
                 return _json_bytes(
                     {
                         "ok": False,
                         "cancelled": True,
-                        "error": f"原预约已取消，但重约任务创建失败：{exc}",
+                        "source_release_action": release_action,
+                        "error": f"原预约已{release_label}，但重约任务创建失败：{exc}",
                     },
                     500,
                 )
-            self.runtime.wake("原预约已取消，正在重约同一座位")
+            log.info(
+                "预约 %s 已%s，已创建同座重约任务 %s area=%s seat=%s",
+                book_id,
+                release_label,
+                job["id"],
+                job["area_id"],
+                job["seat_nos"][0],
+            )
+            self.runtime.wake(f"原预约已{release_label}，正在重约同一座位")
             return _json_bytes(
                 {
                     "ok": True,
                     "cancelled": True,
                     "queued": True,
+                    "source_release_action": release_action,
                     "job": job,
-                    "message": f"原预约已取消，重约任务 #{job['id']} 已启动",
+                    "message": f"原预约已{release_label}，重约任务 #{job['id']} 已启动",
                 },
                 202,
             )
@@ -546,6 +565,7 @@ class SeatbotAPI:
                 503,
             )
         except BookError as exc:
+            log.warning("取消并重约预约 %s 被上游拒绝: %s", book_id, exc)
             return _json_bytes({"ok": False, "error": str(exc)}, 409)
         except Exception as exc:
             return _json_bytes({"ok": False, "error": str(exc)}, 500)

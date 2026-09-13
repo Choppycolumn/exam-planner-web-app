@@ -273,7 +273,16 @@ def book_action(client: YitClient, auth: Auth, book_id: int | str, method: str) 
         "userid": auth.userid,
         "access_token": auth.access_token,
     }
-    payload = client.post_form(f"/api.php/profile/books/{bid}", data)
+    profile = client.request(
+        "GET",
+        "/user/index/index/from/index",
+        referer=client.url("/home/web/f_second"),
+    )
+    payload = client.post_form(
+        f"/api.php/profile/books/{bid}",
+        data,
+        referer=profile.url,
+    )
     msg = str(payload.get("msg") or "")
     if int(payload.get("status") or 0) == 1:
         return payload

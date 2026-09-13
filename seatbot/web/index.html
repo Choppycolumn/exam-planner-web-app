@@ -531,7 +531,7 @@
         });
         box.querySelectorAll("[data-book-replace]").forEach(btn => {
           btn.onclick = async () => {
-            const warning = "将先取消当前预约，再立即抢回同一房间、同一座位和同一时段。取消后座位可能被他人占用，无法保证重约成功；已经过去的开始时间会由图书馆按当前规则处理。确认继续？";
+            const warning = "将先结束当前预约（使用中的预约会先签离），再立即抢回同一房间、同一座位和同一时段。释放后座位可能被他人占用，无法保证重约成功；已经过去的开始时间会由图书馆按当前规则处理。确认继续？";
             if (!confirm(warning)) return;
             const original = btn.textContent;
             btn.disabled = true;

@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 try:
-    from seatbot.seats import BookError, cancel_book
+    from seatbot.seats import BookError, book_action, cancel_book
 
     IMPORT_ERROR = None
 except ModuleNotFoundError as exc:
@@ -61,6 +61,20 @@ class SeatActionTests(unittest.TestCase):
 
         with self.assertRaisesRegex(BookError, "预约状态不允许取消"):
             cancel_book(client, auth, "4316146")
+
+    def test_checkout_uses_profile_context(self):
+        client = FakeClient({"status": 1, "msg": "签离成功"})
+        auth = SimpleNamespace(userid="user", access_token="secret")
+
+        result = book_action(client, auth, "4319283", "checkout")
+
+        self.assertEqual(result["status"], 1)
+        self.assertEqual(len(client.calls), 2)
+        method, path, data, options = client.calls[1]
+        self.assertEqual(method, "POST")
+        self.assertEqual(path, "/api.php/profile/books/4319283")
+        self.assertEqual(data["_method"], "checkout")
+        self.assertEqual(options["referer"], "https://example.test/user/index/book")
 
 
 if __name__ == "__main__":

@@ -74,20 +74,45 @@ class ReplacementBookingTests(unittest.TestCase):
             patch("seatbot.api.list_books", return_value=[BOOK]),
             patch("seatbot.api.fetch_segment", return_value=object()),
             patch("seatbot.api.fetch_spaces", return_value=[seat]),
-            patch("seatbot.api.cancel_book", return_value={"status": 1}) as cancel,
+            patch("seatbot.api.book_action", return_value={"status": 1}) as action,
+            patch("seatbot.api.cancel_book") as cancel,
         ):
             code, raw, _ = self.api.handle("POST", "/api/books/4317356/replace", b"{}")
 
         payload = json.loads(raw)
         self.assertEqual(code, 202)
         self.assertTrue(payload["cancelled"])
-        cancel.assert_called_once()
+        self.assertEqual(payload["source_release_action"], "checkout")
+        action.assert_called_once()
+        self.assertEqual(action.call_args.args[-1], "checkout")
+        cancel.assert_not_called()
         [job] = list_jobs(self.jobs_path)
         self.assertEqual(job["kind"], "replacement")
         self.assertEqual(job["source_book_id"], "4317356")
+        self.assertEqual(job["source_release_action"], "checkout")
         self.assertEqual(job["area_id"], 84)
         self.assertEqual(job["seat_nos"], ["017"])
         self.assertGreater(self.runtime.revision(), before)
+
+    def test_waiting_booking_is_cancelled_before_replacement(self):
+        waiting = {**BOOK, "status": 2}
+        seat = SimpleNamespace(no="017")
+        with (
+            patch("seatbot.api.YitClient", return_value=object()),
+            patch("seatbot.api.load_session"),
+            patch("seatbot.api.login_with_captcha", return_value=object()),
+            patch("seatbot.api.list_books", return_value=[waiting]),
+            patch("seatbot.api.fetch_segment", return_value=object()),
+            patch("seatbot.api.fetch_spaces", return_value=[seat]),
+            patch("seatbot.api.book_action") as action,
+            patch("seatbot.api.cancel_book", return_value={"status": 1}) as cancel,
+        ):
+            code, raw, _ = self.api.handle("POST", "/api/books/4317356/replace", b"{}")
+
+        self.assertEqual(code, 202)
+        self.assertEqual(json.loads(raw)["source_release_action"], "cancel")
+        cancel.assert_called_once()
+        action.assert_not_called()
 
     def test_invalid_source_does_not_cancel(self):
         invalid = {**BOOK, "spaceDetailInfo": {}}
