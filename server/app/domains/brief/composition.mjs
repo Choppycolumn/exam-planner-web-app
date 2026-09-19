@@ -119,7 +119,7 @@ export function installBriefCompositionDomain(runtime, exposeRuntime) {
                 eventKey: `brief:${date}`,
                 source: 'brief',
                 title: payload.title,
-                content: '每日简报已进入 Bark、Telegram 主动推送队列。',
+                content: '每日简报已进入 Bark 主动推送队列。',
                 text: digest.text,
                 payload: { date, trigger },
             });

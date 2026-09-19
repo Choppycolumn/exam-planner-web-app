@@ -42,8 +42,8 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
     function getNotificationCenterPayload(sessionRole, { status = 'all' } = {}) {
         ensureSqliteStore();
         const channels = runtime.notificationRepository.listChannels()
-            .filter((channel) => !['clawbot_weixin', 'wecom_webhook'].includes(channel.type)
-                && !['clawbot_weixin', 'wecom_default'].includes(channel.channelKey));
+            .filter((channel) => !['clawbot_weixin', 'wecom_webhook', 'telegram'].includes(channel.type)
+                && !['clawbot_weixin', 'wecom_default', 'telegram_default'].includes(channel.channelKey));
         const channelHealth = runtime.notificationChannelHealth.snapshot(channels);
         return {
             generatedAt: runtime.nowISO(),
@@ -58,10 +58,8 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
             metrics: runtime.notificationRepository.metrics(),
             channelHealth,
             bark: runtime.resolveBarkConfig(),
-            telegram: runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)),
             notificationSemantics: {
-                reply: 'Telegram 指令在同一会话中即时回复，不进入主动通知队列。',
-                proactive: '日报、待办提醒和测试消息先进入 Bark、Telegram 持久化队列，失败后自动重试并站内兜底。',
+                proactive: '日报、待办提醒和测试消息先进入 Bark 持久化队列，失败后自动重试并站内兜底。',
             },
             readOnly: sessionRole === 'read',
             channelPlan: {
@@ -69,11 +67,6 @@ export function installOperationsLifecycleDomain(runtime, exposeRuntime) {
                     enabled: Boolean(process.env.BARK_DEVICE_KEY),
                     requiredEnv: ['BARK_DEVICE_KEY'],
                     method: 'POST Bark API V2 /push',
-                },
-                telegram: {
-                    enabled: runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)).configured,
-                    requiredEnv: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'TELEGRAM_ALLOWED_USER_ID'],
-                    method: 'POST https://api.telegram.org/bot<token>/sendMessage',
                 },
                 genericWebhook: {
                     enabled: Boolean(process.env.NOTIFICATION_WEBHOOK_URL),
