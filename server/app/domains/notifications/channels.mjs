@@ -116,11 +116,9 @@ export function installNotificationChannelsDomain(runtime, exposeRuntime) {
         return { ok: false, method: plan.kind, channel: plan.channelKey, error: `Unsupported notification channel: ${plan.type || plan.channelKey}` };
     }
     function queueProactiveNotification({ eventKey, source, severity = 'info', title, content, text, payload = {}, channelKeys = null }) {
-        const telegramReady = runtime.telegramConfigStatus(runtime.readTelegramConfig(runtime.telegramEnvFile)).configured;
-        const channels = channelKeys || [
+        const channels = (channelKeys || [
             ...(resolveBarkConfig().configured ? ['bark_default'] : []),
-            ...(telegramReady ? ['telegram_default'] : []),
-        ];
+        ]).filter((channelKey) => channelKey !== 'telegram_default');
         if (!channels.length) {
             runtime.notifyEvent({
                 eventKey,
