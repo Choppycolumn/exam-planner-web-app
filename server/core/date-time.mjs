@@ -55,23 +55,31 @@ export function endOfMonthISO(value) {
   return formatDateString(date);
 }
 
+function reportPeriod(start, end) {
+  return { start, end, periodStart: start, periodEnd: end };
+}
+
 export function previousWeekPeriod(today = todayISO()) {
   const end = addDaysISO(startOfWeekISO(today), -1);
-  return { start: startOfWeekISO(end), end };
+  return reportPeriod(startOfWeekISO(end), end);
 }
 
 export function previousMonthPeriod(today = todayISO()) {
   const date = parseDateString(today);
   date.setMonth(date.getMonth() - 1, 1);
   const start = formatDateString(date);
-  return { start, end: endOfMonthISO(start) };
+  return reportPeriod(start, endOfMonthISO(start));
 }
 
 export function currentPeriod(kind, today = todayISO()) {
-  if (kind === 'month') return { start: startOfMonthISO(today), end: endOfMonthISO(today) };
-  return { start: startOfWeekISO(today), end: endOfWeekISO(today) };
+  if (kind === 'month' || kind === 'monthly') {
+    return reportPeriod(startOfMonthISO(today), endOfMonthISO(today));
+  }
+  return reportPeriod(startOfWeekISO(today), endOfWeekISO(today));
 }
 
 export function previousPeriod(kind, today = todayISO()) {
-  return kind === 'month' ? previousMonthPeriod(today) : previousWeekPeriod(today);
+  return kind === 'month' || kind === 'monthly'
+    ? previousMonthPeriod(today)
+    : previousWeekPeriod(today);
 }
